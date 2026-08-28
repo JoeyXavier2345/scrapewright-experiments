@@ -1,0 +1,160 @@
+wizard.js:1730 Could not capture detail page snapshot: Error: Could not establish connection. Receiving end does not exist.
+continueResearch @ wizard.js:1730
+await in continueResearch
+startResearch @ wizard.js:1848
+debug-logger.js:21 [2026-08-27T07:19:07.846Z] [background] handleOpenTabExecute content-script not ready {"tabId":1780553195}
+log @ debug-logger.js:21
+handleOpenTabExecute @ background.js:1380
+await in handleOpenTabExecute
+(anonymous) @ background.js:1001
+debug-logger.js:21 [2026-08-27T07:19:07.846Z] [background] handleOpenTabExecute failed {"error":"CONTENT_SCRIPT_NOT_READY"}
+log @ debug-logger.js:21
+(anonymous) @ background.js:1003
+Promise.catch
+(anonymous) @ background.js:1002
+debug-logger.js:21 [2026-08-27T07:19:07.912Z] [step-orchestrator] Script execution failed {"stepId":"enrich_details","error":"CONTENT_SCRIPT_NOT_READY","stack":"Error: CONTENT_SCRIPT_NOT_READY\n    at listener (chrome-extension://abkfnifoajalgnmamhenapgcefpikkpc/lib/offscreen-executor.js:57:25)","hasSubTabSnapshot":false}
+log @ debug-logger.js:21
+execute @ step-orchestrator.js:271
+await in execute
+testScript @ wizard.js:1943
+await in testScript
+runTestFromStep5 @ wizard.js:1880
+debug-logger.js:21 [2026-08-27T07:19:07.947Z] [step-orchestrator] Execution failed {"error":"CONTENT_SCRIPT_NOT_READY","stepId":"enrich_details","stack":"Error: CONTENT_SCRIPT_NOT_READY\n    at listener (chrome-extension://abkfnifoajalgnmamhenapgcefpikkpc/lib/offscreen-executor.js:57:25)"}
+log @ debug-logger.js:21
+execute @ step-orchestrator.js:396
+await in execute
+testScript @ wizard.js:1943
+await in testScript
+runTestFromStep5 @ wizard.js:1880
+debug-logger.js:21 [2026-08-27T07:19:07.962Z] [wizard] testScript failed {"error":"CONTENT_SCRIPT_NOT_READY","stepId":"enrich_details","stack":"Error: CONTENT_SCRIPT_NOT_READY\n    at listener (chrome-extension://abkfnifoajalgnmamhenapgcefpikkpc/lib/offscreen-executor.js:57:25)"}
+log @ debug-logger.js:21
+testScript @ wizard.js:2129
+await in testScript
+runTestFromStep5 @ wizard.js:1880
+debug-logger.js:22 [2026-08-27T07:19:07.992Z] [wizard] Skipping detail-page snapshot — detailUrl is not an http(s) string {"detailUrlType":"string","detailUrlPreview":"/scrapy/scrapy"}
+log @ debug-logger.js:22
+runFixIteration @ wizard.js:2786
+autoFix @ wizard.js:2529
+await in autoFix
+testScript @ wizard.js:2142
+await in testScript
+runTestFromStep5 @ wizard.js:1880
+debug-logger.js:22 [2026-08-27T07:20:54.689Z] [step-orchestrator] Result not ready, retrying step {"stepId":"enrich_details","stepIterations":1,"maxIter":3}
+log @ debug-logger.js:22
+execute @ step-orchestrator.js:350
+await in execute
+testScript @ wizard.js:1943
+await in testScript
+runFixIteration @ wizard.js:3533
+await in runFixIteration
+autoFix @ wizard.js:2529
+await in autoFix
+testScript @ wizard.js:2142
+await in testScript
+runTestFromStep5 @ wizard.js:1880
+debug-logger.js:22 [2026-08-27T07:21:10.103Z] [step-orchestrator] Result not ready, retrying step {"stepId":"enrich_details","stepIterations":2,"maxIter":3}
+log @ debug-logger.js:22
+execute @ step-orchestrator.js:350
+await in execute
+testScript @ wizard.js:1943
+await in testScript
+runFixIteration @ wizard.js:3533
+await in runFixIteration
+autoFix @ wizard.js:2529
+await in autoFix
+testScript @ wizard.js:2142
+await in testScript
+runTestFromStep5 @ wizard.js:1880
+debug-logger.js:21 [2026-08-27T07:21:22.440Z] [step-orchestrator] Poll exhausted → TERMINATE {"stepId":"enrich_details","stepIterations":3}
+log @ debug-logger.js:21
+execute @ step-orchestrator.js:367
+await in execute
+testScript @ wizard.js:1943
+await in testScript
+runFixIteration @ wizard.js:3533
+await in runFixIteration
+autoFix @ wizard.js:2529
+await in autoFix
+testScript @ wizard.js:2142
+await in testScript
+runTestFromStep5 @ wizard.js:1880
+debug-logger.js:21 [2026-08-27T07:21:22.440Z] [step-orchestrator] Execution failed {"error":"POLL_EXHAUSTED: Step \"Enrich detail pages\" exhausted after 3 attempt(s) without producing a ready result","stepId":"enrich_details","stack":"Error: POLL_EXHAUSTED: Step \"Enrich detail pages\" exhausted after 3 attempt(s) without producing a ready result\n    at StepOrchestrator.execute (chrome-extension://abkfnifoajalgnmamhenapgcefpikkpc/lib/step-orchestrator.js:363:29)\n    at async testScript (chrome-extension://abkfnifoajalgnmamhenapgcefpikkpc/wizard.js:1943:20)\n    at async runFixIteration (chrome-extension://abkfnifoajalgnmamhenapgcefpikkpc/wizard.js:3533:5)\n    at async autoFix (chrome-extension://abkfnifoajalgnmamhenapgcefpikkpc/wizard.js:2529:19)\n    at async testScript (chrome-extension://abkfnifoajalgnmamhenapgcefpikkpc/wizard.js:2142:9)\n    at async HTMLButtonElement.runTestFromStep5 (chrome-extension://abkfnifoajalgnmamhenapgcefpikkpc/wizard.js:1880:3)"}
+log @ debug-logger.js:21
+execute @ step-orchestrator.js:396
+await in execute
+testScript @ wizard.js:1943
+await in testScript
+runFixIteration @ wizard.js:3533
+await in runFixIteration
+autoFix @ wizard.js:2529
+await in autoFix
+testScript @ wizard.js:2142
+await in testScript
+runTestFromStep5 @ wizard.js:1880
+debug-logger.js:21 [2026-08-27T07:21:22.452Z] [wizard] testScript failed {"error":"POLL_EXHAUSTED: Step \"Enrich detail pages\" exhausted after 3 attempt(s) without producing a ready result","stepId":"enrich_details","stack":"Error: POLL_EXHAUSTED: Step \"Enrich detail pages\" exhausted after 3 attempt(s) without producing a ready result\n    at StepOrchestrator.execute (chrome-extension://abkfnifoajalgnmamhenapgcefpikkpc/lib/step-orchestrator.js:363:29)\n    at async testScript (chrome-extension://abkfnifoajalgnmamhenapgcefpikkpc/wizard.js:1943:20)\n    at async runFixIteration (chrome-extension://abkfnifoajalgnmamhenapgcefpikkpc/wizard.js:3533:5)\n    at async autoFix (chrome-extension://abkfnifoajalgnmamhenapgcefpikkpc/wizard.js:2529:19)\n    at async testScript (chrome-extension://abkfnifoajalgnmamhenapgcefpikkpc/wizard.js:2142:9)\n    at async HTMLButtonElement.runTestFromStep5 (chrome-extension://abkfnifoajalgnmamhenapgcefpikkpc/wizard.js:1880:3)"}
+log @ debug-logger.js:21
+testScript @ wizard.js:2129
+await in testScript
+runFixIteration @ wizard.js:3533
+await in runFixIteration
+autoFix @ wizard.js:2529
+await in autoFix
+testScript @ wizard.js:2142
+await in testScript
+runTestFromStep5 @ wizard.js:1880
+wizard.js:2760 Could not capture snapshot for auto-fix: Error: Could not establish connection. Receiving end does not exist.
+runFixIteration @ wizard.js:2760
+await in runFixIteration
+autoFix @ wizard.js:2529
+await in autoFix
+testScript @ wizard.js:2142
+await in testScript
+runTestFromStep5 @ wizard.js:1880
+debug-logger.js:22 [2026-08-27T07:21:22.547Z] [wizard] Skipping detail-page snapshot — detailUrl is not an http(s) string {"detailUrlType":"string","detailUrlPreview":"/scrapy/scrapy"}
+log @ debug-logger.js:22
+runFixIteration @ wizard.js:2786
+await in runFixIteration
+autoFix @ wizard.js:2529
+await in autoFix
+testScript @ wizard.js:2142
+await in testScript
+runTestFromStep5 @ wizard.js:1880
+debug-logger.js:22 [2026-08-27T07:23:35.138Z] [step-orchestrator] Result not ready, retrying step {"stepId":"enrich_details","stepIterations":1,"maxIter":4}
+log @ debug-logger.js:22
+execute @ step-orchestrator.js:350
+await in execute
+testScript @ wizard.js:1943
+await in testScript
+runFixIteration @ wizard.js:3533
+await in runFixIteration
+autoFix @ wizard.js:2529
+await in autoFix
+testScript @ wizard.js:2142
+await in testScript
+runTestFromStep5 @ wizard.js:1880
+debug-logger.js:22 [2026-08-27T07:24:08.135Z] [step-orchestrator] Result not ready, retrying step {"stepId":"enrich_details","stepIterations":2,"maxIter":4}
+log @ debug-logger.js:22
+execute @ step-orchestrator.js:350
+await in execute
+testScript @ wizard.js:1943
+await in testScript
+runFixIteration @ wizard.js:3533
+await in runFixIteration
+autoFix @ wizard.js:2529
+await in autoFix
+testScript @ wizard.js:2142
+await in testScript
+runTestFromStep5 @ wizard.js:1880
+debug-logger.js:22 [2026-08-27T07:24:41.145Z] [step-orchestrator] Result not ready, retrying step {"stepId":"enrich_details","stepIterations":3,"maxIter":4}
+log @ debug-logger.js:22
+execute @ step-orchestrator.js:350
+await in execute
+testScript @ wizard.js:1943
+await in testScript
+runFixIteration @ wizard.js:3533
+await in runFixIteration
+autoFix @ wizard.js:2529
+await in autoFix
+testScript @ wizard.js:2142
+await in testScript
+runTestFromStep5 @ wizard.js:1880
