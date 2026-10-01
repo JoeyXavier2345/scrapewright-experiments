@@ -558,3 +558,51 @@ describe('180th round: detectResultStrayKeys', () => {
     assert.match(VR, /resultStrayKeys: null/, 'detector slot declared');
   });
 });
+
+// 186th round (live: s2 RAN $collectUntil but returned only the posts — the
+// exhaustion receipt never entered the step result and the verify census
+// said NOT certified; the model's return-the-receipt patch ran out of
+// budget). The certification now rides the diagnostics channel too.
+describe('186th round: collectUntil certification is model-proof', () => {
+  const fs186 = require('node:fs');
+  const path186 = require('node:path');
+  const CS186 = fs186.readFileSync(path186.join(__dirname, '../content-script.js'), 'utf8');
+  const VR186 = fs186.readFileSync(path186.join(__dirname, '../lib/verify-runner.js'), 'utf8');
+
+  it('domCollectUntil attaches _diagnostics.exhaustion (source audit)', () => {
+    const idx = CS186.indexOf('out._diagnostics = {');
+    assert.ok(idx > -1, 'the diagnostics attachment exists');
+    const block = CS186.slice(idx, idx + 500);
+    assert.match(block, /api: 'collectUntil'/);
+    assert.match(block, /exhaustion: out\.exhaustion/);
+    assert.match(block, /certified: !!certifiedExhaustion/);
+    // Attached BEFORE the return.
+    const retIdx = CS186.indexOf('return out;', idx);
+    assert.ok(retIdx > idx, 'attachment precedes the return');
+  });
+
+  it('the CERT scan also reads the selectorDiagnostics channel (source audit)', () => {
+    const idx = VR186.indexOf('186th round: the receipt also rides the diagnostics channel');
+    assert.ok(idx > -1, 'the extended scan exists');
+    const block = VR186.slice(idx, idx + 400);
+    assert.match(block, /Array\.isArray\(ev\.selectorDiagnostics\)/);
+    assert.match(block, /CERT_RE\.test\(dj\)/);
+  });
+
+  it('behavioral: a shortfall census certifies from diagnostics alone', () => {
+    const CERT_RE = /exhaustion"?\s*:\s*\{?\s*"certified"\s*:\s*true|certifiedExhaustion"?\s*:\s*true/;
+    const events = [
+      { type: 'STEP_ITERATION', stepId: 's2', resultPreview: '{"posts":[{},{}]}' },
+      { type: 'STEP_ITERATION', stepId: 's2', resultPreview: '{"posts":[{},{}],}', selectorDiagnostics: [{ api: 'collectUntil', exhaustion: { certified: true, evidence: 'stalled 3 rounds' } }] }
+    ];
+    let certified = false;
+    for (const ev of events) {
+      if (CERT_RE.test(String((ev && ev.resultPreview) || ''))) { certified = true; break; }
+      if (ev && Array.isArray(ev.selectorDiagnostics)) {
+        const dj = JSON.stringify(ev.selectorDiagnostics);
+        if (CERT_RE.test(dj)) { certified = true; break; }
+      }
+    }
+    assert.equal(certified, true, 'the diagnostics-carried receipt certifies');
+  });
+});

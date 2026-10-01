@@ -3438,6 +3438,23 @@
         elapsedMs: ((typeof Date !== 'undefined' ? Date.now() : 0) - t0)
       });
     } catch (e) { /* diagnostic only */ }
+    // 186th round (live: s2 RAN $collectUntil but the model returned only
+    // the posts, the exhaustion receipt never entered the step result, and
+    // the verify census said NOT certified — the model patched the script
+    // to return the receipt but ran out of budget to re-verify). The
+    // certification rides the diagnostics channel too, so discarding the
+    // return value can never discard the certification.
+    out._diagnostics = {
+      api: 'collectUntil',
+      containerSelector: selectorForLog,
+      satisfied: satisfied,
+      collected: snap.unique,
+      target: target,
+      rounds: rounds,
+      exhaustion: out.exhaustion
+        ? { certified: !!certifiedExhaustion, evidence: out.exhaustion.evidence || '' }
+        : null
+    };
     return out;
   }
 

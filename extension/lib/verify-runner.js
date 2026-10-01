@@ -1025,6 +1025,13 @@
               for (const ev of events) {
                 const pv = String((ev && ev.resultPreview) || '');
                 if (CERT_RE.test(pv)) { exhaustionCertified = true; break; }
+                // 186th round: the receipt also rides the diagnostics channel
+                // ($collectUntil attaches _diagnostics.exhaustion), so a
+                // script that returns only its records still certifies.
+                if (ev && Array.isArray(ev.selectorDiagnostics)) {
+                  const dj = JSON.stringify(ev.selectorDiagnostics);
+                  if (CERT_RE.test(dj)) { exhaustionCertified = true; break; }
+                }
               }
               detectors.countShortfall.exhaustionCertified = exhaustionCertified;
               const certNote = exhaustionCertified
