@@ -2518,3 +2518,35 @@ describe('184th residual: restoreVersion cannot be chunked', () => {
     assert.match(String(combo && combo.result && combo.result.error || ''), /restoreVersion cannot be chunked/);
   });
 });
+
+// 185th round (live: an io.confirm panel sat open overnight — 9.5 hours —
+// and the maxTurns stop detail never said where the time went). The TIME
+// BUDGET suffix now carries the parked line item on every stop path.
+describe('185th round: parked waits disclosed in the TIME BUDGET suffix', () => {
+  it('a parked io.confirm shows up in the maxTurns stop detail', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('io.confirm', { inputSchema: { type: 'object' }, outputSchema: { type: 'object' } })),
+        reply(envelope('probe.count', { sel: 'div.card' }))
+      ], []),
+      tools: {
+        'io.confirm': async (args, ctx) => {
+          if (ctx && ctx.session && typeof ctx.session.parkBegin === 'function') ctx.session.parkBegin('io.confirm', 'contract panel');
+          await new Promise(r2 => setTimeout(r2, 550));
+          if (ctx && ctx.session && typeof ctx.session.parkEnd === 'function') ctx.session.parkEnd();
+          return { confirmed: true };
+        },
+        'probe.count': async () => ({ count: 1 })
+      },
+      budgets: { maxTurns: 3 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'maxTurns');
+    // Either form discloses the park: the aggregate 'user-parked waits Ns
+    // (bridges held open...)' line (>=5s parks) or the per-tool '(+Ns
+    // user-parked, excluded)' tag (>500ms).
+    assert.match(String(report.stopped.detail || ''), /user-parked/,
+      'the overnight gap is named in the stop detail');
+  });
+});

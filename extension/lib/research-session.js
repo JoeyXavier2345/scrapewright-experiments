@@ -1435,6 +1435,10 @@
         if (rows.length) parts.push('top consumers: ' + rows.join(', '));
       }
       if (llmWaitTotal > 0) parts.push('llm/provider waits ' + Math.round(llmWaitTotal / 1000) + 's (excluded from wallClock)');
+      // 185th round (live: an io.confirm panel sat open OVERNIGHT — the
+      // maxTurns stop said nothing about where 9.5 hours went; the wallClock
+      // stop text discloses parked, the suffix did not).
+      if (parkedTotal > 5000) parts.push('user-parked waits ' + Math.round(parkedTotal / 1000) + 's (bridges held open — excluded from wallClock)');
       if (suspendCreditTotal > 0) parts.push('system suspension credit ' + Math.round(suspendCreditTotal / 1000) + 's (machine sleep during dispatches — excluded from wallClock)');
       if (!parts.length) return '';
       const suffix = ' [TIME BUDGET — ' + parts.join('; ') + ']';
