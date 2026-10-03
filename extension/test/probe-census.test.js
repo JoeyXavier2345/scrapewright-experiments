@@ -606,3 +606,42 @@ describe('186th round: collectUntil certification is model-proof', () => {
     assert.equal(certified, true, 'the diagnostics-carried receipt certifies');
   });
 });
+
+// 188th review P0: the 186th fix was dead end-to-end — the collectUntil
+// dispatcher case never lifted result._diagnostics into the DOM_RESPONSE
+// channel (the sibling scrollBy case does), so sandbox -> EXECUTE_RESULT ->
+// orchestrator events never carried the exhaustion receipt. The relay test
+// slices handleDomRequest and drives an actual collectUntil dispatch.
+describe('188th review: the exhaustion receipt rides the DOM_RESPONSE channel', () => {
+  const fs188 = require('node:fs');
+  const path188 = require('node:path');
+  const SRC188 = fs188.readFileSync(path188.join(__dirname, '../content-script.js'), 'utf8');
+
+  function slice188(name) {
+    const start = SRC188.indexOf('async function ' + name + '(');
+    assert.ok(start > -1, name + ' defined');
+    let depth = 0, i = SRC188.indexOf('{', start);
+    for (; i < SRC188.length; i++) {
+      if (SRC188[i] === '{') depth += 1;
+      else if (SRC188[i] === '}') { depth -= 1; if (depth === 0) break; }
+    }
+    return SRC188.slice(start, i + 1);
+  }
+
+  it('an action:collectUntil dispatch lifts _diagnostics into the response and strips the embedded copy', async () => {
+    const dom = new JSDOM('<div></div>');
+    const doc = dom.window.document;
+    const FAKE_RECEIPT = { api: 'collectUntil', satisfied: true, collected: 3, target: 3, rounds: 2, exhaustion: { certified: true, evidence: 'stalled 3 rounds' } };
+    const domCollectUntil = async () => {
+      const out = { satisfied: true, total: 3, unique: 3, exhaustion: { certified: true, evidence: 'x' } };
+      out._diagnostics = FAKE_RECEIPT;
+      return out;
+    };
+    const recordDomActivity = () => {};
+    const handleDomRequest = eval('(function (domCollectUntil, recordDomActivity) { return (' + slice188('handleDomRequest') + '); })')(domCollectUntil, recordDomActivity);
+    const resp = await handleDomRequest({ action: 'collectUntil', selector: 'div.card', args: [{}] });
+    assert.ok(resp && typeof resp === 'object', 'a response object came back');
+    assert.deepEqual(resp._diagnostics, FAKE_RECEIPT, 'the receipt rides the DOM_RESPONSE channel');
+    assert.ok(!(resp.result && resp.result._diagnostics), 'the embedded copy is stripped from the user-facing value');
+  });
+});

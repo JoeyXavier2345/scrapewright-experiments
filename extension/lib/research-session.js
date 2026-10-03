@@ -1421,6 +1421,14 @@
       // they are excluded from wallClock, so naming them here closes the
       // "where did the clock go" question the 71st-log session died on.
       const parts = [];
+      // 188th review: the aggregate disclosure lines are emitted FIRST —
+      // the 240-char suffix cap amputates the TAIL, and the parked line was
+      // third (after top consumers + llm waits); in the overnight-incident
+      // composite the 9.5h figure was cut to ~15 chars. Consumers are the
+      // elastic section.
+      if (parkedTotal > 5000) parts.push('user-parked waits ' + Math.round(parkedTotal / 1000) + 's (bridges held open — excluded from wallClock)');
+      if (suspendCreditTotal > 0) parts.push('system suspension credit ' + Math.round(suspendCreditTotal / 1000) + 's (machine sleep during dispatches — excluded from wallClock)');
+      if (llmWaitTotal > 0) parts.push('llm/provider waits ' + Math.round(llmWaitTotal / 1000) + 's (excluded from wallClock)');
       if (toolTimings.size > 0) {
         const rows = Array.from(toolTimings.entries())
           .sort((a, b) => b[1].ms - a[1].ms).slice(0, 3)
@@ -1434,12 +1442,6 @@
               : ''));
         if (rows.length) parts.push('top consumers: ' + rows.join(', '));
       }
-      if (llmWaitTotal > 0) parts.push('llm/provider waits ' + Math.round(llmWaitTotal / 1000) + 's (excluded from wallClock)');
-      // 185th round (live: an io.confirm panel sat open OVERNIGHT — the
-      // maxTurns stop said nothing about where 9.5 hours went; the wallClock
-      // stop text discloses parked, the suffix did not).
-      if (parkedTotal > 5000) parts.push('user-parked waits ' + Math.round(parkedTotal / 1000) + 's (bridges held open — excluded from wallClock)');
-      if (suspendCreditTotal > 0) parts.push('system suspension credit ' + Math.round(suspendCreditTotal / 1000) + 's (machine sleep during dispatches — excluded from wallClock)');
       if (!parts.length) return '';
       const suffix = ' [TIME BUDGET — ' + parts.join('; ') + ']';
       return suffix.length <= 240 ? suffix : suffix.slice(0, 237) + '...]';

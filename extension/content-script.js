@@ -1753,6 +1753,19 @@
         case 'collectUntil': {
           const __t0 = Date.now();
           result = await domCollectUntil(data.selector, (data.args && data.args[0] && typeof data.args[0] === 'object') ? data.args[0] : {}, data.deadlineAt);
+          // 188th review P0 (the sixth envelope-class dead layer): the
+          // wrapper attaches out._diagnostics (186th round) but THIS case
+          // never lifted it into the DOM_RESPONSE channel — the sibling
+          // $scrollBy case does — so sandbox/EXECUTE_RESULT/orchestrator
+          // events never carried the exhaustion receipt and the verify
+          // CERT scan saw nothing. Lift AND strip the embedded copy: the
+          // user-facing $collectUntil value stays unchanged (the sandbox
+          // contract) and a model spreading the envelope cannot ship the
+          // diagnostics into result data.
+          _diagnostics = (result && typeof result === 'object' && result._diagnostics) ? result._diagnostics : undefined;
+          if (result && typeof result === 'object' && result._diagnostics) {
+            try { delete result._diagnostics; } catch (eDel) { /* best-effort strip */ }
+          }
           recordDomActivity('$collectUntil', data.selector, result && result.satisfied ? 1 : 0, Date.now() - __t0);
           break;
         }
