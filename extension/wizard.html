@@ -87,10 +87,17 @@
         <span id="sessionStatusBadge" class="status-badge hidden"><span class="dot"></span><span id="sessionStatusText"></span></span>
         <span id="sessionElapsed" class="session-elapsed hidden"></span>
       </div>
-      <div id="sessionControls" class="step-nav hidden">
-        <button id="btnSessionPause">Pause</button>
-        <button id="btnSessionResume" class="hidden">Resume</button>
-        <button id="btnSessionAbort">Abort</button>
+      <!-- 189th round: session controls get their OWN layout (the step-nav
+           space-between spread Pause and Abort to opposite ends of a wide
+           row) and the log download lives HERE too — a session that dies
+           mid-research must be exportable from this stage. -->
+      <div id="sessionControls" class="session-controls hidden">
+        <div class="session-controls-buttons">
+          <button id="btnSessionPause">Pause</button>
+          <button id="btnSessionResume" class="hidden">Resume</button>
+          <button id="btnSessionAbort">Abort</button>
+          <button id="btnDownloadSessionLogP4" class="btn-secondary" type="button" title="Exports the durable journal (page [session] mirror + LLM bodies + SW ring) — works even if the session already errored.">Download Session Log</button>
+        </div>
         <span id="sessionSpend" class="hint-label"></span>
       </div>
       <div id="annotationRequestPanel" class="exploration-panel hidden">

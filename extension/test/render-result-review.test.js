@@ -257,3 +257,31 @@ describe('184th review: production wiring of getAppliedSteps', () => {
     assert.match(callBody, /getAppliedSteps:/, 'the engine cfg carries the getter');
   });
 });
+
+// 189th round (user reports: (1) no session-log download on the AI Research
+// stage — a mid-research error was unexportable; (2) the Pause/Abort gap was
+// the shared .step-nav space-between spreading two related buttons to
+// opposite ends of a wide row).
+describe('189th round: research-stage log export + session-controls layout', () => {
+  const fs189 = require('node:fs');
+  const path189 = require('node:path');
+  const HTML189 = fs189.readFileSync(path189.join(__dirname, '../wizard.html'), 'utf8');
+  const JS189 = fs189.readFileSync(path189.join(__dirname, '../wizard.js'), 'utf8');
+  const CSS189 = fs189.readFileSync(path189.join(__dirname, '../wizard.css'), 'utf8');
+
+  it('phase 4 carries its own Download Session Log button, wired to the shared handler', () => {
+    assert.match(HTML189, /id="btnDownloadSessionLogP4"/, 'the phase-4 button exists');
+    const idx = HTML189.indexOf('btnDownloadSessionLogP4');
+    const phase4 = HTML189.lastIndexOf('id="phase4"', idx);
+    const phase5 = HTML189.indexOf('id="phase5"', idx);
+    assert.ok(phase4 > -1 && (phase5 === -1 || phase4 < idx), 'inside the research stage');
+    assert.match(JS189, /btnDownloadSessionLogP4'\);\n  if \(btnDownloadLogP4\) btnDownloadLogP4\.addEventListener\('click', window\.__downloadSessionLog\)/,
+      'wired to the shared named handler');
+  });
+
+  it('session controls no longer reuse .step-nav (dedicated clustered layout)', () => {
+    assert.match(HTML189, /id="sessionControls" class="session-controls hidden"/);
+    assert.doesNotMatch(HTML189, /id="sessionControls" class="step-nav/, 'the space-between spread is gone');
+    assert.match(CSS189, /\.session-controls-buttons \{[\s\S]*?gap: 8px/, 'buttons cluster with the standard gap');
+  });
+});

@@ -662,6 +662,24 @@ pre {
   border-top: 1px solid var(--border);
 }
 
+/* 189th round: session controls are NOT step navigation — the shared
+   .step-nav space-between spread Pause to the far left and Abort to the
+   far right of a wide row (the "weird gap"). Buttons cluster left with the
+   standard gap; the spend hint rides the right edge. */
+.session-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.session-controls-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 /* --- Phase 4: execution progress table + timeline -------------------------------- */
 #executionProgress table {
   width: 100%;

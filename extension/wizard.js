@@ -315,9 +315,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   } catch (eJ) { /* journal init is best-effort; the console mirror stays authoritative */ }
   const btnDownloadLog = document.getElementById('btnDownloadSessionLog');
-  if (btnDownloadLog) {
-    btnDownloadLog.classList.remove('hidden');
-    btnDownloadLog.addEventListener('click', async () => {
+  // 189th round (user report): the download button lived ONLY on the review
+  // stage — a session that died mid-research had no way to export the log.
+  // The handler is named; phase 4's controls row gets its own button.
+  window.__downloadSessionLog = async () => {
       try {
         const pageLines = (window.__scrapewrightSessionJournal ? (await window.__scrapewrightSessionJournal.all()) : []);
         let swLines = [];
@@ -342,8 +343,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       } catch (eDL) {
         showToast('Session log export failed: ' + (eDL && eDL.message), 'error', 6000);
       }
-    });
+  };
+  if (btnDownloadLog) {
+    btnDownloadLog.classList.remove('hidden');
+    btnDownloadLog.addEventListener('click', window.__downloadSessionLog);
   }
+  const btnDownloadLogP4 = document.getElementById('btnDownloadSessionLogP4');
+  if (btnDownloadLogP4) btnDownloadLogP4.addEventListener('click', window.__downloadSessionLog);
 
   if (chrome.tabs && chrome.tabs.onRemoved) {
     chrome.tabs.onRemoved.addListener((removedTabId) => {
