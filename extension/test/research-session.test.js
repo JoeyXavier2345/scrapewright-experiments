@@ -1015,7 +1015,10 @@ describe('protocol violations', () => {
     assert.ok(nudges[0].text.includes('has now seen 2 truncated replies'), 'count-accurate (seeded 1 + this turn)');
     assert.ok(/ONE step per reply/.test(nudges[0].text), 'per-step chunking escape present');
     assert.ok(!/Never emit a multi-step reply again/.test(nudges[0].text), 'the permanent directive is gone');
-    assert.equal(session.state().session.cutOffNudgeCount, 2, 'counter persisted through the nudges');
+    // 190th round: the continuation-death escalation ALSO increments the
+    // persisted counter (its round fired after this turn's chain) — seeded 1
+    // + this turn's nudge + the 190th escape round = 3.
+    assert.equal(session.state().session.cutOffNudgeCount, 3, 'counter persisted through the nudges AND the 190th escape round');
     // Control: a FRESH session (no seeded counter) does NOT escalate on its
     // first cut — the escape needs two.
     const fresh = createResearchSession({
@@ -1026,8 +1029,12 @@ describe('protocol violations', () => {
     await fresh.run();
     const freshNudges = fresh.state().session.transcript.filter(e => e.kind === 'system');
     assert.ok(/CUT OFF/i.test(freshNudges[0].text));
-    assert.ok(!/MECHANICAL ESCAPE/.test(freshNudges[0].text), 'single cut does not escalate');
-    assert.equal(fresh.state().session.cutOffNudgeCount, 1, 'first cut counted');
+    assert.ok(!/MECHANICAL ESCAPE/.test(freshNudges[0].text), 'single cut does not escalate the FIRST nudge');
+    assert.ok(freshNudges.some((n) => /MECHANICAL ESCAPE/.test(n.text)), 'the 190th escape round fires after the continuation death');
+    // 190th round: the fresh-session chain (cut, repair cut, continuation
+    // non-json) now runs the escape round too — which increments the counter
+    // (nudge + escape = 2).
+    assert.equal(fresh.state().session.cutOffNudgeCount, 2, 'cut + 190th escape round counted');
   });
 
   it('a continuation that reopens the whole object parses standalone', async () => {
@@ -2548,5 +2555,43 @@ describe('185th round: parked waits disclosed in the TIME BUDGET suffix', () => 
     // user-parked, excluded)' tag (>500ms).
     assert.match(String(report.stopped.detail || ''), /user-parked/,
       'the overnight gap is named in the stop detail');
+  });
+});
+
+// 190th round (user: "预算没用完，跑不动了" — the live death chain: reply cut
+// at 2475 chars, repair cut at 1349, continuation cut at 694, session
+// stopped with budget remaining; the MECHANICAL ESCAPE text never reached
+// the model because its >=2-cumulative gate was evaluated when the count
+// was still 1, and the continuation failure was a dead end).
+describe('190th round: continuation death escalates to the mechanical escape', () => {
+  it('a third consecutive cut-off gets ONE mechanical-escape round instead of an immediate stop', async () => {
+    const replies = [];
+    // Original (cut), repair (cut), continuation (cut), mechanical-escape reply (valid tiny action).
+    const cut1 = '{"think":"t","tool":"service.update","args":{"steps":[{"id":"s1","script":"var x = \\"unterminated';
+    const cut2 = '{"think":"t2","tool":"service.update","args":{"steps":[{"script":"var y = \\"still cut';
+    const cut3 = 'cont... \\"still cut again';
+    const ok4 = '{"think":"one step","tool":"service.update","args":{"steps":[{"id":"s1","script":"return 1","onSuccess":"TERMINATE","onFailure":"TERMINATE"}],"more":true}}';
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: async (req) => {
+        const msgs = (req && req.messages) || [];
+        const lastSys = [...msgs].reverse().find((m) => m.role === 'system' || m.role === 'user');
+        const text = JSON.stringify((lastSys && lastSys.content) || '').slice(0, 400);
+        replies.push(text);
+        // Sequence by call count: 1 original, 2 repair, 3 continuation, 4 escape round.
+        const n = replies.length;
+        if (n === 1) return reply(cut1);
+        if (n === 2) return reply(cut2);
+        if (n === 3) return reply(cut3);
+        return reply(ok4);
+      },
+      tools: { 'service.update': async () => ({ buffered: true, bufferedSteps: 1 }) },
+      budgets: { maxTurns: 10 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason !== 'protocol', true,
+      'the session must NOT die on the third cut-off — got: ' + String(report.stopped.reason) + ' ' + String(report.stopped.detail || '').slice(0, 160));
+    assert.ok(replies.some((r) => /MECHANICAL ESCAPE/.test(r)),
+      'the mechanical escape reached the model (it never did in the live incident)');
   });
 });

@@ -1654,6 +1654,39 @@
                   if (p.ok) { parsed = p; winning = variant; break; }
                 }
               }
+              // 190th round (user: "预算没用完，跑不动了" — live death chain:
+              // reply cut at 2475 chars, repair cut at 1349, continuation
+              // cut at 694, session stopped with 14+ turns left). The
+              // MECHANICAL ESCAPE (one-step-per-reply chunks) only rides the
+              // repair nudge gated at >=2 CUMULATIVE cut-offs — the count is
+              // 1 when that nudge is built, so the model never saw it, and
+              // the continuation failure was a dead end. A continuation that
+              // ALSO dies cut-off is the definition of "generic advice has
+              // now failed twice" — fire the mechanical escape as ONE final
+              // round instead of stopping while budget remains.
+              if (!parsed.ok && stillCutOff && state.spend.turns < budgets.maxTurns) {
+                state.transcript.push({ kind: 'system', text:
+                  'MECHANICAL ESCAPE (your last THREE replies were cut off mid-JSON by the provider while claiming finish stop — 2475, 1349, and 694 chars; the ceiling is on the REPLY, not your intent): ' +
+                  'reply with the SMALLEST possible action object. If you are mid service.update, send service.update({steps:[EXACTLY ONE step], more:true}) — ONE step per reply, repeat until every step is sent, final step without more. ' +
+                  'Any other action: one-sentence think, tool, args — nothing else. Do not re-explain your plan in this reply.' });
+                state.cutOffNudgeCount = (state.cutOffNudgeCount || 0) + 1;
+                try {
+                  const last190 = await callLlm(assembleMessages());
+                  const p190 = Protocol.parseAssistantTurn(last190);
+                  if (p190.ok) {
+                    parsed = p190;
+                    content = last190;
+                    winning = last190;
+                  } else {
+                    emit('protocol_violation', { violation: p190.violation, detail: p190.detail || null });
+                    parsed = p190;
+                  }
+                } catch (err190) {
+                  const s190 = llmStopFromError(err190);
+                  report = await stop(s190[0], s190[1]);
+                  break;
+                }
+              }
               if (!parsed.ok) {
                 // Eighteenth log: the repair failure was invisible — only the
                 // first violation got an event, and stop() carried the bare
