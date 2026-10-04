@@ -670,3 +670,36 @@ describe('191st round: $timestamp zero-anchor self-heal (source audit)', () => {
     assert.match(block, /return \{ result: healed/, 'a healed run returns its own result');
   });
 });
+
+// 192nd round (live question: the verify census said "no $collectUntil
+// receipt" while the SW relay PROVED collectUntil ran — is the receipt
+// visible through the orchestrator→census segment?). End-to-end test
+// through the REAL verify-runner with an orchestrate mock emitting
+// orchestrator-shaped STEP_ITERATION events (selectorDiagnostics carried
+// per event, exactly as step-orchestrator emits them).
+describe('192nd round: certified receipt visible through orchestrator-shaped events', () => {
+  it('a STEP_ITERATION event carrying selectorDiagnostics with certified exhaustion certifies the census', async () => {
+    const { createVerifyRunner } = require('../lib/verify-runner');
+    const steps192 = [{ id: 's2', name: 'scroll', script: 'const r = await $collectUntil(".c", {targetCount: __input__.count}); return {count: r.unique};', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }];
+    const runner = createVerifyRunner({
+      orchestrate: async (service, input, orchDeps, options) => {
+        // Mirror the real contract: onEvent rides the FOURTH argument (the
+        // options object) — the third is the deps bag. Events pushed there
+        // land in the runner's events[] and feed the censuses.
+        const emit = (options && typeof options.onEvent === 'function') ? options.onEvent : (() => {});
+        emit({ type: 'STEP_ITERATION', stepId: 's2', iteration: 1, resultPreview: '{"count":2}',
+          selectorDiagnostics: [{ api: 'collectUntil', containerSelector: '.c', satisfied: false, collected: 2, target: 4, rounds: 6, exhaustion: { certified: true, evidence: 'scroll stalled; unique population unchanged 3 rounds' } }] });
+        return { finalResult: { posts: [{ postId: 'a' }, { postId: 'b' }] }, steps: [] };
+      },
+      captureSnapshot: async () => ({ html: '', url: 'https://example.com', title: 't' })
+    });
+    const service = { targetUrl: 'https://example.com', steps: steps192 };
+    const outputSchema = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['postId'], properties: { postId: { type: 'string' } } } } } };
+    const out = await runner({ service, input: { count: 4 }, outputSchema });
+    const report = out.report;
+    const cs = report.detectors && report.detectors.countShortfall;
+    assert.ok(cs, 'countShortfall census ran');
+    assert.equal(cs.exhaustionCertified, true,
+      'a certified receipt riding orchestrator-shaped events certifies the census — note: ' + String(cs.note || '').slice(0, 180));
+  });
+});
