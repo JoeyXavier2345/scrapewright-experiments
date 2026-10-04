@@ -645,3 +645,28 @@ describe('188th review: the exhaustion receipt rides the DOM_RESPONSE channel', 
     assert.ok(!(resp.result && resp.result._diagnostics), 'the embedded copy is stripped from the user-facing value');
   });
 });
+
+// 191st round (live: the verify tab ran 6 timestamp dances with
+// anchors:0/hoversDispatched:0 while the SAME container on the research
+// tab yielded an absolute via the default union; a prior verify captured
+// the tooltip date from a plain link hover). The step-side $timestamp
+// primitive self-heals a zero-anchor default union with a census-derived
+// fallback retry (a[href] / [aria-label]) — mirroring the 177c census
+// heal, now on the primitive itself.
+describe('191st round: $timestamp zero-anchor self-heal (source audit)', () => {
+  const fs191 = require('node:fs');
+  const path191 = require('node:path');
+  const CS191 = fs191.readFileSync(path191.join(__dirname, '../content-script.js'), 'utf8');
+
+  it('the retry block exists inside domTimestamp, before the vacuous negative', () => {
+    const tsStart = CS191.indexOf('async function domTimestamp(');
+    const vacIdx = CS191.indexOf('VACUOUS NEGATIVE', tsStart);
+    const retryIdx = CS191.indexOf('191st round (live: the verify tab ran 6 timestamp dances', tsStart);
+    assert.ok(tsStart > -1 && vacIdx > -1 && retryIdx > -1, 'blocks located');
+    assert.ok(retryIdx < vacIdx, 'the heal runs BEFORE the vacuous negative is declared');
+    const block = CS191.slice(retryIdx, vacIdx);
+    assert.match(block, /a\[href\]/, 'census-derived fallback families');
+    assert.match(block, /anchorRetry/, 'the heal is disclosed on the receipt');
+    assert.match(block, /return \{ result: healed/, 'a healed run returns its own result');
+  });
+});

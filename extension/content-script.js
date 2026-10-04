@@ -2760,6 +2760,69 @@
     };
     if (!candidates.length) {
       if (!anchors.length) {
+        // 191st round (live: the verify tab ran 6 timestamp dances with
+        // anchors:0/hoversDispatched:0 while the SAME container on the
+        // research tab yielded an absolute via the default union — and a
+        // prior verify had captured the tooltip date from a plain link
+        // hover; the census families were present all along). The default
+        // time-anchor union (labelledby-shaped) can match ZERO anchors on a
+        // card population whose timestamps live behind plain links. Retry
+        // ONCE with a census-derived fallback union before declaring the
+        // vacuous negative — mirrors the 177c census self-heal, now on the
+        // step-side primitive itself. Disclosed via anchorRetry.
+        let healed = null;
+        try {
+          const retrySel = [];
+          if (container.querySelectorAll('a[href]').length) retrySel.push('a[href]');
+          const alCount = container.querySelectorAll('[aria-label]').length;
+          if (alCount) retrySel.push('[aria-label]');
+          if (retrySel.length && typeof domHover === 'function') {
+            const retryAnchorSel = retrySel.join(', ');
+            const retryAnchors = Array.prototype.slice.call(container.querySelectorAll(retryAnchorSel)).slice(0, 6);
+            if (retryAnchors.length) {
+              for (const ra of retryAnchors) {
+                try {
+                  const hres = await domHover(retryAnchorSel, null, { timeoutMs: timeoutMs, index: retryAnchors.indexOf(ra) });
+                  if (hres && (hres.hovered || hres.hoverDispatched)) {
+                    const srcs = [];
+                    if (Array.isArray(hres.rejectedAddedTexts)) srcs.push.apply(srcs, hres.rejectedAddedTexts);
+                    if (Array.isArray(hres.addedNodesHtml)) {
+                      for (const ah of hres.addedNodesHtml) {
+                        const t = String(ah || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+                        if (t) srcs.push(t);
+                      }
+                    }
+                    if (hres.htmlSnippet) {
+                      const pt = String(hres.htmlSnippet).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+                      if (pt) srcs.push(pt);
+                    }
+                    for (const raw of srcs) {
+                      push(raw, 'anchorRetry.hover');
+                    }
+                  }
+                } catch (eH) { /* per-anchor retry is best-effort */ }
+              }
+              if (candidates.length) {
+                const absR = candidates.find((c) => !c.relative && !c.partial) || candidates.find((c) => !c.relative) || null;
+                healed = {
+                  heuristicValue: absR ? absR.value : (candidates.find((c) => c.relative) ? candidates.find((c) => c.relative).value : ''),
+                  value: absR ? absR.value : '',
+                  absolute: absR ? absR.value : null,
+                  absoluteSource: absR ? absR.source : null,
+                  relative: (candidates.find((c) => c.relative) || null) ? candidates.find((c) => c.relative).value : null,
+                  candidates: candidates,
+                  anchorsProbed: retryAnchors.length,
+                  hoversDispatched: retryAnchors.length,
+                  anchorLog: [],
+                  anchorRetry: { from: anchorSel, to: retryAnchorSel, reason: 'default union matched 0 anchors; census families present' }
+                };
+              }
+            }
+          }
+        } catch (eR) { /* the retry is best-effort; the vacuous negative below stays authoritative */ }
+        if (healed) return { result: healed, _diagnostics: { api: 'timestamp', selector: sel, anchors: healed.anchorsProbed, hoversDispatched: healed.hoversDispatched, absoluteFound: !!healed.absolute, anchorRetry: healed.anchorRetry } };
+      }
+      if (!anchors.length) {
         // Eighty-fifth log: a zero-anchor enumeration is a VACUOUS negative —
         // nothing was read or hovered, yet the old receipt read as "this card
         // exposes no timestamp". The feedback session's model wrote the
