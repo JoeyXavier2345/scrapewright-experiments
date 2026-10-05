@@ -740,3 +740,46 @@ describe('193rd round: repeatedToken junk detection', () => {
     assert.ok(!rep, 'no false positive on prose — got ' + JSON.stringify(rep));
   });
 });
+
+// 194th round (user pointed at record 6 of the shipped result: content
+// carried the brand repeat AND '4371613' — the record's own
+// likeCount(437)+commentCount(16)+shareCount(13) glued — while postTime
+// shipped a bare 'May 21' as the ONLY partial among 5 full absolutes).
+describe('194th round: gluedCounts + mixed time completeness', () => {
+  const VR194 = require('../lib/verify-runner');
+  const WU194 = require('../lib/wizard-utils');
+  const schema194 = { type: 'object', properties: { posts: { type: 'array', items: { type: 'object', properties: {
+    content: { type: 'string' }, postTime: { type: 'string' },
+    likeCount: { type: 'string' }, commentCount: { type: 'string' }, shareCount: { type: 'string' }
+  } } } } };
+
+  it('gluedCounts flags the live record-6 shape; extended digit runs stay clean', () => {
+    const live = VR194.detectJunkValues({ posts: [
+      { content: 'Facebook'.repeat(22) + '正文（#大表哥）4371613FacebookFacebook', likeCount: '437', commentCount: '16', shareCount: '13' }
+    ]}, schema194);
+    assert.ok(live.fields.some((f) => f.kind === 'gluedCounts' && f.field === 'posts.content'),
+      'the glued counts are named — got ' + JSON.stringify(live.fields.map((f) => f.kind)));
+    assert.match(live.note, /GLUED-COUNTS/);
+    const fp = VR194.detectJunkValues({ posts: [
+      { content: 'normal 12345 text', likeCount: '12', commentCount: '34' }
+    ]}, schema194);
+    assert.ok(!(fp && fp.fields || []).some((f) => f.kind === 'gluedCounts'),
+      'counts gluing to a LONGER digit run in content are not a hit');
+  });
+
+  it('mixedCompleteness names the one-partial-among-fulls time field', () => {
+    const r = WU194.detectRelativeTimestamps({ posts: [
+      { postTime: 'August 16, 2026 at 11:16 PM' },
+      { postTime: 'September 30, 2026 at 10:43 AM' },
+      { postTime: 'May 21' }
+    ]}, schema194);
+    assert.equal(r[0].mixedCompleteness, true, 'the mixed shape is flagged');
+    assert.match(r[0].note, /MIXED population/);
+    assert.match(r[0].note, /capture failures/);
+    const allPartial = WU194.detectRelativeTimestamps({ posts: [
+      { postTime: 'May 21' }, { postTime: 'June 3' }
+    ]}, schema194);
+    assert.ok(allPartial[0].mixedCompleteness === undefined,
+      'an all-partial population keeps the 76th-round exit-ladder semantics (page may render month-day for this era)');
+  });
+});

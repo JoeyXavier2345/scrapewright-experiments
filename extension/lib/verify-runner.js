@@ -244,6 +244,52 @@
     return { token: m[1], runLength: m[0].length };
   };
 
+  // 194th round (live: record 6's content carried '4371613' — the record's
+  // likeCount(437)+commentCount(16)+shareCount(13) concatenated — the count
+  // row renders inside the card wrapper the content field reads wholesale).
+  // Mechanically checkable: a non-count field whose value contains the exact
+  // concatenation of the SAME record's count-ish sibling values.
+  const COUNTISH_SIBLING = /(count|num|likes?|comments?|shares?|reactions?|views?)/i;
+  function detectGluedCounts(recs, fieldPath, fields) {
+    for (const r of recs) {
+      if (!r || typeof r !== 'object') continue;
+      const countVals = [];
+      for (const k of Object.keys(r)) {
+        if (!COUNTISH_SIBLING.test(k)) continue;
+        const cv = r[k];
+        if (typeof cv === 'string' && /^\d+$/.test(cv) && cv.length >= 1) countVals.push({ key: k, val: cv });
+      }
+      if (countVals.length < 2) continue;
+      // Try the natural DOM-order concatenation and the sorted join.
+      const glue = countVals.map((c) => c.val).join('');
+      const glueSorted = countVals.slice().sort((a, b) => b.val.length - a.val.length).map((c) => c.val).join('');
+      for (const k of Object.keys(r)) {
+        if (COUNTISH_SIBLING.test(k) || /id|time|date|url|link|href/i.test(k)) continue;
+        const v = r[k];
+        if (typeof v !== 'string' || v.length < 4) continue;
+        // Substring hits are false positives when the content's digit run
+        // EXTENDS the glue (counts 12+34 gluing to '1234' matched inside
+        // '12345'). The glue must appear as its OWN maximal digit run.
+        const hitOwn = (g) => {
+          let from = 0;
+          while (true) {
+            const i = v.indexOf(g, from);
+            if (i === -1) return false;
+            const before = i > 0 ? v[i - 1] : '';
+            const after = (i + g.length) < v.length ? v[i + g.length] : '';
+            if (!/\d/.test(before) && !/\d/.test(after)) return true;
+            from = i + 1;
+          }
+        };
+        if (hitOwn(glue) || hitOwn(glueSorted)) {
+          fields.push({ field: fieldPath + '.' + k, kind: 'gluedCounts', count: 1, total: recs.length,
+            sample: 'contains ' + JSON.stringify(glue) + ' (= ' + countVals.map((c) => c.key + ':' + c.val).join(' + ') + ')' });
+          break;
+        }
+      }
+    }
+  }
+
   function scanRecords(recs, fieldPath, urlishHints, rawishHints, idishHints, fields) {
     const recKeys = [];
     const seen = {};
@@ -310,7 +356,7 @@
             continue;
           }
           const recs = val.filter((r) => r && typeof r === 'object' && !Array.isArray(r));
-          if (recs.length) scanRecords(recs, fieldPath, urlishHints, rawishHints, idishHints, fields);
+          if (recs.length) { scanRecords(recs, fieldPath, urlishHints, rawishHints, idishHints, fields); detectGluedCounts(recs, fieldPath, fields); }
           for (const r of recs) walk(r, path.concat(key), depth + 1);
         } else if (val && typeof val === 'object') {
           walk(val, path.concat(key), depth + 1);
@@ -321,7 +367,7 @@
     return {
       fields: fields,
       note: 'JUNK VALUES: ' + fields.map((f) => f.field + '(' + f.kind + ')').join(', ') +
-        '. Structurally green but these values are junk: bare query strings ("?a=b…") are redirect/tracking href fragments, data: URIs inside url/media arrays are inline UI icons, markup dumps are raw HTML leaking into a data field, COMMA-STUFFED text (ASCII punctuation interleaved between CJK characters) is an anti-scrape decoy that is MECHANICALLY REPAIRABLE — the clean value is the same string with the stuffed marks removed (strip ASCII [,!;.] marks whose neighbors are both CJK, in the step assembly) , or bind the field to an attribute/ARIA reference instead of textContent, long single-token opaque strings (random alphanumerics, no spaces, no vowel structure) are anti-scrape DECOYS leaking through a raw textContent read — the real value usually lives in the elements an ARIA reference points at, so re-read the field with the fieldMap labelledby:true option (or $labelledby) instead of textContent — and a count/quantity-typed field holding a pure-alphabetic value ("Like", "Comment", "赞") captured the control label — the interactive button\'s aria-label/title, not the number it renders: the count lives in the element (or attribute) that renders the digit — often a sibling node, an aria-label containing the count ("Liked by 12"), or a title attribute; a label-only control usually means the count is zero. Fix the selector to read the real value, filter arrays in the step script (keep http(s) entries), or renegotiate the contract with io.confirm to drop/redefine the field. A green score with junk-valued fields is NOT a finished service. A REPEATED-TOKEN value (one short word repeated back-to-back many times, e.g. one word duplicated 30-40x) is page scaffolding leaking through a broad textContent read: strip the repeated run in the step assembly (a global regex like /([A-Za-z]{2,12}?)\1{3,}/g replaced with the empty string) or bind the field to the specific content node instead of the card wrapper.'
+        '. Structurally green but these values are junk: bare query strings ("?a=b…") are redirect/tracking href fragments, data: URIs inside url/media arrays are inline UI icons, markup dumps are raw HTML leaking into a data field, COMMA-STUFFED text (ASCII punctuation interleaved between CJK characters) is an anti-scrape decoy that is MECHANICALLY REPAIRABLE — the clean value is the same string with the stuffed marks removed (strip ASCII [,!;.] marks whose neighbors are both CJK, in the step assembly) , or bind the field to an attribute/ARIA reference instead of textContent, long single-token opaque strings (random alphanumerics, no spaces, no vowel structure) are anti-scrape DECOYS leaking through a raw textContent read — the real value usually lives in the elements an ARIA reference points at, so re-read the field with the fieldMap labelledby:true option (or $labelledby) instead of textContent — and a count/quantity-typed field holding a pure-alphabetic value ("Like", "Comment", "赞") captured the control label — the interactive button\'s aria-label/title, not the number it renders: the count lives in the element (or attribute) that renders the digit — often a sibling node, an aria-label containing the count ("Liked by 12"), or a title attribute; a label-only control usually means the count is zero. Fix the selector to read the real value, filter arrays in the step script (keep http(s) entries), or renegotiate the contract with io.confirm to drop/redefine the field. A green score with junk-valued fields is NOT a finished service. GLUED-COUNTS text (a data field containing the exact concatenation of the SAME record count values) means the count row renders inside the node the field reads — bind the field to the specific content element, not the card wrapper. A REPEATED-TOKEN value (one short word repeated back-to-back many times, e.g. one word duplicated 30-40x) is page scaffolding leaking through a broad textContent read: strip the repeated run in the step assembly (a global regex like /([A-Za-z]{2,12}?)\1{3,}/g replaced with the empty string) or bind the field to the specific content node instead of the card wrapper.'
     };
   }
 

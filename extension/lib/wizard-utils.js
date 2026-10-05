@@ -4477,6 +4477,18 @@ function detectRelativeTimestamps(data, outputSchema) {
           };
           if (partialCount > 0) {
             entry.note = String(partialSample).slice(0, 60) + ' (no year — partial absolute; the hover tooltip often carries the full date)';
+            // 194th round (live: 5/6 postTimes shipped full absolutes while
+            // record 6 shipped a bare 'May 21' behind a GREEN verify — a MIXED
+            // completeness is a per-record capture failure, not a page fact:
+            // the same tooltip family cannot render the year for one card and
+            // not its siblings). Name the mixed shape and demand a per-record
+            // retry before shipping.
+            const fullCount = total - relativeCount - partialCount;
+            if (fullCount > 0 && partialCount > 0) {
+              entry.mixedCompleteness = true;
+              entry.note += ' MIXED population: ' + fullCount + ' record(s) carry FULL absolutes while ' + partialCount +
+                ' ship partial — the partial card(s) are capture failures (hover budget, anchor miss, or early exit), not page truth: re-run $timestamp with anchorSel narrowed to the failing card (or read:hoverPopover with a year-carrying match) BEFORE shipping, or disclose the partial per-record.';
+            }
           }
           out.push(entry);
         }
