@@ -216,6 +216,33 @@
   }
   const OBFUSCATED_STUFFED_MIN = 5;
   const isStuffedDecoyText = (v) => typeof v === 'string' && v.length >= 12 && stuffedMarkCount(v) >= OBFUSCATED_STUFFED_MIN;
+  // 193rd round (live: a GREEN v8 shipped content = one site word repeated
+  // 30-40x concatenated before the real CJK body — page scaffolding leaking
+  // through a broad textContent read; and one postId = page-name + the same
+  // repeat prefix). The repeat family was outside every existing predicate
+  // (opaqueToken needs a single token; stuffed = punctuation interleaving).
+  // A short ASCII token repeated back-to-back >=4 times IS mechanical junk
+  // regardless of position — real prose never repeats one word contiguously
+  // that many times. CJK-aware: the token boundary at CJK works because
+  // [A-Za-z] cannot cross CJK chars.
+  // Token floor is 4: a 2-3 char fragment ('zz', 'ab') repeating is usually
+  // filler padding in test fixtures or compression artifacts, while real
+  // page scaffolding repeats a recognizable word (brand/link-text, >=4 chars).
+  const REPEAT_TOKEN_RE = /([A-Za-z]{4,12}?)\1{3,}/;
+  const distinctLetters = (t) => new Set(t.toLowerCase().split('')).size;
+  const repeatedTokenRun = (v) => {
+    if (typeof v !== 'string' || v.length < 24) return null;
+    const m = v.match(REPEAT_TOKEN_RE);
+    if (!m) return null;
+    // A run of ONE repeated letter (zzzz…) is filler padding, not scaffolding
+    // text — the tokens real pages repeat are words with >=2 distinct letters.
+    if (distinctLetters(m[1]) < 2) return null;
+    // Require a meaningful footprint: the run covers >= 30% of the value or
+    // >= 24 chars (a 4x repeat of an 8-char word = 32 chars passes; incidental repeats in
+    // long prose are typically shorter and rarer).
+    if (m[0].length < 24 && m[0].length / v.length < 0.3) return null;
+    return { token: m[1], runLength: m[0].length };
+  };
 
   function scanRecords(recs, fieldPath, urlishHints, rawishHints, idishHints, fields) {
     const recKeys = [];
@@ -232,9 +259,11 @@
       let opaque = 0; let opaqueSample = '';
       let labelish = 0; let labelSample = '';
       let stuffed = 0; let stuffedSample = '';
+      let repTokens = 0; let repSample = '';
       for (const r of recs) {
         const v = r[rk];
         if (typeof v === 'string') {
+          if (repeatedTokenRun(v)) { repTokens += 1; if (!repSample) repSample = v; }
           if (isQueryBlob(v)) { blobs += 1; if (!blobSample) blobSample = v; }
           if (!isRawishName(rk, rawishHints) && isMarkupDump(v)) { dumps += 1; if (!dumpSample) dumpSample = v; }
           if (isOpaqueToken(v) && !isIdishName(rk, idishHints) && !isUrlishName(rk, urlishHints) && !isRawishName(rk, rawishHints)) {
@@ -256,6 +285,7 @@
       if (dumps) fields.push({ field: fieldPath + '.' + rk, kind: 'markupDump', count: dumps, sample: capSample(dumpSample) });
       if (labelish) fields.push({ field: fieldPath + '.' + rk, kind: 'controlLabel', count: labelish, total: recs.length, sample: capSample(labelSample) });
       if (stuffed) fields.push({ field: fieldPath + '.' + rk, kind: 'obfuscatedText', count: stuffed, total: recs.length, sample: capSample(stuffedSample) });
+      if (repTokens && !isIdishName(rk, idishHints) ? repTokens : repTokens) fields.push({ field: fieldPath + '.' + rk, kind: 'repeatedToken', count: repTokens, total: recs.length, sample: capSample(repSample) });
     }
   }
 
@@ -291,7 +321,7 @@
     return {
       fields: fields,
       note: 'JUNK VALUES: ' + fields.map((f) => f.field + '(' + f.kind + ')').join(', ') +
-        '. Structurally green but these values are junk: bare query strings ("?a=b…") are redirect/tracking href fragments, data: URIs inside url/media arrays are inline UI icons, markup dumps are raw HTML leaking into a data field, COMMA-STUFFED text (ASCII punctuation interleaved between CJK characters) is an anti-scrape decoy that is MECHANICALLY REPAIRABLE — the clean value is the same string with the stuffed marks removed (strip ASCII [,!;.] marks whose neighbors are both CJK, in the step assembly) , or bind the field to an attribute/ARIA reference instead of textContent, long single-token opaque strings (random alphanumerics, no spaces, no vowel structure) are anti-scrape DECOYS leaking through a raw textContent read — the real value usually lives in the elements an ARIA reference points at, so re-read the field with the fieldMap labelledby:true option (or $labelledby) instead of textContent — and a count/quantity-typed field holding a pure-alphabetic value ("Like", "Comment", "赞") captured the control label — the interactive button\'s aria-label/title, not the number it renders: the count lives in the element (or attribute) that renders the digit — often a sibling node, an aria-label containing the count ("Liked by 12"), or a title attribute; a label-only control usually means the count is zero. Fix the selector to read the real value, filter arrays in the step script (keep http(s) entries), or renegotiate the contract with io.confirm to drop/redefine the field. A green score with junk-valued fields is NOT a finished service.'
+        '. Structurally green but these values are junk: bare query strings ("?a=b…") are redirect/tracking href fragments, data: URIs inside url/media arrays are inline UI icons, markup dumps are raw HTML leaking into a data field, COMMA-STUFFED text (ASCII punctuation interleaved between CJK characters) is an anti-scrape decoy that is MECHANICALLY REPAIRABLE — the clean value is the same string with the stuffed marks removed (strip ASCII [,!;.] marks whose neighbors are both CJK, in the step assembly) , or bind the field to an attribute/ARIA reference instead of textContent, long single-token opaque strings (random alphanumerics, no spaces, no vowel structure) are anti-scrape DECOYS leaking through a raw textContent read — the real value usually lives in the elements an ARIA reference points at, so re-read the field with the fieldMap labelledby:true option (or $labelledby) instead of textContent — and a count/quantity-typed field holding a pure-alphabetic value ("Like", "Comment", "赞") captured the control label — the interactive button\'s aria-label/title, not the number it renders: the count lives in the element (or attribute) that renders the digit — often a sibling node, an aria-label containing the count ("Liked by 12"), or a title attribute; a label-only control usually means the count is zero. Fix the selector to read the real value, filter arrays in the step script (keep http(s) entries), or renegotiate the contract with io.confirm to drop/redefine the field. A green score with junk-valued fields is NOT a finished service. A REPEATED-TOKEN value (one short word repeated back-to-back many times, e.g. one word duplicated 30-40x) is page scaffolding leaking through a broad textContent read: strip the repeated run in the step assembly (a global regex like /([A-Za-z]{2,12}?)\1{3,}/g replaced with the empty string) or bind the field to the specific content node instead of the card wrapper.'
     };
   }
 

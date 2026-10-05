@@ -703,3 +703,40 @@ describe('192nd round: certified receipt visible through orchestrator-shaped eve
       'a certified receipt riding orchestrator-shaped events certifies the census — note: ' + String(cs.note || '').slice(0, 180));
   });
 });
+
+// 193rd round (live: a GREEN v8 shipped content = the site brand repeated
+// 30-40x before the real CJK body, and one postId = page-name + repeat
+// prefix — outside every existing junk predicate: opaqueToken needs a
+// single token, stuffed = punctuation interleaving, markupDump = HTML).
+// New kind: repeatedToken — a short ASCII token back-to-back >=4 times.
+describe('193rd round: repeatedToken junk detection', () => {
+  const VR193 = require('../lib/verify-runner');
+
+  it('flags the live shapes (content repeat-prefix, id repeat-inner)', () => {
+    const data = { posts: [
+      { content: 'Facebook'.repeat(40) + '美女搜尋站 · Shared with Public關曉彤黑色系造型' },
+      { content: 'Facebook'.repeat(30) + 'another post body text' },
+      { postId: 'ETtodayBEAUTY-FacebookFacebookFacebookFacebookFacebook' }
+    ]};
+    const schema = { type: 'object', properties: { posts: { type: 'array', items: { type: 'object', properties: { content: { type: 'string' }, postId: { type: 'string' } } } } } };
+    const r = VR193.detectJunkValues(data, schema);
+    assert.ok(r, 'census fires');
+    const kinds = r.fields.map((f) => f.field + ':' + f.kind);
+    assert.ok(kinds.indexOf('posts.content:repeatedToken') !== -1, 'content flagged — got ' + kinds.join(','));
+    assert.ok(kinds.indexOf('posts.postId:repeatedToken') !== -1, 'id repeat-prefix flagged');
+    assert.match(r.note, /REPEATED-TOKEN/);
+    assert.match(r.note, /scaffolding/);
+  });
+
+  it('normal prose and short values stay clean', () => {
+    const data = { posts: [
+      { content: '正常文章內容，沒有重複前綴。Some normal prose with varied words.' },
+      { content: 'short' },
+      { content: 'The quick brown fox jumps over the lazy dog repeated words but never contiguously.' }
+    ]};
+    const schema = { type: 'object', properties: { posts: { type: 'array', items: { type: 'object', properties: { content: { type: 'string' } } } } } };
+    const r = VR193.detectJunkValues(data, schema);
+    const rep = r && r.fields.find((f) => f.kind === 'repeatedToken');
+    assert.ok(!rep, 'no false positive on prose — got ' + JSON.stringify(rep));
+  });
+});
