@@ -363,6 +363,7 @@ Signature: \$extractWithHover(containerSel, fieldMap, opts) → Promise<Array<Re
     fieldMap 字段规格支持 read:'text'|'attr:<名>'|'labelledby'|'describedby'|'hoverPopover'|'hoverPopoverHtml'
     （hoverPopover=悬停本选择器捕获弹层的剥标签原文——"postTime = 时间戳锚点弹层文本" 一行声明；仅 \$extractWithHover 合法）
     与 match:'<正则>'（你自己的识别谓词，基建只应用不解释；不命中得空串、捕获原文仍在 hovercards[].popoverText）。
+    hovercards[] 每条携带 skeletonSnippet —— 弹层 DOM 的压缩骨架视图（剥噪音标签、留语义属性与文本，4K 上限）：解析弹层结构/提取 key-value 时读它，不要对 htmlSnippet 手工 .slice(0,N)（中途截断会产生 '<div' 这类碎片值）。
     例：postTime 字段 { selector: <时间戳锚点>, read:'hoverPopover', match:'\\d{4}' }。
   - opts.hover: { anchorSel (required), popoverSel?, timeoutMs?, dismiss? }.
   - opts.allowEmpty: same semantics as \$extractList.
