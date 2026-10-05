@@ -70,6 +70,8 @@
       detectOversizedFields: w.detectOversizedFields,
       detectCountShortfall: w.detectCountShortfall,
       detectResultStrayKeys: w.detectResultStrayKeys,
+      detectHardcodedNestedRoles: w.detectHardcodedNestedRoles,
+      detectHoverEntityCoverage: w.detectHoverEntityCoverage,
       detectRelativeTimestamps: w.detectRelativeTimestamps,
       extractDateSubstrings: w.extractDateSubstrings,
       hasYearToken: w.hasYearToken,
@@ -165,6 +167,18 @@
     const lt = (v.match(/</g) || []).length;
     const gt = (v.match(/>/g) || []).length;
     return lt >= 3 && gt >= 3;
+  }
+
+  // 195th round: a SHORT value that is (or starts with) a markup FRAGMENT —
+  // '<div' as a harvested name came from tag-stripping a popover snippet
+  // truncated mid-tag at its 5000-char cap. Not a dump (too short); still
+  // never legitimate data.
+  function isMarkupFragment(v) {
+    if (typeof v !== 'string' || v.length >= 150) return false;
+    const t = v.trim();
+    if (!t.startsWith('<')) return false;
+    // a lone partial tag or a fragment with an unclosed '<'
+    return /^<[a-zA-Z!/]?[a-zA-Z]*$/.test(t) || (t.indexOf('<') !== -1 && t.indexOf('>') === -1);
   }
 
   function capSample(v) {
@@ -322,6 +336,21 @@
             if (typeof x !== 'string') continue;
             dataTotal += 1;
             if (x.indexOf('data:') === 0) { dataJunk += 1; }
+          }
+        } else if (v && typeof v === 'object' && !isRawishName(rk, rawishHints)) {
+          // 195th round (live: hoverInfos[].extras.name shipped '<div' — a
+          // markup fragment from a 5000-char-truncated popover — invisible
+          // because scanRecords never descended into dict-valued fields).
+          // Apply the string predicates to each string value with the
+          // 'field.key' path.
+          for (const dk of Object.keys(v)) {
+            const dv = v[dk];
+            if (typeof dv !== 'string') continue;
+            const dpath = fieldPath + '.' + rk + '.' + dk;
+            if (isMarkupDump(dv)) fields.push({ field: dpath, kind: 'markupDump', count: 1, total: recs.length, sample: capSample(dv) });
+            else if (isMarkupFragment(dv)) fields.push({ field: dpath, kind: 'markupFragment', count: 1, total: recs.length, sample: capSample(dv) });
+            else if (isQueryBlob(dv)) fields.push({ field: dpath, kind: 'queryBlob', count: 1, total: recs.length, sample: capSample(dv) });
+            else if (repeatedTokenRun(dv)) fields.push({ field: dpath, kind: 'repeatedToken', count: 1, total: recs.length, sample: capSample(dv) });
           }
         }
       }
@@ -675,7 +704,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, shellHovercards: null, capturedValueUnbound: null, inventedIdFallbacks: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null, resultStrayKeys: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, shellHovercards: null, capturedValueUnbound: null, inventedIdFallbacks: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null, resultStrayKeys: null, hardcodedNestedRoles: null, hoverEntityCoverage: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -1056,6 +1085,21 @@
           // two exits; the fail-soft note lane is whitelisted inside.
           if (typeof WU.detectResultStrayKeys === 'function') {
             detectors.resultStrayKeys = WU.detectResultStrayKeys(finalData, outputSchema) || null;
+          }
+          // 195th round (the result-vs-page audit the user demanded): two
+          // entity-level censuses the shape gates were blind to.
+          if (typeof WU.detectHardcodedNestedRoles === 'function') {
+            // Report-only-to-P2: a role literal on every nested entity while
+            // the sibling discriminator varies is a hardcoded binding — the
+            // 47th-round class inside nested arrays.
+            const hnr195 = WU.detectHardcodedNestedRoles(finalData, outputSchema) || [];
+            if (hnr195.length) detectors.hardcodedNestedRoles = hnr195;
+          }
+          if (typeof WU.detectHoverEntityCoverage === 'function') {
+            // Advisory: zero-variance single-entity hover harvest under a
+            // multi-role contract — the anchor union is narrower than the
+            // entities the cards carry (the poster AND the group).
+            detectors.hoverEntityCoverage = WU.detectHoverEntityCoverage(finalData, outputSchema) || null;
           }
           // 121st round (user: scrolling satisfied N but extraction came up
           // short — selector? filter?): name WHERE the count was lost. The

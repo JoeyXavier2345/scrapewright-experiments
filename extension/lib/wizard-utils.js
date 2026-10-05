@@ -3694,6 +3694,57 @@ function detectEmptyOutputFieldsByRatio(data, outputSchema, options) {
         for (const sk of Object.keys(nr.rec)) { if (!seenSub[sk]) { seenSub[sk] = 1; subKeys.push(sk); } }
       }
       for (const sk of subKeys) {
+        // 195th round (user: the shipped v8 carried hoverInfos[].extras
+        // with followers/members/groupType/pageCategory DECLARED in the
+        // contract and 100% ABSENT in every record — the census stopped at
+        // 'extras' because a plain-object value is not isEmptyValue and the
+        // walk never descended INTO dict-valued sub-fields). Recurse one
+        // level into object-typed sub-fields: 'a.b[].c.d' paths, keys =
+        // declared properties UNION present keys, same ratio semantics.
+        const nestedDeclForSk = nestedItemsProps ? nestedItemsProps[sk] : null;
+        const skIsDictDecl = !!(nestedDeclForSk && nestedDeclForSk.type === 'object' &&
+          nestedDeclForSk.properties && typeof nestedDeclForSk.properties === 'object');
+        const dictRecs = [];
+        let dictHolders = 0;
+        if (skIsDictDecl) {
+          for (const nr of nestedRecs) {
+            const dv = nr.rec[sk];
+            if (!dv || typeof dv !== 'object' || Array.isArray(dv)) continue;
+            dictHolders += 1;
+            dictRecs.push(nr);
+          }
+        }
+        if (dictRecs.length >= minRecords) {
+          const dictProps = Object.keys(nestedDeclForSk.properties);
+          const presentKeys = Object.create(null);
+          for (const dr of dictRecs) for (const dk of Object.keys(dr.rec[sk] || {})) presentKeys[dk] = 1;
+          for (const dk of dictProps.concat(Object.keys(presentKeys))) {
+            let dkEmpty = 0;
+            const dkSamples = [];
+            const dkEmptySamples = [];
+            for (const dr of dictRecs) {
+              const dvv = (dr.rec[sk] || {})[dk];
+              if (dvv === undefined || dvv === null || dvv === '' || (Array.isArray(dvv) && dvv.length === 0)) {
+                dkEmpty += 1;
+                if (dkEmptySamples.length < maxSamples) dkEmptySamples.push({ parentIndex: dr.parentIndex, subIndex: dr.subIndex, hint: '' });
+              } else if (dkSamples.length < maxSamples) {
+                dkSamples.push(typeof dvv === 'string' ? dvv.slice(0, 80) : dvv);
+              }
+            }
+            const dkRatio = dkEmpty / dictRecs.length;
+            if (dkRatio >= threshold) {
+              result.push({
+                field: dk,
+                path: `${key}.${fk}[].${sk}.${dk}`,
+                emptyCount: dkEmpty,
+                totalCount: dictRecs.length,
+                emptyRatio: dkRatio,
+                sampleNonEmpty: dkSamples,
+                emptyRecordSamples: dkEmptySamples
+              });
+            }
+          }
+        }
         let nestedEmpty = 0;
         const nestedSamples = [];
         const nestedEmptySamples = [];
@@ -4205,8 +4256,19 @@ function schemaItemRequiredForPath(outputSchema, path) {
     const name = segs[i].replace(/\[\]$/, '');
     const props = (node && node.properties && typeof node.properties === 'object' && !Array.isArray(node.properties)) ? node.properties : null;
     const prop = props ? props[name] : null;
-    if (!prop || prop.type !== 'array' || !prop.items || typeof prop.items !== 'object' || Array.isArray(prop.items)) return null;
-    node = prop.items;
+    if (!prop) return null;
+    if (prop.type === 'array' && prop.items && typeof prop.items === 'object' && !Array.isArray(prop.items)) {
+      node = prop.items;
+      continue;
+    }
+    // 195th round: 'a.b[].c.d' — the 'c' hop is a dict-valued sub-field.
+    // Descend into its properties WITHOUT changing the requiring node: the
+    // REQUIRED authority stays the enclosing array's items.required.
+    if (prop.type === 'object' && prop.properties && typeof prop.properties === 'object' && !Array.isArray(prop.properties)) {
+      node = prop;
+      continue;
+    }
+    return null;
   }
   const finalName = segs[segs.length - 1].replace(/\[\]$/, '');
   if (!finalName) return null;
@@ -6701,6 +6763,119 @@ function detectStepGraphGhostRefs(steps) {
 // cross-record equality of ONE
 // field (detectDuplicateEntityPairs compares whole records; this is the
 // single-field complement).
+// 195th round (user: every hoverInfo shipped role hardcoded 主发帖人 —
+// including GROUP entities, which are not the poster; the artifact wrote
+// one literal for every entity). A role-ish string field inside nested
+// array items taking the SAME value across ALL sub-records while a sibling
+// discriminator (type) has >=2 distinct values = hardcoded.
+function detectHardcodedNestedRoles(data, outputSchema) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
+  if (!outputSchema || typeof outputSchema !== 'object') return [];
+  const props = outputSchema.properties && typeof outputSchema.properties === 'object'
+    ? outputSchema.properties : {};
+  const out = [];
+  for (const key of Object.keys(props)) {
+    const arr = data[key];
+    if (!Array.isArray(arr) || arr.length < 2) continue;
+    const itemProps = (props[key] && props[key].items && props[key].items.properties) || null;
+    for (const fk of Object.keys(itemProps || {})) {
+      const nestedDecl = itemProps[fk];
+      if (!nestedDecl || nestedDecl.type !== 'array' || !nestedDecl.items || !nestedDecl.items.properties) continue;
+      const subProps = nestedDecl.items.properties;
+      const subRecords = [];
+      for (const rec of arr) {
+        if (!rec || typeof rec !== 'object') continue;
+        const v = rec[fk];
+        if (!Array.isArray(v)) continue;
+        for (const c of v) {
+          if (c && typeof c === 'object' && !Array.isArray(c)) subRecords.push(c);
+        }
+      }
+      if (subRecords.length < 2) continue;
+      for (const sf of Object.keys(subProps)) {
+        const decl = subProps[sf];
+        if (!decl || decl.type !== 'string') continue;
+        // role-ish: the declaration enumerates alternatives or the name says role/type/kind
+        const nameIsRoleish = /role|kind|type|label/i.test(sf);
+        const descEnumerates = typeof decl.description === 'string' && decl.description.split(/[\/、·]|\s(or|或)\s/).filter((x) => typeof x === 'string' && x.trim()).length >= 2;
+        if (!nameIsRoleish && !descEnumerates) continue;
+        const first = subRecords[0][sf];
+        if (typeof first !== 'string' || !first) continue;
+        let allSame = true;
+        for (const c of subRecords.slice(1)) {
+          if (c[sf] !== first) { allSame = false; break; }
+        }
+        if (!allSame) continue;
+        // discriminator diversity: a sibling field with >=2 distinct values
+        let distinctTypes = [];
+        for (const dKey of Object.keys(subProps)) {
+          if (dKey === sf) continue;
+          const vals = new Set(subRecords.map((c) => String(c[dKey] || '')).filter(Boolean));
+          if (vals.size >= 2) { distinctTypes = Array.from(vals); break; }
+        }
+        out.push({
+          field: sf,
+          path: key + '.' + fk + '[].' + sf,
+          totalRecords: subRecords.length,
+          sample: first.slice(0, 60),
+          distinctTypes: distinctTypes,
+          note: 'hardcoded nested value: "' + first.slice(0, 40) + '" on every ' + fk +
+            ' entity while ' + (distinctTypes.length ? 'the sibling discriminator takes ' + distinctTypes.length + ' distinct values (' + distinctTypes.slice(0, 4).join(' / ') + ')' : 'the field name is role-like') +
+            ' — one literal was written for structurally different entities. Derive the role from the entity (e.g. the group container is the group context, the profile link is the poster; a shared-post link is the co-author), not a constant.'
+        });
+      }
+    }
+  }
+  return out;
+}
+
+// 195th round (user: 部分条目缺失了小组或发帖人的 hoverInfos). The shipped v8
+// captured EXACTLY ONE hover entity per record — zero variance — while the
+// contract's own role enumeration names three roles. Cards commonly carry
+// 2+ hovernable entities (poster AND group context; co-authors on shared
+// posts); a zero-variance single-entity harvest under a multi-role contract
+// is an anchor-coverage gap, not entity scarcity.
+function detectHoverEntityCoverage(data, outputSchema) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  if (!outputSchema || typeof outputSchema !== 'object') return null;
+  const props = outputSchema.properties && typeof outputSchema.properties === 'object'
+    ? outputSchema.properties : {};
+  for (const key of Object.keys(props)) {
+    const arr = data[key];
+    if (!Array.isArray(arr) || arr.length < 2) continue;
+    const itemProps = (props[key] && props[key].items && props[key].items.properties) || null;
+    if (!itemProps) continue;
+    for (const fk of Object.keys(itemProps)) {
+      const decl = itemProps[fk];
+      if (!decl || decl.type !== 'array' || !decl.items || !decl.items.properties) continue;
+      // hover/card-ish array name
+      if (!/hover|card/i.test(fk)) continue;
+      const roleDecl = decl.items.properties.role || decl.items.properties.type;
+      const roleDesc = (roleDecl && typeof roleDecl.description === 'string') ? roleDecl.description : '';
+      const roles = roleDesc.split(/[\/、·]|\s(or|或)\s/).map((x) => String(x || '').trim()).filter((x) => x.length >= 2);
+      const lengths = arr.map((rec) => (rec && Array.isArray(rec[fk])) ? rec[fk].length : 0);
+      const nonZero = lengths.filter((n) => n > 0);
+      if (nonZero.length < arr.length) continue;       // partial-missing is the empty census's lane
+      if (new Set(nonZero).size !== 1) continue;        // variance exists — coverage varies, not frozen
+      const n = nonZero[0];
+      if (n !== 1) continue;                            // only the exactly-one-everywhere shape
+      if (roles.length < 2) continue;                   // single-role contract: one entity may be enough
+      return {
+        field: fk,
+        path: key + '.' + fk,
+        perRecord: n,
+        totalRecords: arr.length,
+        contractRoles: roles,
+        note: 'every record captured exactly 1 hover entity while the contract enumerates ' +
+          roles.length + ' roles (' + roles.slice(0, 4).join(' / ') + ') — cards commonly carry 2+ ' +
+          'hovernable entities (the poster AND the group context; co-authors on shared posts): widen the hover anchor union ' +
+          '(profile-name links AND group links AND co-author rows), or renegotiate the contract to the single role you can defend.'
+      };
+    }
+  }
+  return null;
+}
+
 function detectIdenticalFieldValues(data, outputSchema) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
   if (!outputSchema || typeof outputSchema !== 'object') return [];
@@ -6879,7 +7054,7 @@ function syncLastVerifiedFromVerify(state, lv) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { normalizeIdValueForIdentity, idValueShape, inferFieldSemantics, semanticPredicatePasses, countPoolTextPasses, summarizePriorServiceEvidence, extractFailingFieldNames, computeSampleDiversity, detectInventedIdFallbacks, detectShellHovercards, pickPrimaryResultForPanel, detectDuplicateNestedEntries, extractInventedPseudoCandidates, detectInventedPseudoSelectors, recordContentSignature, countUniqueRecords, detectMediaArrayHygiene, unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectResultStrayKeys, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
+var WU_EXPORT_BAG = { normalizeIdValueForIdentity, idValueShape, inferFieldSemantics, semanticPredicatePasses, countPoolTextPasses, summarizePriorServiceEvidence, extractFailingFieldNames, computeSampleDiversity, detectInventedIdFallbacks, detectShellHovercards, pickPrimaryResultForPanel, detectDuplicateNestedEntries, extractInventedPseudoCandidates, detectInventedPseudoSelectors, recordContentSignature, countUniqueRecords, detectMediaArrayHygiene, unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectHardcodedNestedRoles, detectHoverEntityCoverage, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectResultStrayKeys, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;

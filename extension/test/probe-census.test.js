@@ -783,3 +783,75 @@ describe('194th round: gluedCounts + mixed time completeness', () => {
       'an all-partial population keeps the 76th-round exit-ladder semantics (page may render month-day for this era)');
   });
 });
+
+// 195th round (user: "翻来覆去debug，我觉得是你的日志分析不到位，问题没找全。至少
+// 这份 result.json 里，部分条目还缺失了小组或发帖人的 hoverInfos...举一反三，把
+// 问题查全"). The full result-vs-page-DOM audit of the shipped v8 found FOUR
+// structural classes every gate was blind to. These tests pin the exact live
+// shapes BEFORE the fixes land (TDD — they must fail against the current
+// censuses, then pass after).
+describe('195th round: the four blind spots (live shapes from result.json)', () => {
+  const WU195 = require('../lib/wizard-utils');
+  const VR195 = require('../lib/verify-runner');
+
+  // The exact live schema shape (from the confirmed contract in the journal).
+  const SCHEMA195 = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['hoverInfos'], properties: {
+    content: { type: 'string' }, postTime: { type: 'string' },
+    likeCount: { type: 'string' }, commentCount: { type: 'string' }, shareCount: { type: 'string' },
+    mediaUrls: { type: 'array', items: { type: 'string' } },
+    htmlSnippet: { type: 'string' },
+    hoverInfos: { type: 'array', items: { type: 'object', properties: {
+      link: { type: 'string' }, htmlSnippet: { type: 'string' },
+      type: { type: 'string', description: 'group 或 account' },
+      role: { type: 'string', description: '主发帖人/联合发帖人/发帖人所在地等' },
+      extras: { type: 'object', description: '悬浮窗内提取的其他 key-value', properties: {
+        name: { type: 'string' }, followers: { type: 'string' }, members: { type: 'string' },
+        groupType: { type: 'string' }, pageCategory: { type: 'string' }
+      } }
+    } } }
+  } } } } };
+
+  const LIVE195 = { posts: [
+    { content: 'Facebook'.repeat(30) + '正文', postTime: 'August 16, 2026 at 11:16 PM', likeCount: '63', commentCount: '2', shareCount: '',
+      hoverInfos: [{ link: 'https://x.com/prettygirl99999', type: 'account', role: '主发帖人', extras: { name: '<div' } }] },
+    { content: 'Facebook'.repeat(30) + '正文', postTime: 'September 30, 2026 at 10:43 AM', likeCount: '752', commentCount: '114', shareCount: '63',
+      hoverInfos: [{ link: 'https://x.com/ETtodayBEAUTY', type: 'account', role: '主发帖人', extras: { name: 'ETtoday美女雲' } }] },
+    { content: 'Facebook'.repeat(30) + '正文', postTime: 'July 23, 2026 at 1:00 PM', likeCount: '81', commentCount: '2', shareCount: '1',
+      hoverInfos: [{ link: 'https://x.com/ETtodayBEAUTY', type: 'account', role: '主发帖人', extras: { name: 'ETtoday美女雲' } }] },
+    { content: 'Facebook'.repeat(30) + '正文', postTime: 'October 5, 2026 at 7:00 PM', likeCount: '3', commentCount: '', shareCount: '',
+      hoverInfos: [{ link: '/groups/384266325420127/', type: 'group', role: '主发帖人', extras: { name: '美女正妹表特資訊網' } }] },
+    { content: 'Facebook'.repeat(30) + '正文', postTime: 'September 20, 2026 at 10:26 PM', likeCount: '41', commentCount: '2', shareCount: '6',
+      hoverInfos: [{ link: '/groups/1321806310102360/', type: 'group', role: '主发帖人', extras: { name: 'AI美女咒語' } }] },
+    { content: 'Facebook'.repeat(30) + '正文', postTime: 'May 21', likeCount: '437', commentCount: '16', shareCount: '13',
+      hoverInfos: [{ link: 'https://x.com/ETtodayBEAUTY', type: 'account', role: '主发帖人', extras: { name: 'ETtoday美女雲' } }] }
+  ]};
+
+  it('BLIND SPOT 1 — nested-dict empties: extras.followers/members/groupType 100% absent is visible', () => {
+    const r = WU195.detectEmptyOutputFieldsByRatio(LIVE195, SCHEMA195);
+    const paths = (r || []).map((e) => e.path);
+    assert.ok(paths.indexOf('posts.hoverInfos[].extras.followers') !== -1,
+      'the declared-but-absent nested dict keys surface as empty censuses — got ' + JSON.stringify(paths));
+    assert.ok(paths.indexOf('posts.hoverInfos[].extras.members') !== -1);
+  });
+
+  it('BLIND SPOT 2 — junk inside nested dicts: extras.name = "<div" reaches the markup predicate', () => {
+    const r = VR195.detectJunkValues(LIVE195, SCHEMA195);
+    const fields = (r && r.fields) || [];
+    assert.ok(fields.some((f) => /extras\.name/.test(f.field) && (f.kind === 'markupDump' || f.kind === 'markupFragment')),
+      'the markup-fragment name inside the nested dict is flagged — got ' + JSON.stringify(fields.map((f) => f.field + ':' + f.kind)));
+  });
+
+  it('BLIND SPOT 3 — hardcoded nested role: identical across ALL sub-records while type varies', () => {
+    const r = WU195.detectHardcodedNestedRoles ? WU195.detectHardcodedNestedRoles(LIVE195, SCHEMA195) : null;
+    assert.ok(r && r.length, 'a role detector exists and fires');
+    assert.match(r[0].path || String(r[0].field || ''), /hoverInfos/);
+    assert.ok(Array.isArray(r[0].distinctTypes) && r[0].distinctTypes.length >= 2, 'the type-diversity evidence is carried (group AND account share one role)');
+  });
+
+  it('BLIND SPOT 4 — entity coverage: zero-variance single-entity hoverInfos under a multi-role contract', () => {
+    const r = WU195.detectHoverEntityCoverage ? WU195.detectHoverEntityCoverage(LIVE195, SCHEMA195) : null;
+    assert.ok(r, 'an entity-coverage advisory exists');
+    assert.match(String(r.note || ''), /exactly 1 hover entity/);
+    assert.ok(String(r.note || '').indexOf('主发帖人') !== -1 && String(r.note || '').indexOf('联合发帖人') !== -1, 'the contract-enumerated roles are quoted back');
+  });
+});
