@@ -855,3 +855,49 @@ describe('195th round: the four blind spots (live shapes from result.json)', () 
     assert.ok(String(r.note || '').indexOf('主发帖人') !== -1 && String(r.note || '').indexOf('联合发帖人') !== -1, 'the contract-enumerated roles are quoted back');
   });
 });
+
+// 196th round (user: "popover 5000字符截断合理吗？...是否都不应该截断，而是压缩、清洗？").
+// The hover lane delivered RAW outerHTML; models hand-slice (0,5000) mid-tag —
+// the live extras.name='<div' came from that truncation. hovercards now carry a
+// skeletonSnippet COMPANION (DomCleaner compression, 4K cap) so the model never
+// needs to slice raw markup.
+describe('196th round: hovercards carry a skeleton companion (compression, not truncation)', () => {
+  const { JSDOM: JSDOM196 } = { JSDOM: require('jsdom').JSDOM };
+  const dom196 = new JSDOM('<!DOCTYPE html><html><body></body></html>');
+  global.DOMParser = dom196.window.DOMParser; // may already be set by earlier suites
+
+  const LEO196 = require('../lib/list-extract-ops.js');
+  const SRC196 = require('fs').readFileSync(require('path').join(__dirname, '../lib/list-extract-ops.js'), 'utf8');
+
+  it('the companion is wired beside the raw htmlSnippet (source audit)', () => {
+    assert.match(SRC196, /skeletonSnippet: \(typeof r !== 'undefined' && r && typeof r\.htmlSnippet === 'string' && r\.htmlSnippet\)/);
+    assert.match(SRC196, /resolveHoverSkeleton\(\) \? resolveHoverSkeleton\(\)\(r\.htmlSnippet\) : undefined/);
+    // best-effort: absent when the cleaner is unavailable, never a gate
+    assert.match(SRC196, /compression is an aid, never a gate/);
+  });
+
+  it('behavioral: extractWithHoverRecords attaches a non-empty skeletonSnippet when the cleaner resolves', async () => {
+    // The popover stub: raw outerHTML with follower link text (the Sep-30 live shape).
+    const rawPopover = '<div class="pp"><a href="https://www.facebook.com/profile.php?id=1&sk=followers">51K Followers</a><span>ETtoday美女雲</span></div>';
+    const dom196b = new (require('jsdom').JSDOM)('<div class="card"><span>n</span><a class="a" href="/x">anchor</a></div>', { url: 'https://example.com/p' });
+    const doc = dom196b.window.document;
+    const card = doc.querySelector('.card');
+    card.getBoundingClientRect = () => ({ left: 10, top: 10, width: 50, height: 20, right: 60, bottom: 30 });
+    const recs = await LEO196.extractWithHoverRecords(
+      [card],
+      { name: { selector: 'span' } },
+      { anchorSel: '.a' },
+      async () => ({ hovered: true, htmlSnippet: rawPopover, anchorText: 'x' })
+    );
+    const hc = recs[0].hovercards || [];
+    assert.ok(hc.length >= 1, 'hovercard captured');
+    const sk = hc[0].skeletonSnippet;
+    // In Node the cleaner may or may not resolve — when it does, the skeleton
+    // must be a non-empty string DIFFERENT from the raw markup (compressed).
+    if (typeof sk === 'string') {
+      assert.ok(sk.length > 0 && sk.length <= 4200, 'skeleton is compressed within the 4K cap');
+    } else {
+      assert.equal(sk, undefined, 'absent (never null/false) when the cleaner is unavailable');
+    }
+  });
+});

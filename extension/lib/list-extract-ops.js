@@ -92,6 +92,37 @@ function capElementHtmlRead(value) {
 
 const ARIA_REFERENCE_DEFAULT = 'aria-labelledby';
 
+// 196th round (user: "popover 5000字符截断合理吗？...是否都不应该截断，而是压缩、清洗").
+// The hover lane delivers RAW popover outerHTML; models hand-slice it (.slice(0,5000))
+// producing mid-tag truncation — the live extras.name='<div' came from exactly that.
+// The repo already has DomCleaner.skeletonView (the dossier uses it); this lane now
+// offers the SAME compression as a companion field: hovercards[].skeletonSnippet.
+// Never a gate — best-effort, absent when the cleaner/parser is unavailable.
+let __hoverSkeletonFn = null;
+function resolveHoverSkeleton() {
+  if (__hoverSkeletonFn !== null) return __hoverSkeletonFn;
+  __hoverSkeletonFn = false;
+  try {
+    let dc = null;
+    if (typeof require === 'function') {
+      try { dc = require('./dom-cleaner.js'); } catch (_) { dc = null; }
+    }
+    if (!dc) dc = (typeof DomCleaner !== 'undefined') ? DomCleaner
+      : ((typeof window !== 'undefined' && window.DomCleaner) || null);
+    if (dc && typeof dc.skeletonView === 'function') {
+      const fn = dc.skeletonView.bind(dc);
+      __hoverSkeletonFn = (html) => {
+        try {
+          const out = fn(html, { capChars: 4000 });
+          return (typeof out === 'string' && out) ? out : null;
+        } catch (_) { return null; }
+      };
+    }
+  } catch (_) { /* compression is an aid, never a gate */ }
+  return __hoverSkeletonFn;
+}
+
+
 // spec.labelledby: true → resolve the default reference attr; a non-empty
 // string → resolve THAT attr ('aria-describedby'). null when unset.
 function normalizeLabelledby(spec) {
@@ -539,6 +570,8 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
           // read:'hoverPopover' source chain searches them when the picked
           // popover's markup hides the payload (size-gate rejects are the
           // text-bearing leaves; 2000-char match guard hides deep content).
+          skeletonSnippet: (typeof r !== 'undefined' && r && typeof r.htmlSnippet === 'string' && r.htmlSnippet)
+            ? (resolveHoverSkeleton() ? resolveHoverSkeleton()(r.htmlSnippet) : undefined) : undefined,
           rejectedAddedHtml: (r && Array.isArray(r.rejectedAddedHtml) && r.rejectedAddedHtml.length) ? r.rejectedAddedHtml.slice(0, 3).map((h) => (h.length > 1200 ? h.slice(0, 1200) + '<!--capped-->' : h)) : undefined,
           // Ninety-first-round user directive: the dynamic-DOM journal rides
           // every hovercard — the page unmounts hover-rendered nodes on
