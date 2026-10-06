@@ -336,6 +336,8 @@ Chrome 对后台/被遮挡标签有节流，`IntersectionObserver` 懒加载（�
 
 同时在 Options → Settings 开启 **Enhanced Scraping Mode**（滚动卡住时派发真实滚轮事件）。五层反节流栈的工作原理（含逐操作标签激活与窗口聚焦重断言）：[白皮书 §9](docs/technical-whitepaper.md)。
 
+6. **屏幕保活**（默认开启，设置页开关）：研究会话/采集任务期间持有 `chrome.power.requestKeepAwake('display')` —— 熄屏停止合成器帧，懒加载站点永不挂载。超时形失败会查询 `chrome.idle`；锁屏/熄屏状态触发等待恢复重试（≤90 秒）而非直接判定失败。环境性失败不计入字段缺陷账本。
+
 ### 改代码不生效
 
 - 扩展代码 → `chrome://extensions/` 刷新扩展卡片

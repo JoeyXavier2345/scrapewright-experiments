@@ -336,6 +336,8 @@ Chrome throttles work in background/occluded tabs, so `IntersectionObserver` laz
 
 Also enable **Enhanced Scraping Mode** under Options → Settings (dispatches real wheel events when scrolling stalls). How the five-layer anti-throttle stack works (including per-op tab activation and window-focus re-assertion): [Whitepaper §9](docs/technical-whitepaper.en.md).
 
+6. **Screen keep-awake** (default on, options-page toggle): `chrome.power.requestKeepAwake('display')` is held for the research-session / scrape-task lifetime — display-off stops compositor frames and lazy-load sites never mount. Timeout-shaped op failures consult `chrome.idle`; a locked/idle screen triggers a wait-recover retry (≤90s) instead of a verdict. Environmental failures are exempt from the field-defect ledger.
+
 ### Code changes not taking effect
 
 - Extension code → reload at `chrome://extensions/` (refresh icon on the card)
