@@ -27,6 +27,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('enhancedModeToggle')?.addEventListener('change', toggleEnhancedMode);
   loadEnhancedModeState();
 
+  // 197th round (spec §4): screen keep-awake during research/run sessions.
+  // Plain chrome.storage.local toggle (default on) — the background holder
+  // reads the same key before each acquire, so a mid-session flip takes
+  // effect on the next acquire without any relay.
+  const kwaToggle = document.getElementById('screenKeepAwakeToggle');
+  if (kwaToggle) {
+    chrome.storage.local.get({ screenKeepAwakeEnabled: true }, (st) => { kwaToggle.checked = !!st.screenKeepAwakeEnabled; });
+    kwaToggle.addEventListener('change', () => {
+      chrome.storage.local.set({ screenKeepAwakeEnabled: kwaToggle.checked });
+    });
+  }
+
   const settingsOpener = document.getElementById('openSettings');
   if (settingsOpener) {
     settingsOpener.addEventListener('click', () => {

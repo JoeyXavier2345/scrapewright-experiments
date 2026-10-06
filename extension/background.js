@@ -89,8 +89,14 @@ if (typeof TabActivation !== 'undefined' &&
 // GET_SCREEN_STATE. chrome.power.requestKeepAwake('display') is held for
 // the research-session / scrape-task lifetime so lazy-load sites keep their
 // compositor frames — released when the work ends. Settings-gated
-// (screenKeepAwakeEnabled, default on).
-var __screenKeepAwakeHeld = false;
+// (screenKeepAwakeEnabled, default on). REFCOUNTED: holders can overlap (a
+// paused research session keeps its hold while a manual test run or an API
+// job acquires its own) — a boolean would let one release steal the other
+// holder's display lock. The count moves synchronously; only the chrome.power
+// call waits on the settings gate, and a gate resolving after a matching
+// release finds the count back at zero and no-ops.
+var __screenKeepAwakeRefs = 0;
+var __screenKeepAwakeActive = false;
 function __screenKeepAwakeEnabled() {
   return new Promise(function (resolve) {
     try {
@@ -101,15 +107,20 @@ function __screenKeepAwakeEnabled() {
   });
 }
 function acquireScreenKeepAwake() {
+  __screenKeepAwakeRefs += 1;
+  if (__screenKeepAwakeRefs > 1) return; // already held (or gate pending)
   __screenKeepAwakeEnabled().then(function (on) {
-    if (!on || __screenKeepAwakeHeld) return;
-    try { chrome.power.requestKeepAwake('display'); __screenKeepAwakeHeld = true; } catch (e) { /* degrade silently */ }
+    if (!on || __screenKeepAwakeRefs <= 0) return;
+    try { chrome.power.requestKeepAwake('display'); __screenKeepAwakeActive = true; } catch (e) { /* degrade silently */ }
   });
 }
 function releaseScreenKeepAwake() {
-  if (!__screenKeepAwakeHeld) return;
-  try { chrome.power.releaseKeepAwake(); } catch (e) { /* degrade silently */ }
-  __screenKeepAwakeHeld = false;
+  __screenKeepAwakeRefs = Math.max(0, __screenKeepAwakeRefs - 1);
+  if (__screenKeepAwakeRefs > 0) return; // another holder still needs the display
+  if (__screenKeepAwakeActive) {
+    try { chrome.power.releaseKeepAwake(); } catch (e) { /* degrade silently */ }
+  }
+  __screenKeepAwakeActive = false;
 }
 var __screenStateMod = (typeof ScreenState !== 'undefined')
   ? ScreenState : (typeof require !== 'undefined' ? null : null);
@@ -371,7 +382,16 @@ async function handleHostMessage(message) {
     const jobId = job.id;
 
     executionQueue.enqueue(jobId, async () => {
-      await processJob(jobId, message.serviceName, message.input);
+      // 197th round (spec §4): hold the screen keep-awake for the scrape-task
+      // lifetime — a display-off/locked window stops compositor frames and
+      // lazy-load sites never mount content. Acquire is idempotent and
+      // settings-gated inside the holder; release always runs.
+      acquireScreenKeepAwake();
+      try {
+        await processJob(jobId, message.serviceName, message.input);
+      } finally {
+        releaseScreenKeepAwake();
+      }
     }).catch(async err => {
       debugLogger.log('error', 'background', 'Queue execution failed', { jobId, error: err.message });
       await updateJob(jobId, { status: 'failed', error: err.message, completedAt: Date.now() }).catch(() => {});
@@ -1387,6 +1407,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else {
       sendResponse({ state: 'unknown', confidence: 0, source: 'none' });
     }
+    return true;
+  }
+  if (message.type === 'ACQUIRE_SCREEN_KEEP_AWAKE') {
+    // 197th round (spec §4): wizard research sessions hold the screen
+    // keep-awake for the session lifetime through this relay — extension
+    // pages cannot gate it themselves beyond the settings flag the holder
+    // already reads.
+    acquireScreenKeepAwake();
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (message.type === 'RELEASE_SCREEN_KEEP_AWAKE') {
+    releaseScreenKeepAwake();
+    sendResponse({ ok: true });
     return true;
   }
   if (message.type === 'TRUSTED_HOVER_DISMISS') {

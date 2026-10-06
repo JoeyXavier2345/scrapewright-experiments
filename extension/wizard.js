@@ -1665,6 +1665,18 @@ function saveCustomTestInput() {
   showToast('Saved as the default test input.', 'success');
 }
 
+// 197th round (spec §4): screen keep-awake relay helpers. The background
+// holder owns chrome.power and the settings gate; the wizard only asks it to
+// acquire/release for the research-session / test-run lifetime. Both are
+// best-effort — a missing SW or a closed relay degrades to no hold, never a
+// broken session.
+function acquireScreenKeepAwake() {
+  try { chrome.runtime.sendMessage({ type: 'ACQUIRE_SCREEN_KEEP_AWAKE' }); } catch (eK) { /* best-effort */ }
+}
+function releaseScreenKeepAwake() {
+  try { chrome.runtime.sendMessage({ type: 'RELEASE_SCREEN_KEEP_AWAKE' }); } catch (eK) { /* best-effort */ }
+}
+
 async function testScript() {
   wizardState.lastError = null;
   wizardState.lastErrorStepId = null;
@@ -1698,8 +1710,15 @@ async function testScript() {
   appendLog('Starting step execution...');
   let out;
   try {
+    // 197th round (spec §4): a test run is a scrape task — hold the screen
+    // keep-awake for its lifetime (mirrors the background processJob wrap).
+    // Covers the fresh end-to-end verify at session completion AND manual
+    // Test runs; the holder is refcounted, so a paused session's hold is
+    // never stolen by this release.
+    acquireScreenKeepAwake();
     out = await runner({ service: service, input: wizardState.testInput || {}, outputSchema: wizardState.outputSchema });
   } finally {
+    releaseScreenKeepAwake();
     wizardRail.releaseLock(); // manual runs release; the session holds it across turns
   }
 
@@ -3065,6 +3084,9 @@ function handleSessionEvent(ev) {
         wizardAnnotationBridge && wizardAnnotationBridge.cancel();
         wizardIoBridge && wizardIoBridge.cancel();
         wizardObserveBridge && wizardObserveBridge.cancel();
+        // 197th round (spec §4): the session is over — release the screen
+        // keep-awake held at startResearchSession.
+        releaseScreenKeepAwake();
         if (wizardRail) wizardRail.releaseLock();
         appendLog('Session stopped: ' + ev.reason + (ev.detail ? ' — ' + String(ev.detail).slice(0, 300) : ''), ev.reason === 'completed' ? 'success' : 'warn');
         if (wizardPersistence) wizardPersistence.flush();
@@ -3490,6 +3512,11 @@ async function startResearchSession(seedOverride) {
   }
 
   appendLog(resumeNote || 'Starting research session — the AI will open the page, probe it, author the steps, and verify.');
+  // 197th round (spec §4): hold the screen keep-awake for the research-session
+  // lifetime — a locked/display-off screen stops compositor frames, lazy-load
+  // sites never mount, and hover popovers never appear. Released at every
+  // terminal site (the engine 'stopped' event, session crash, completion).
+  acquireScreenKeepAwake();
   wizardSession = ResearchSessionLib.createResearchSession({
     requirement: wizardState.description,
     // 184th review P1: the 182nd getAppliedSteps fix landed on the
@@ -3539,6 +3566,9 @@ async function startResearchSession(seedOverride) {
     showToast('Session crashed: ' + String((e && e.message) || e), 'error');
     setSessionBadge('crashed', 'crashed');
     stopSessionElapsedTimer();
+    // 197th round (spec §4): a crashed run never emits the 'stopped' event —
+    // release the screen keep-awake here or it leaks past the session.
+    releaseScreenKeepAwake();
     setSessionControls('stopped');
     focusWizardTab();
     if (wizardPersistence) { try { await wizardPersistence.flush(); } catch (_) {} }
@@ -3649,6 +3679,10 @@ function blessCurrentVersionIfGreen(fr) {
 //   3. an artifact-less completion keeps the historical bare landing.
 async function presentSessionCompletion() {
   if (wizardPersistence) { try { await wizardPersistence.flush(); } catch (_) {} }
+  // 197th round (spec §4): no release here — the engine 'stopped' event (which
+  // fires before this runs) already released the session hold, and the FRESH
+  // end-to-end verify below re-acquires through testScript's own task wrap;
+  // releasing at the top would strip the display hold from that fresh run.
   // The research may have run for many minutes — the user can be anywhere;
   // bring the wizard tab forward for the results/feedback presentation.
   focusWizardTab();

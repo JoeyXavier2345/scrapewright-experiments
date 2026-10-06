@@ -317,6 +317,13 @@
     let parkedTotal = 0;
     let parkedThisSegment = 0;
     let parkOpenSince = null;
+    // 197th round (spec §5): ops that waited out a locked/idle screen report
+    // environmental.waitedMs on their receipt (the content-script wait-recover
+    // wrapper). That wait is environmental, not research time — same exclusion
+    // semantics as parkedMs/llmWaitMs: netSegmentMs subtracts it, the wallClock
+    // stop detail discloses it, and the TIME BUDGET suffix carries it.
+    let environmentalWaitTotal = 0;
+    let environmentalThisSegment = 0;
     // Seventy-first log F2: time the engine spends WAITING ON THE PROVIDER
     // (llm call round-trips + retry backoffs — rate-limit stalls included)
     // is environmental, not research time. Same exclusion semantics as
@@ -371,8 +378,9 @@
     // Seventy-first log F2: netSegmentMs = raw segment time MINUS llm/provider
     // waits MINUS parked (user) windows — clamped at 0. The math itself lives
     // in the module-level computeEffectiveElapsed (exported for unit tests).
+    // 197th round: environmental (screen-recovery) waits join the subtraction.
     function netSegmentMs() {
-      let seg = computeEffectiveElapsed(now(), segmentStart, llmWaitThisSegment, parkedThisSegment, suspendCreditThisSegment);
+      let seg = computeEffectiveElapsed(now(), segmentStart, llmWaitThisSegment, parkedThisSegment, suspendCreditThisSegment, environmentalThisSegment);
       if (parkOpenSince != null) seg -= (now() - parkOpenSince);
       return Math.max(0, seg);
     }
@@ -411,7 +419,7 @@
         stopped: state.stopped,
         openQuestions: openQuestions(),
         turns: state.spend.turns,
-        spend: Object.assign({}, state.spend, { parkedMs: parkedTotal, llmWaitMs: llmWaitTotal, suspendCreditMs: suspendCreditTotal }),
+        spend: Object.assign({}, state.spend, { parkedMs: parkedTotal, llmWaitMs: llmWaitTotal, suspendCreditMs: suspendCreditTotal, environmentalWaitMs: environmentalWaitTotal }),
         artifactVersions: state.artifactVersions.length,
         ledgerEntries: ledger.serialize().entries.length,
         observations: observationLog.size()
@@ -1469,6 +1477,7 @@
       // composite the 9.5h figure was cut to ~15 chars. Consumers are the
       // elastic section.
       if (parkedTotal > 5000) parts.push('user-parked waits ' + Math.round(parkedTotal / 1000) + 's (bridges held open — excluded from wallClock)');
+      if (environmentalWaitTotal > 5000) parts.push('environmental waits ' + Math.round(environmentalWaitTotal / 1000) + 's (screen locked/idle — ops waited for recovery, excluded from wallClock)');
       if (suspendCreditTotal > 0) parts.push('system suspension credit ' + Math.round(suspendCreditTotal / 1000) + 's (machine sleep during dispatches — excluded from wallClock)');
       if (llmWaitTotal > 0) parts.push('llm/provider waits ' + Math.round(llmWaitTotal / 1000) + 's (excluded from wallClock)');
       if (toolTimings.size > 0) {
@@ -1527,6 +1536,7 @@
             state.elapsedMs += netSegmentMs();
             parkedThisSegment = 0;
             llmWaitThisSegment = 0;
+            environmentalThisSegment = 0;
             state.status = 'paused';
             state.stopped = { reason: 'paused', detail: null };
             emit('paused', {});
@@ -1874,15 +1884,31 @@
           const __t0 = Date.now();
           __currentDispatchTool = turn.tool;
           const __parkedBeforeDispatch = parkedByTool.get(turn.tool) || 0;
+          const __envBeforeDispatch = environmentalWaitTotal;
           let result = await dispatchTool(turn.tool, turn.args);
           __currentDispatchTool = null;
+          // 197th round (spec §5): an op that waited out a locked/idle screen
+          // reports environmental.waitedMs on its receipt. Book it once per
+          // receipt into the total + segment accumulators (netSegmentMs
+          // subtracts it from wallClock; the TIME BUDGET suffix discloses it).
+          try {
+            if (result && result.environmental && typeof result.environmental.waitedMs === 'number' && result.environmental.waitedMs > 0) {
+              environmentalWaitTotal += result.environmental.waitedMs;
+              environmentalThisSegment += result.environmental.waitedMs;
+            }
+          } catch (eEnv) { /* receipt shape is best-effort */ }
           const __dispatchWall = Date.now() - __t0;
           // 179th round: parked (user-wait) time inside this dispatch is NOT
           // tool work — subtract it before the consumer tally and the
           // suspend floor, or a 454s annotation park tops the TIME BUDGET
           // and gets double-booked as machine suspension.
           const __parkedInDispatch = (parkedByTool.get(turn.tool) || 0) - __parkedBeforeDispatch;
-          const __netDispatchWall = Math.max(0, __dispatchWall - __parkedInDispatch);
+          // 197th round: same double-booking trap for screen-recovery waits —
+          // a 90s environmental wait inside the dispatch is excluded from the
+          // wall clock, so it must not survive into the consumer tally or the
+          // suspension floor either.
+          const __envInDispatch = environmentalWaitTotal - __envBeforeDispatch;
+          const __netDispatchWall = Math.max(0, __dispatchWall - __parkedInDispatch - __envInDispatch);
           recordToolTiming(turn.tool, __netDispatchWall,
             isErrorResult(result) && /^SCRIPT_TIMEOUT\b/.test(String(result && result.error)));
           // 148th log: book suspension-shaped dispatch wall out of the clock.
@@ -2281,11 +2307,14 @@
   // Seventy-first log F2: pure wallClock accounting — raw span MINUS llm/
   // provider waits MINUS parked (user) windows, clamped at 0. Exported so the
   // exclusion semantics are unit-testable without driving the engine loop.
-  function computeEffectiveElapsed(nowMs, startMs, llmWaitMs, parkedMs, suspendCreditMs) {
+  function computeEffectiveElapsed(nowMs, startMs, llmWaitMs, parkedMs, suspendCreditMs, environmentalMs) {
     // 148th log: suspendCreditMs — wall time beyond the no-legit-dispatch
     // floor, booked out for machine-sleep gaps inside tool dispatches (the
     // same exclusion class as llmWaitMs).
-    return Math.max(0, nowMs - startMs - Math.max(0, Number(llmWaitMs) || 0) - Math.max(0, Number(parkedMs) || 0) - Math.max(0, Number(suspendCreditMs) || 0));
+    // 197th round: environmentalMs — screen-recovery waits inside op receipts
+    // (locked/idle display), the same exclusion class again. Optional so the
+    // pre-197th five-arg call shape keeps working.
+    return Math.max(0, nowMs - startMs - Math.max(0, Number(llmWaitMs) || 0) - Math.max(0, Number(parkedMs) || 0) - Math.max(0, Number(suspendCreditMs) || 0) - Math.max(0, Number(environmentalMs) || 0));
   }
 
   const api = { createResearchSession, computeEffectiveElapsed: computeEffectiveElapsed, makeInstructionStripper };

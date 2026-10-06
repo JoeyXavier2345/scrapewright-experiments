@@ -148,6 +148,21 @@
         host setting adds process-level anti-throttling flags and is separate
         from trusted input.
       </p>
+
+      <h3>Screen Keep-Awake</h3>
+      <label class="hint">
+        <input type="checkbox" id="screenKeepAwakeToggle" />
+        Keep the screen awake during research/run sessions (lazy-load sites
+        need display-on compositor frames)
+      </label>
+      <p class="hint">
+        Holds <code>chrome.power.requestKeepAwake('display')</code> for the
+        research-session / scrape-task lifetime. When the display is off or the
+        OS session is locked, Chrome stops producing compositor frames:
+        lazy-load content never mounts and hover popovers never appear.
+        Timeout-shaped failures query <code>chrome.idle</code> and wait for the
+        screen to recover (up to 90s) before concluding failure.
+      </p>
     </div>
   </div>
 
