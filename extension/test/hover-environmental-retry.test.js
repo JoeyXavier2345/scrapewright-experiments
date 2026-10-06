@@ -64,3 +64,57 @@ describe('hover environmental retry (spec §2)', () => {
     assert.ok(r.environmental && r.environmental.recovered === false);
   });
 });
+
+// 197th round Task 4 (spec §2): the scroll family and the collectUntil
+// round loop. Scroll receipts carry their stall evidence under
+// family-specific keys (scrolled:false / stalled / throttleNote) — never a
+// reason/error string — so each wrap site passes its own classifier.
+describe('scroll-family environmental retry wiring (source audit)', () => {
+  it('the scrollBy and scrollToBottom dispatch cases route through the wrapper', () => {
+    // the dispatcher cases assign via withEnvironmentalRetry('scrollBy', ...)
+    assert.match(SRC, /withEnvironmentalRetry\('scrollBy'/);
+    assert.match(SRC, /withEnvironmentalRetry\('scrollToBottom'/);
+  });
+  it('collectUntil stalls consult the screen state before concluding exhaustion', () => {
+    assert.match(SRC, /withEnvironmentalRetry\('collectUntil-round'/);
+  });
+});
+
+describe('scroll-family classifier (behavioral)', () => {
+  it('an envelope-shaped stalled scroll consults via the site classifier and retries on recovery', async () => {
+    const states = [{ state: 'locked', confidence: 1, source: 'api' },
+                    { state: 'active', confidence: 1, source: 'api' }];
+    const queryScreenState = async () => states.shift() || states[0];
+    const sleep = async () => {}; // fast tests: no real 5s
+    let calls = 0;
+    // the scrollBy dispatch shape: the wrapper sees the {result,_diagnostics}
+    // envelope — no reason key anywhere, so ONLY the site classifier can
+    // flag it (the default reasonish probe alone would never fire).
+    const op = async () => { calls += 1; return { result: { scrolled: false }, _diagnostics: {} }; };
+    const withEnvironmentalRetry = eval('(function (queryScreenState, sleep) { return (' + sliceFn('withEnvironmentalRetry') + '); })')(queryScreenState, sleep);
+    const r = await withEnvironmentalRetry('scrollBy', op, {
+      isTimeoutClass: (x) => !!(x && x.result && x.result.scrolled === false)
+    });
+    assert.equal(calls, 2, 'the stalled envelope consulted the screen state and retried once');
+    assert.ok(r.environmental && r.environmental.recovered === true);
+  });
+
+  it('a satisfied collectUntil receipt is NOT timeout-class (no consult)', async () => {
+    const queryScreenState = async () => ({ state: 'locked', confidence: 1, source: 'api' });
+    const sleep = async () => {};
+    let consults = 0;
+    const qCounting = async () => { consults += 1; return { state: 'locked', confidence: 1, source: 'api' }; };
+    const op = async () => ({ satisfied: true, collected: 5 });
+    const withEnvironmentalRetry = eval('(function (queryScreenState, sleep) { return (' + sliceFn('withEnvironmentalRetry') + '); })')(qCounting, sleep);
+    // the collectUntil-round wrap-site classifier: unsatisfied and NOT the
+    // outer-deadline exit (a dead execution must not wait).
+    const isTimeoutClass = (r) => !!(r && r.satisfied === false && !r.outerDeadline);
+    const ok = await withEnvironmentalRetry('collectUntil-round', op, { isTimeoutClass });
+    assert.ok(!ok.environmental, 'a satisfied verdict never consults');
+    const deadline = await withEnvironmentalRetry('collectUntil-round',
+      async () => ({ satisfied: false, outerDeadline: 'OUTER_DEADLINE_EXCEEDED: budget ended' }),
+      { isTimeoutClass, maxWaitMs: 1, cycleMs: 1 });
+    assert.ok(!deadline.environmental, 'the outer-deadline exit never waits (dead execution)');
+    assert.equal(consults, 0, 'no screen-state consult on either receipt');
+  });
+});

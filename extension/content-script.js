@@ -1405,6 +1405,10 @@
   // returns the ORIGINAL failure receipt plus environmental honesty.
   // Wait time rides the parked semantics at the engine layer (disclosed in
   // the TIME BUDGET line via environmental.waitedMs on the op receipt).
+  // Task 4 (scroll family): scroll and collect receipts carry their stall
+  // evidence under family-specific keys instead of reason/error, so wrap
+  // sites pass opts.isTimeoutClass(receipt) — the classifier lives with the
+  // receipt shape it judges, and this wrapper stays receipt-agnostic.
   function withEnvironmentalRetry(label, op, opts, queryScreenStateFn, sleepFn) {
     var q = queryScreenStateFn || queryScreenState;
     var sleep = sleepFn || function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
@@ -1414,7 +1418,14 @@
     var cycleMs = (typeof o.cycleMs === 'number' && o.cycleMs > 0) ? o.cycleMs : 5000;
     return op().then(function (first) {
       var reasonish = first && (first.reason || first.error || '');
-      if (!TIMEOUTISH.test(String(reasonish))) return first;
+      var timeoutClass = TIMEOUTISH.test(String(reasonish));
+      if (!timeoutClass && typeof o.isTimeoutClass === 'function') {
+        // 197th round Task 4 (spec §2 scroll family): the site classifier
+        // decides whether THIS receipt is stall-shaped; the screen-state
+        // consult remains the gate on any actual waiting.
+        try { timeoutClass = !!o.isTimeoutClass(first); } catch (eClass) { timeoutClass = false; }
+      }
+      if (!timeoutClass) return first;
       return q().then(function (st) {
         if (st.state !== 'locked' && st.state !== 'idle') return first;
         var waited = 0;
@@ -1439,6 +1450,21 @@
         return poll();
       });
     });
+  }
+
+  // 197th round Task 4 (spec §2): the scroll-family consult trigger. A
+  // scroll that made no progress — or carries an explicit stall flag — is
+  // the family stall signature; whether the page is genuinely done or the
+  // renderer was starved by a dark screen is exactly what the screen-state
+  // consult decides (one cheap relay; the locked/idle verdict gates the
+  // wait, so a healthy bottom costs a single message). scrollBy and
+  // scrollIntoView dispatch through the {result,_diagnostics} envelope —
+  // unwrap before judging; scrollToBottom receipts are bare.
+  function scrollReceiptLooksStalled(receipt) {
+    var r = receipt;
+    if (r && r._diagnostics && r.result && typeof r.result === 'object') r = r.result;
+    if (!r || typeof r !== 'object') return false;
+    return r.scrolled === false || r.stalled === true || !!r.throttleNote;
   }
 
   // Forty-ninth log: the two pieces of evidence that explain a scroll that
@@ -1800,9 +1826,15 @@
         }
         case 'scrollBy': {
           const __t0 = Date.now();
-          const __r = await domScrollBy(data.selector, data.args && data.args[0]);
+          // 197th round (spec §2): a stalled scroll consults the screen
+          // state — a locked/idle screen waits for recovery and retries the
+          // scroll once instead of concluding no progress. The wrapper sees
+          // the envelope, so lift its environmental marker onto the
+          // user-facing result after the unwrap.
+          const __r = await withEnvironmentalRetry('scrollBy', function () { return domScrollBy(data.selector, data.args && data.args[0]); }, { isTimeoutClass: scrollReceiptLooksStalled });
           result = __r.result;
           _diagnostics = __r._diagnostics;
+          if (__r && __r.environmental && result && typeof result === 'object') result.environmental = __r.environmental;
           recordDomActivity('$scrollBy', data.selector, result && result.scrolled ? 1 : 0, Date.now() - __t0);
           break;
         }
@@ -1827,15 +1859,23 @@
         }
         case 'scrollToBottom': {
           const __t0 = Date.now();
-          result = await domScrollToBottom(data.selector);
+          // 197th round (spec §2): same wait-recover as the hover path — a
+          // stalled scroll consults the screen state; the bare receipt is
+          // classified and marked directly (no envelope unwrap).
+          result = await withEnvironmentalRetry('scrollToBottom', function () { return domScrollToBottom(data.selector); }, { isTimeoutClass: scrollReceiptLooksStalled });
           recordDomActivity('$scrollToBottom', data.selector, result && result.scrolled ? 1 : 0, Date.now() - __t0);
           break;
         }
         case 'scrollIntoView': {
           const __t0 = Date.now();
-          const __r = await domScrollIntoView(data.selector);
+          // 197th round (spec §2): family-uniform routing. This receipt
+          // currently only succeeds ({found:true}) or throws — the wrapper
+          // never intercepts rejections — so today this is a pass-through
+          // hook that keeps the whole scroll family on one contract.
+          const __r = await withEnvironmentalRetry('scrollIntoView', function () { return domScrollIntoView(data.selector); }, { isTimeoutClass: scrollReceiptLooksStalled });
           result = __r.result;
           _diagnostics = __r._diagnostics;
+          if (__r && __r.environmental && result && typeof result === 'object') result.environmental = __r.environmental;
           recordDomActivity('$scrollIntoView', data.selector, result && result.found ? 1 : 0, Date.now() - __t0);
           break;
         }
@@ -3590,7 +3630,20 @@
         ? { certified: !!certifiedExhaustion, evidence: out.exhaustion.evidence || '' }
         : null
     };
-    return out;
+    // 197th round (spec §2): before an unsatisfied verdict stands, consult
+    // the screen state — a locked/idle screen starved the renderer, so a
+    // stall conclusion may be environmental rather than a page-supply fact.
+    // Wait-only semantics per the plan: the retry closure resolves this
+    // same out object, so the verdict stands but the receipt gains
+    // environmental.waitedMs when a degraded screen was detected. The
+    // outer-deadline exit is excluded from the consult — the owning
+    // execution is already dead, and waiting would burn time inside a
+    // torn-down script. The typeof guard keeps the sliced-source behavioral
+    // tests (which inject only the round-loop helpers) on the bare verdict.
+    if (typeof withEnvironmentalRetry !== 'function') return out;
+    return withEnvironmentalRetry('collectUntil-round', function () { return Promise.resolve(out); }, {
+      isTimeoutClass: function (r) { return !!(r && r.satisfied === false && !r.outerDeadline); }
+    });
   }
 
   async function domScrollToBottom(sel) {
