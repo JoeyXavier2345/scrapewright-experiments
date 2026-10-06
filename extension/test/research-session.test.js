@@ -2595,3 +2595,58 @@ describe('190th round: continuation death escalates to the mechanical escape', (
       'the mechanical escape reached the model (it never did in the live incident)');
   });
 });
+
+// 197th round (spec §3): environmental failures don't count toward the
+// field-fail ledger; after recovery, 2 real failures escalate FIELD_ASSIST
+// directly with the environmental history in the note.
+describe('197th round: environmental failures exempt from the ledger', () => {
+  const makeEnvVerify = (fields, environmental) => () => ({
+    ok: false,
+    error: { stepId: 'x', message: 'REQUIRED_FIELD_EMPTY: posts.postTime 3/3' + (environmental ? ' (environmental waits present)' : '') },
+    detectors: { partialEmptyFields: fields.map((f) => ({ field: f, path: 'posts.' + f, emptyRatio: 1 })) },
+    environmental: environmental ? { waitsMs: 120000, recovered: true } : undefined
+  });
+
+  it('an environmental-marked verify does NOT increment the ledger', async () => {
+    global.extractFailingFieldNames = require('../lib/wizard-utils').extractFailingFieldNames;
+    try {
+      const events = [];
+      const session = createResearchSession({
+        requirement: 'r',
+        llm: scriptedLlm([
+          reply(envelope('verify.run', {})),
+          reply(envelope('verify.run', {})),
+          reply(finishEnvelope('done'))
+        ], []),
+        tools: { 'verify.run': makeEnvVerify(['postTime'], true) },
+        onEvent: (e) => events.push(e)
+      });
+      await session.run();
+      assert.equal(events.filter((e) => e.type === 'field_assist_request').length, 0,
+        'screen-lock-window failures are not field defects');
+      const led = session.state().session.fieldFailLedger || {};
+      assert.ok(!led.postTime || led.postTime.count === 0, 'ledger not incremented — got ' + JSON.stringify(led.postTime));
+    } finally { delete global.extractFailingFieldNames; }
+  });
+
+  it('post-recovery real failures escalate with the environmental history', async () => {
+    global.extractFailingFieldNames = require('../lib/wizard-utils').extractFailingFieldNames;
+    try {
+      const events = [];
+      let call = 0;
+      const session = createResearchSession({
+        requirement: 'r',
+        llm: scriptedLlm([
+          reply(envelope('verify.run', {})),
+          reply(envelope('verify.run', {})),
+          reply(finishEnvelope('done'))
+        ], []),
+        tools: { 'verify.run': async () => { call += 1; return makeEnvVerify(['postTime'], call === 1)(); } },
+        onEvent: (e) => events.push(e)
+      });
+      await session.run();
+      const assists = events.filter((e) => e.type === 'field_assist_request');
+      assert.equal(assists.length, 1, 'one real post-recovery failure + one exempt = single escalation');
+    } finally { delete global.extractFailingFieldNames; }
+  });
+});

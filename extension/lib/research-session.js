@@ -242,6 +242,11 @@
     const ledger = LedgerLib.createFindingsLedger(cfg.seed && cfg.seed.ledger);
     let lastVerifyFailingFields171 = null;
     let lastVerifyErrorPrefix171 = '';
+    // 197th round (spec §3): true when the last captured verify.run carried
+    // environmental wait markers (screen lock / display-off recovery) — its
+    // field empties are frame starvation, not binding blindness, and the
+    // ledger tick exempts them (recording history instead of counting).
+    let lastVerifyEnvironmental197 = false;
 
     let SEQ = 0;
     let state = {
@@ -1053,6 +1058,25 @@
     function tickFieldFailLedger() {
       try {
         if (lastVerifyFailingFields171 && lastVerifyFailingFields171.length && state.fieldFailLedger) {
+          // 197th round (spec §3): an environmental-marked verify (screen
+          // lock / display-off waits in the run) does not count its field
+          // empties as field defects — the values were starved of compositor
+          // frames, not mis-bound. Record the window on each field so a
+          // later REAL failure on the same field escalates directly with
+          // the history (see the environmental branch inside the loop
+          // below), consume the tick, and never count. This check precedes
+          // the 177th-round gates and the count increment on purpose: an
+          // environmental window must not burn the 2-failure budget.
+          if (lastVerifyEnvironmental197) {
+            for (const fnameEnv197 of lastVerifyFailingFields171) {
+              const entryEnv197 = state.fieldFailLedger[fnameEnv197] || { count: 0, errors: [] };
+              entryEnv197.environmentalHits = (entryEnv197.environmentalHits || 0) + 1;
+              state.fieldFailLedger[fnameEnv197] = entryEnv197;
+            }
+            lastVerifyFailingFields171 = null; // consume: one ledger tick per verify
+            lastVerifyEnvironmental197 = false;
+            return;
+          }
           // 177th round (live: NINE field_assist_request events fired in one
           // millisecond — a single red verify whose CLICK_TARGET_NOT_FOUND
           // dead click emptied EVERY field, and the ledger read the whole-run
@@ -1108,6 +1132,24 @@
                 ' extraction failed twice. Please MARK the element that holds the ' + fname +
                 ' value on the first card"}) NOW. Two failures on the same field means you cannot see where the value lives. The user can point at it in seconds.' });
               emit('field_assist_request', { field: fname, count: entry171.count, errors: entry171.errors });
+            }
+            // 197th round (spec §3 decision 4): post-recovery direct
+            // escalation. A field that already failed inside an
+            // environmental window and now fails on a LIVE screen has
+            // failed under both conditions — the page is genuinely not
+            // offering it, and waiting for a second real failure re-burns a
+            // verify round the evidence already paid for. Escalate NOW,
+            // with the environmental history in the note.
+            if (!entry171.assistRequested && (entry171.environmentalHits || 0) > 0 && !suppressAssist171) {
+              entry171.assistRequested = true;
+              state.fieldFailLedger[fname] = entry171;
+              state.transcript.push({ kind: 'system', text:
+                'FIELD_ASSIST_REQUEST: "' + fname + '" failed ' + entry171.environmentalHits +
+                ' time(s) inside a screen-lock/display-off window (environmental, exempt from the ledger) and has NOW failed on a live screen too (errors: ' + entry171.errors.join('; ') +
+                '). The page is not offering this field under normal conditions — call annotate.request({fields: ["' + fname + '"], why: "the ' + fname +
+                ' extraction still fails after the screen-lock window recovered. Please MARK the element that holds the ' + fname +
+                ' value on the first card"}) NOW. The user can point at it in seconds.' });
+              emit('field_assist_request', { field: fname, count: entry171.count, environmentalHits: entry171.environmentalHits, errors: entry171.errors });
             }
           }
           lastVerifyFailingFields171 = null; // consume: one ledger tick per verify
@@ -2062,6 +2104,10 @@
               if (extractFn171 && result.detectors) {
                 lastVerifyFailingFields171 = extractFn171(result.detectors);
                 lastVerifyErrorPrefix171 = (result.error && result.error.message) ? String(result.error.message).split(':')[0] : '';
+                // 197th round (spec §3): an environmental-marked verify (screen
+                // lock waits present in the run) does not count its field
+                // empties as field defects.
+                lastVerifyEnvironmental197 = !!(result.environmental && result.environmental.waitsMs > 0);
               }
             } catch (eEx171) { /* extractor best-effort */ }
           }
