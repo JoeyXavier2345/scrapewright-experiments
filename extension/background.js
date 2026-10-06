@@ -11,6 +11,7 @@ importScripts(
   'lib/renderer-activation.js',
   'lib/scrape-tab.js',
   'lib/tab-activation.js',
+  'lib/screen-state.js',
   'lib/debug-logger.js'
 );
 
@@ -82,6 +83,44 @@ if (typeof TabActivation !== 'undefined' &&
     typeof TabActivation.initTabActivationListeners === 'function') {
   TabActivation.initTabActivationListeners();
 }
+
+// ===== Screen-state detector + keep-awake (spec §1/§4, 197th round) =====
+// The SW owns the authoritative chrome.idle query; content scripts ask via
+// GET_SCREEN_STATE. chrome.power.requestKeepAwake('display') is held for
+// the research-session / scrape-task lifetime so lazy-load sites keep their
+// compositor frames — released when the work ends. Settings-gated
+// (screenKeepAwakeEnabled, default on).
+var __screenKeepAwakeHeld = false;
+function __screenKeepAwakeEnabled() {
+  return new Promise(function (resolve) {
+    try {
+      chrome.storage.local.get({ screenKeepAwakeEnabled: true }, function (st) {
+        resolve(!!(st && st.screenKeepAwakeEnabled));
+      });
+    } catch (e) { resolve(true); }
+  });
+}
+function acquireScreenKeepAwake() {
+  __screenKeepAwakeEnabled().then(function (on) {
+    if (!on || __screenKeepAwakeHeld) return;
+    try { chrome.power.requestKeepAwake('display'); __screenKeepAwakeHeld = true; } catch (e) { /* degrade silently */ }
+  });
+}
+function releaseScreenKeepAwake() {
+  if (!__screenKeepAwakeHeld) return;
+  try { chrome.power.releaseKeepAwake(); } catch (e) { /* degrade silently */ }
+  __screenKeepAwakeHeld = false;
+}
+var __screenStateMod = (typeof ScreenState !== 'undefined')
+  ? ScreenState : (typeof require !== 'undefined' ? null : null);
+// In the SW the lib loads as a classic script; guard for absence.
+var __screenDetector = null;
+try {
+  if (typeof ScreenState !== 'undefined' && ScreenState.createScreenState) {
+    __screenDetector = ScreenState.createScreenState({ idle: (typeof chrome !== 'undefined' && chrome.idle) ? chrome.idle : null });
+  }
+} catch (e) { __screenDetector = null; }
+try { if (chrome.idle && chrome.idle.setDetectionInterval) chrome.idle.setDetectionInterval(15); } catch (e) { /* API floor */ }
 try {
   chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     if (!message || message.type !== 'GET_DEBUG_JOURNAL') return false;
@@ -1336,6 +1375,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ dispatched: false, reason: 'error: ' + (e && e.message || String(e)) });
       }
     })();
+    return true;
+  }
+  if (message.type === 'GET_SCREEN_STATE') {
+    // 197th round (spec §1 relay): content scripts cannot reach chrome.idle
+    // from every execution world — the SW's detector is authoritative.
+    // Answer shape matches lib/screen-state.js: {state, confidence, source}.
+    if (__screenDetector) {
+      __screenDetector.getScreenState().then(function (r) { sendResponse(r); })
+        .catch(function () { sendResponse({ state: 'unknown', confidence: 0, source: 'none' }); });
+    } else {
+      sendResponse({ state: 'unknown', confidence: 0, source: 'none' });
+    }
     return true;
   }
   if (message.type === 'TRUSTED_HOVER_DISMISS') {

@@ -13,7 +13,8 @@
     "windows",
     "offscreen",
     "debugger",
-    "notifications"
+    "notifications",
+    "idle"
   ],
   "host_permissions": [
     "<all_urls>"
