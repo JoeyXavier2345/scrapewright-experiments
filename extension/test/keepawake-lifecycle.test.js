@@ -24,4 +24,19 @@ describe('keep-awake lifecycle (source audit)', () => {
   it('TIME BUDGET discloses environmental waits', () => {
     assert.match(RS, /environmental waits /);
   });
+
+  // 197th-round review #8: resume-after-pause must be idempotent page-side —
+  // one page holder = one SW ref. The latch flag guards both directions, so
+  // startResearchSession re-runs never stack refs and terminal-site double
+  // releases never floor another holder's count.
+  it('wizard latches its hold: acquire is guarded, release only fires when held (review #8)', () => {
+    assert.match(WIZ, /__wizardHoldsKeepAwake/);
+    assert.match(WIZ, /if \(__wizardHoldsKeepAwake\) return;/);
+    assert.match(WIZ, /if \(!__wizardHoldsKeepAwake\) return;/);
+  });
+  // 197th-round review #10: closing the wizard tab while a session runs must
+  // release the page-side ref — pagehide fires for tab close AND navigation.
+  it('wizard releases the hold on pagehide (review #10)', () => {
+    assert.match(WIZ, /window\.addEventListener\('pagehide', function \(\) \{ releaseScreenKeepAwake\(\); \}\)/);
+  });
 });

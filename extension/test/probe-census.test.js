@@ -548,6 +548,12 @@ describe('180th round: detectResultStrayKeys', () => {
     assert.equal(WU180.detectResultStrayKeys({ posts: [], note: 'honest empty' }, schema180), null);
     assert.equal(WU180.detectResultStrayKeys({ posts: [{}] }, schema180), null);
   });
+  it('whitelists the 197th-round environmental marker (infrastructure honesty, not a contract stray)', () => {
+    assert.equal(WU180.detectResultStrayKeys({
+      posts: [{ t: 1 }],
+      environmental: { recovered: true, state: 'locked', waitedMs: 65000 }
+    }, schema180), null);
+  });
   it('no declared properties means no diff (schema-blind stays silent)', () => {
     assert.equal(WU180.detectResultStrayKeys({ posts: [], debug: 1 }, { type: 'object' }), null);
   });

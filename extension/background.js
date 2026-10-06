@@ -106,8 +106,24 @@ function __screenKeepAwakeEnabled() {
     } catch (e) { resolve(true); }
   });
 }
+// Review #7: the refcount must survive MV3 SW suspension — the wizard page
+// outlives the worker, so a suspend between acquire and release used to
+// resurrect the SW with refs=0 while the page still holds the lock (its
+// release then floored an already-zero count and the display lock leaked
+// until browser restart). Mirror every count move into storage.session and
+// re-assert chrome.power at SW init when the persisted count is positive.
+function __persistKeepAwakeRefs() {
+  try {
+    if (chrome.storage && chrome.storage.session && chrome.storage.session.set) {
+      chrome.storage.session.set({ screenKeepAwakeRefs: __screenKeepAwakeRefs }, function () {
+        try { void chrome.runtime.lastError; } catch (eCb) { /* stubbed runtime */ }
+      });
+    }
+  } catch (e) { /* persistence is best-effort */ }
+}
 function acquireScreenKeepAwake() {
   __screenKeepAwakeRefs += 1;
+  __persistKeepAwakeRefs();
   if (__screenKeepAwakeRefs > 1) return; // already held (or gate pending)
   __screenKeepAwakeEnabled().then(function (on) {
     if (!on || __screenKeepAwakeRefs <= 0) return;
@@ -116,19 +132,76 @@ function acquireScreenKeepAwake() {
 }
 function releaseScreenKeepAwake() {
   __screenKeepAwakeRefs = Math.max(0, __screenKeepAwakeRefs - 1);
+  __persistKeepAwakeRefs();
   if (__screenKeepAwakeRefs > 0) return; // another holder still needs the display
   if (__screenKeepAwakeActive) {
     try { chrome.power.releaseKeepAwake(); } catch (e) { /* degrade silently */ }
   }
   __screenKeepAwakeActive = false;
 }
+// Review #7 SW-init restore: re-adopt the persisted refcount and re-assert
+// the display hold. Math.max keeps a raced acquire (arrived while the read
+// was in flight) from being clobbered by the stale persisted value.
+try {
+  if (chrome.storage && chrome.storage.session && chrome.storage.session.get) {
+    chrome.storage.session.get({ screenKeepAwakeRefs: 0 }, function (st) {
+      const nRestored = st && typeof st.screenKeepAwakeRefs === 'number' ? st.screenKeepAwakeRefs : 0;
+      if (nRestored > 0) {
+        __screenKeepAwakeRefs = Math.max(__screenKeepAwakeRefs, nRestored);
+        __screenKeepAwakeEnabled().then(function (on) {
+          if (!on || __screenKeepAwakeRefs <= 0) return;
+          try { chrome.power.requestKeepAwake('display'); __screenKeepAwakeActive = true; } catch (e) { /* degrade silently */ }
+        });
+      }
+    });
+  }
+} catch (e) { /* restore is best-effort */ }
 var __screenStateMod = (typeof ScreenState !== 'undefined')
   ? ScreenState : (typeof require !== 'undefined' ? null : null);
 // In the SW the lib loads as a classic script; guard for absence.
 var __screenDetector = null;
+// Review #9 (live synthesis signals): the synthesis channel used to be dead
+// wiring in the SW — createScreenState got NO synthesis closure, so whenever
+// the chrome.idle API was unavailable the relay answered unknown/none and
+// the wait-recover wrapper never waited. Feed it from the ONE receipt stream
+// the SW already produces: TabActivation outcomes (a request that had to
+// re-assert WINDOW focus saw the scrape window lose OS focus — the journal
+// density signal) plus the request dispatch walls (wallOverMedian). The
+// dispatch-failure counter stays unwired (unknown to the synthesizer).
+var __screenActivationOutcomes = []; // last N { focusLost, wallMs }
+var __SCREEN_ACTIVATION_WINDOW = 20;
+function __screenSynthesisSignals() {
+  var outs = __screenActivationOutcomes;
+  if (!outs.length) return null; // no live evidence — keep the unknown verdict
+  var lost = 0;
+  for (var iSig = 0; iSig < outs.length; iSig++) if (outs[iSig].focusLost) lost += 1;
+  var walls = outs.map(function (x) { return x.wallMs; }).sort(function (a, b) { return a - b; });
+  var median = walls[Math.floor(walls.length / 2)] || 0;
+  return {
+    focusedFalseDensity: lost / outs.length,
+    wallOverMedian: median > 0 ? walls[walls.length - 1] / median : 0,
+    densitySamples: outs.length,
+    suspendCreditPresent: false // the 148th credit lives in the engine layer
+  };
+}
+function __recordScreenActivationOutcome(result, wallMs) {
+  try {
+    __screenActivationOutcomes.push({ focusLost: !!(result && result.focusedWindow), wallMs: wallMs || 0 });
+    if (__screenActivationOutcomes.length > __SCREEN_ACTIVATION_WINDOW) __screenActivationOutcomes.shift();
+  } catch (e) { /* advisory signal only */ }
+}
 try {
   if (typeof ScreenState !== 'undefined' && ScreenState.createScreenState) {
-    __screenDetector = ScreenState.createScreenState({ idle: (typeof chrome !== 'undefined' && chrome.idle) ? chrome.idle : null });
+    // Two-step wiring: a bare instance supplies the pure synthesize(), the
+    // live closure feeds it the rolling activation outcomes.
+    var __screenStatePure = ScreenState.createScreenState({});
+    __screenDetector = ScreenState.createScreenState({
+      idle: (typeof chrome !== 'undefined' && chrome.idle) ? chrome.idle : null,
+      synthesis: function () {
+        var sig = __screenSynthesisSignals();
+        return sig ? __screenStatePure.synthesize(sig) : { state: 'unknown', confidence: 0, source: 'none' };
+      }
+    });
   }
 } catch (e) { __screenDetector = null; }
 try { if (chrome.idle && chrome.idle.setDetectionInterval) chrome.idle.setDetectionInterval(15); } catch (e) { /* API floor */ }
@@ -1566,6 +1639,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
     (async () => {
+      const __actT0 = Date.now();
       try {
         // Forty-ninth log: the content script's isolated-world evidence
         // (page reports itself hidden/unfocused) must reach the lib even when
@@ -1578,6 +1652,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           need: message && message.need,
           upgrade: !!(message && message.upgrade)
         });
+        // Review #9: feed the screen-state synthesis window — an outcome
+        // that re-asserted window focus is a focus-loss data point.
+        __recordScreenActivationOutcome(result, Date.now() - __actT0);
         debugLogger.log('info', 'background', 'Tab activation request', {
           tabId, ok: result.ok, activated: result.activated,
           crossWindow: result.crossWindow, focusedWindow: result.focusedWindow,

@@ -1670,10 +1670,25 @@ function saveCustomTestInput() {
 // acquire/release for the research-session / test-run lifetime. Both are
 // best-effort — a missing SW or a closed relay degrades to no hold, never a
 // broken session.
+// Review #8 (pause→resume refcount leak): the page-side hold is latched.
+// startResearchSession runs again on every resume, and each run used to send
+// a fresh ACQUIRE while the terminal sites release exactly once — one page
+// holding N refs for one logical hold. The flag makes acquire/release
+// idempotent page-side: ONE page holder = ONE SW ref, no matter how many
+// resumes or terminal paths fire. Test-run wrapping rides the same latch —
+// a session in flight already holds the display for this page.
+// Review #10 (wizard-close leak): pagehide releases the latch — closing the
+// wizard tab while a session runs must not strand the SW ref.
+let __wizardHoldsKeepAwake = false;
+window.addEventListener('pagehide', function () { releaseScreenKeepAwake(); });
 function acquireScreenKeepAwake() {
+  if (__wizardHoldsKeepAwake) return; // already latched by this page
+  __wizardHoldsKeepAwake = true;
   try { chrome.runtime.sendMessage({ type: 'ACQUIRE_SCREEN_KEEP_AWAKE' }); } catch (eK) { /* best-effort */ }
 }
 function releaseScreenKeepAwake() {
+  if (!__wizardHoldsKeepAwake) return; // nothing latched — never floor another holder's ref
+  __wizardHoldsKeepAwake = false;
   try { chrome.runtime.sendMessage({ type: 'RELEASE_SCREEN_KEEP_AWAKE' }); } catch (eK) { /* best-effort */ }
 }
 

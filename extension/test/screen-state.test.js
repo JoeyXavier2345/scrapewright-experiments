@@ -64,4 +64,35 @@ describe('screen-state: synthesis channel (journal-calibrated)', () => {
       wallOverMedian: 2.5, suspendCreditPresent: false });
     assert.equal(r.state, 'unknown');
   });
+
+  // 197th-round review #9 (SW live wiring): the service worker feeds the
+  // synthesis from its TabActivation receipt window — density + wall only,
+  // the dispatch-failure counter is NOT wired there. The calibrated 4-point
+  // bar is unreachable in that mode (density caps at 2, wall adds 1), so the
+  // locked bar lowers to 3 with confidence capped at 0.75; pure density
+  // without wall corroboration stays unknown (conservative).
+  it('density + wall (failures unwired) classifies the lock shape at capped confidence', () => {
+    const ss = createScreenState({ idle: null });
+    const r = ss.synthesize({ focusedFalseDensity: 0.9, wallOverMedian: 6,
+      suspendCreditPresent: false });
+    assert.equal(r.state, 'locked');
+    assert.equal(r.confidence, 0.75, 'lowered-bar mode caps confidence below the calibrated 0.8');
+    const r2 = createScreenState({ idle: null }).synthesize(lockWindow);
+    assert.ok(r2.confidence > r.confidence, 'the fully-calibrated mode keeps the higher-confidence bar');
+  });
+  it('density alone (no wall corroboration, failures unwired) stays unknown', () => {
+    const ss = createScreenState({ idle: null });
+    const r = ss.synthesize({ focusedFalseDensity: 0.9, wallOverMedian: 1.2,
+      suspendCreditPresent: false });
+    assert.equal(r.state, 'unknown');
+  });
+  it('the fully-wired mode keeps the 4-point bar (no lowered-bar leakage)', () => {
+    const ss = createScreenState({ idle: null });
+    // score 3 WITH the failure counter wired: 1 (density 0.6) + 2 (failures) —
+    // must NOT classify locked through the lowered bar.
+    const r = ss.synthesize({ focusedFalseDensity: 0.6, consecutiveDispatchFailures: 4,
+      wallOverMedian: 1, suspendCreditPresent: false });
+    // score = 1 + 2 = 3, failures wired: original bar 4 applies -> unknown
+    assert.equal(r.state, 'unknown');
+  });
 });

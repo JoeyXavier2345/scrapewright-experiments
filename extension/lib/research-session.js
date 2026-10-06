@@ -2132,8 +2132,13 @@
                 lastVerifyErrorPrefix171 = (result.error && result.error.message) ? String(result.error.message).split(':')[0] : '';
                 // 197th round (spec §3): an environmental-marked verify (screen
                 // lock waits present in the run) does not count its field
-                // empties as field defects.
-                lastVerifyEnvironmental197 = !!(result.environmental && result.environmental.waitsMs > 0);
+                // empties as field defects. Review #1: accept BOTH spellings —
+                // the report stamp aggregates as waitsMs while the producers
+                // (content-script receipts) write waitedMs.
+                lastVerifyEnvironmental197 = !!(result.environmental && (
+                  (result.environmental.waitsMs || 0) > 0 ||
+                  (result.environmental.waitedMs || 0) > 0
+                ));
               }
             } catch (eEx171) { /* extractor best-effort */ }
           }

@@ -1079,6 +1079,30 @@
           out.report = Object.assign({ executedArtifactVersion: vNum183 }, out.report);
         }
       } catch (e183) { /* version stamp is best-effort; the engine stamps in place too */ }
+      // 197th-round review #1 (the seventh envelope dead layer): the engine
+      // gate reads report.environmental.waitsMs but NOTHING aggregated the
+      // step-receipt environmental markers into the verify report — the
+      // marker lived and died on raw.testResult.steps[].result, so the
+      // spec §3 exemption never fired. Sum the wait-recover waits over the
+      // run step results here (the same object getLastVerify hands the
+      // wizard sync), accepting the producer spelling (waitedMs).
+      try {
+        const stepsRaw1 = out.raw && out.raw.testResult && Array.isArray(out.raw.testResult.steps)
+          ? out.raw.testResult.steps : [];
+        let waitsMs197 = 0;
+        let recovered197 = false;
+        for (const stRow1 of stepsRaw1) {
+          const env1 = (stRow1 && stRow1.result && typeof stRow1.result === 'object')
+            ? stRow1.result.environmental : null;
+          if (!env1 || typeof env1 !== 'object') continue;
+          if (typeof env1.waitedMs === 'number' && env1.waitedMs > 0) waitsMs197 += env1.waitedMs;
+          if (env1.waitsMs && typeof env1.waitsMs === 'number') waitsMs197 += env1.waitsMs;
+          if (env1.recovered) recovered197 = true;
+        }
+        if (out.report && typeof out.report === 'object' && !Array.isArray(out.report)) {
+          out.report.environmental = { waitsMs: waitsMs197, recovered: recovered197 };
+        }
+      } catch (eEnv1) { /* environmental aggregation is best-effort */ }
       lastVerify = { events: out.events || [], report: out.report, raw: out.raw, at: Date.now() };
       captureRouteEpoch += 1; // route re-proving is legitimate after a verify (page state changed)
       const report = out.report || {};

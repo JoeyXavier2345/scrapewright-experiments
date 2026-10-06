@@ -4305,6 +4305,11 @@ function detectResultStrayKeys(data, outputSchema) {
   if (!props.length) return null; // no declared property set to diff against
   const allowed = new Set(props);
   allowed.add('note'); // 143rd-round fail-soft disclosure lane
+  // 197th-round review residual: the wait-recover wrapper stamps
+  // environmental (screen-recovery honesty) on collectUntil/scroll receipts
+  // top-level; a model returning the receipt raw would otherwise trip the
+  // stray-key gate on infrastructure bookkeeping, not a contract violation.
+  allowed.add('environmental');
   const stray = Object.keys(data).filter((k) => !allowed.has(k));
   if (!stray.length) return null;
   return {

@@ -1409,6 +1409,20 @@
   // evidence under family-specific keys instead of reason/error, so wrap
   // sites pass opts.isTimeoutClass(receipt) — the classifier lives with the
   // receipt shape it judges, and this wrapper stays receipt-agnostic.
+  // Receipt-side page evidence (197th-round review #2/#3): the 46th/49th-log
+  // keys — pageState read from the isolated world, an rAF frame sample, a
+  // throttle note — are the only in-receipt proof that the page itself was
+  // degraded. Envelope unwrap mirrors the site classifier so scrollBy
+  // receipts judge the inner result. No evidence keys means no proof.
+  function receiptShowsDegradedPage(receipt) {
+    var r = receipt;
+    if (r && r._diagnostics && r.result && typeof r.result === 'object') r = r.result;
+    if (!r || typeof r !== 'object') return false;
+    if (r.pageState && (r.pageState.visibilityState === 'hidden' || r.pageState.hasFocus === false)) return true;
+    if (r.frameSample && r.frameSample.rAFTicks === 0) return true;
+    return !!r.throttleNote;
+  }
+
   function withEnvironmentalRetry(label, op, opts, queryScreenStateFn, sleepFn) {
     var q = queryScreenStateFn || queryScreenState;
     var sleep = sleepFn || function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
@@ -1416,6 +1430,12 @@
     var TIMEOUTISH = /timeout|no_hover_signal|deadline|hidden/i;
     var maxWaitMs = (typeof o.maxWaitMs === 'number' && o.maxWaitMs > 0) ? o.maxWaitMs : 90000;
     var cycleMs = (typeof o.cycleMs === 'number' && o.cycleMs > 0) ? o.cycleMs : 5000;
+    var hasDeadline = (typeof o.deadlineAt === 'number' && Number.isFinite(o.deadlineAt));
+    // Review #4: the recovery wait must never outlive the execution it is
+    // trying to save — clamp the wait budget to the owning script wall
+    // deadline when the DOM_REQUEST carries one.
+    var budgetLeft = hasDeadline ? Math.max(0, o.deadlineAt - Date.now()) : maxWaitMs;
+    if (budgetLeft > maxWaitMs) budgetLeft = maxWaitMs;
     return op().then(function (first) {
       var reasonish = first && (first.reason || first.error || '');
       var timeoutClass = TIMEOUTISH.test(String(reasonish));
@@ -1427,10 +1447,22 @@
       }
       if (!timeoutClass) return first;
       return q().then(function (st) {
-        if (st.state !== 'locked' && st.state !== 'idle') return first;
+        // Review #2: locked always waits. idle alone is NOT degradation —
+        // chrome.idle reports idle when the USER simply stopped typing (a
+        // reader, or an unattended keep-awake machine), so the receipt
+        // itself must corroborate a degraded page (hidden/unfocused
+        // pageState, zero rAF ticks, or a throttle note). No page evidence
+        // on the receipt means no wait — conservative on the ambiguous case.
+        if (st.state !== 'locked' && !(st.state === 'idle' && receiptShowsDegradedPage(first))) return first;
         var waited = 0;
         var poll = function () {
-          if (waited >= maxWaitMs) {
+          // Review #6: stop polling the moment the owning execution is dead
+          // — the retry could not run inside a torn-down script anyway.
+          if (hasDeadline && Date.now() >= o.deadlineAt) {
+            first.environmental = { recovered: false, state: st.state, waitedMs: waited, deadlineStopped: true };
+            return first;
+          }
+          if (waited >= budgetLeft) {
             first.environmental = { recovered: false, state: st.state, waitedMs: waited };
             return first;
           }
@@ -1439,7 +1471,16 @@
             return q().then(function (st2) {
               if (st2.state === 'active') {
                 return op().then(function (second) {
-                  second.environmental = { recovered: true, state: st.state, waitedMs: waited };
+                  // Review #4: recovered means the RETRY escaped the failure
+                  // class. A retry whose reason still matches the timeout
+                  // family is an honest failure, not a recovery — stamp
+                  // recovered:false and keep the retry reason on the receipt.
+                  var secondReason = second && (second.reason || second.error || '');
+                  var secondStillBad = TIMEOUTISH.test(String(secondReason));
+                  if (second && typeof second === 'object') {
+                    second.environmental = { recovered: !secondStillBad, state: st.state, waitedMs: waited };
+                    if (secondStillBad && secondReason) second.environmental.retryReason = String(secondReason).slice(0, 120);
+                  }
                   return second;
                 });
               }
@@ -1452,19 +1493,18 @@
     });
   }
 
-  // 197th round Task 4 (spec §2): the scroll-family consult trigger. A
-  // scroll that made no progress — or carries an explicit stall flag — is
-  // the family stall signature; whether the page is genuinely done or the
-  // renderer was starved by a dark screen is exactly what the screen-state
-  // consult decides (one cheap relay; the locked/idle verdict gates the
-  // wait, so a healthy bottom costs a single message). scrollBy and
-  // scrollIntoView dispatch through the {result,_diagnostics} envelope —
-  // unwrap before judging; scrollToBottom receipts are bare.
+  // 197th round Task 4 (spec §2): the scroll-family consult trigger. Review
+  // #3: stalled:true is the HEALTHY termination of an incremental scroll
+  // (the growth probe ended at the bottom) and scrolled:false alone is
+  // ordinary bottom arrival — neither proves a starved renderer, and the
+  // old classifier consulted the screen state on EVERY completed scroll.
+  // Stall-class requires frame-starvation evidence on the receipt: a
+  // hidden/unfocused pageState (isolated-world truth), zero rAF ticks, or
+  // an explicit throttle note. scrollBy and scrollIntoView dispatch
+  // through the {result,_diagnostics} envelope — unwrap before judging;
+  // scrollToBottom receipts are bare.
   function scrollReceiptLooksStalled(receipt) {
-    var r = receipt;
-    if (r && r._diagnostics && r.result && typeof r.result === 'object') r = r.result;
-    if (!r || typeof r !== 'object') return false;
-    return r.scrolled === false || r.stalled === true || !!r.throttleNote;
+    return receiptShowsDegradedPage(receipt);
   }
 
   // Forty-ninth log: the two pieces of evidence that explain a scroll that
@@ -1831,7 +1871,7 @@
           // scroll once instead of concluding no progress. The wrapper sees
           // the envelope, so lift its environmental marker onto the
           // user-facing result after the unwrap.
-          const __r = await withEnvironmentalRetry('scrollBy', function () { return domScrollBy(data.selector, data.args && data.args[0]); }, { isTimeoutClass: scrollReceiptLooksStalled });
+          const __r = await withEnvironmentalRetry('scrollBy', function () { return domScrollBy(data.selector, data.args && data.args[0]); }, { isTimeoutClass: scrollReceiptLooksStalled, deadlineAt: data.deadlineAt });
           result = __r.result;
           _diagnostics = __r._diagnostics;
           if (__r && __r.environmental && result && typeof result === 'object') result.environmental = __r.environmental;
@@ -1862,7 +1902,7 @@
           // 197th round (spec §2): same wait-recover as the hover path — a
           // stalled scroll consults the screen state; the bare receipt is
           // classified and marked directly (no envelope unwrap).
-          result = await withEnvironmentalRetry('scrollToBottom', function () { return domScrollToBottom(data.selector); }, { isTimeoutClass: scrollReceiptLooksStalled });
+          result = await withEnvironmentalRetry('scrollToBottom', function () { return domScrollToBottom(data.selector); }, { isTimeoutClass: scrollReceiptLooksStalled, deadlineAt: data.deadlineAt });
           recordDomActivity('$scrollToBottom', data.selector, result && result.scrolled ? 1 : 0, Date.now() - __t0);
           break;
         }
@@ -1872,7 +1912,7 @@
           // currently only succeeds ({found:true}) or throws — the wrapper
           // never intercepts rejections — so today this is a pass-through
           // hook that keeps the whole scroll family on one contract.
-          const __r = await withEnvironmentalRetry('scrollIntoView', function () { return domScrollIntoView(data.selector); }, { isTimeoutClass: scrollReceiptLooksStalled });
+          const __r = await withEnvironmentalRetry('scrollIntoView', function () { return domScrollIntoView(data.selector); }, { isTimeoutClass: scrollReceiptLooksStalled, deadlineAt: data.deadlineAt });
           result = __r.result;
           _diagnostics = __r._diagnostics;
           if (__r && __r.environmental && result && typeof result === 'object') result.environmental = __r.environmental;
@@ -1884,7 +1924,7 @@
           // 197th round (spec §2): timeout-shaped hover failures consult the
           // screen state; a locked/idle screen waits for recovery and retries
           // once instead of concluding no popover exists.
-          result = await withEnvironmentalRetry('hover', function () { return domHover(data.selector, data.args && data.args[0], data.args && data.args[1], data.deadlineAt); });
+          result = await withEnvironmentalRetry('hover', function () { return domHover(data.selector, data.args && data.args[0], data.args && data.args[1], data.deadlineAt); }, { deadlineAt: data.deadlineAt });
           recordDomActivity('$hover', data.selector, result && result.hovered ? 1 : 0, Date.now() - __t0);
           break;
         }
@@ -3633,16 +3673,36 @@
     // 197th round (spec §2): before an unsatisfied verdict stands, consult
     // the screen state — a locked/idle screen starved the renderer, so a
     // stall conclusion may be environmental rather than a page-supply fact.
-    // Wait-only semantics per the plan: the retry closure resolves this
-    // same out object, so the verdict stands but the receipt gains
-    // environmental.waitedMs when a degraded screen was detected. The
-    // outer-deadline exit is excluded from the consult — the owning
-    // execution is already dead, and waiting would burn time inside a
-    // torn-down script. The typeof guard keeps the sliced-source behavioral
-    // tests (which inject only the round-loop helpers) on the bare verdict.
+    // Review #5: a verdict concluded on a degraded screen is STALE — the
+    // round loop ran starved, so its stall evidence proves nothing about
+    // the page supply. Demote the exhaustion certification whether the
+    // screen recovered or not (a starved-screen verdict must never
+    // certify) and mark the receipt; the re-run re-certifies on a live
+    // screen. The outer-deadline exit is excluded from the consult — the
+    // owning execution is already dead, and waiting would burn time inside
+    // a torn-down script. The typeof guard keeps the sliced-source
+    // behavioral tests (which inject only the round-loop helpers) on the
+    // bare verdict.
     if (typeof withEnvironmentalRetry !== 'function') return out;
     return withEnvironmentalRetry('collectUntil-round', function () { return Promise.resolve(out); }, {
-      isTimeoutClass: function (r) { return !!(r && r.satisfied === false && !r.outerDeadline); }
+      isTimeoutClass: function (r) { return !!(r && r.satisfied === false && !r.outerDeadline); },
+      deadlineAt: (typeof deadlineAt === 'number' && Number.isFinite(deadlineAt)) ? deadlineAt : undefined
+    }).then(function (res) {
+      var env = res && res.environmental;
+      if (!env) return res;
+      if (out.exhaustion && out.exhaustion.certified) {
+        out.exhaustion = {
+          certified: false,
+          evidence: 'stall concluded during a locked/idle screen; verdict demoted — re-run to certify'
+        };
+      }
+      env.verdictDemoted = true;
+      // Keep the diagnostics channel (the CERT scan source) honest too: it
+      // snapshotted the pre-consult certification above.
+      if (out._diagnostics && out._diagnostics.exhaustion) {
+        out._diagnostics.exhaustion = { certified: false, evidence: (out.exhaustion && out.exhaustion.evidence) || '' };
+      }
+      return res;
     });
   }
 

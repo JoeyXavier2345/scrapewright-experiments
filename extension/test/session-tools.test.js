@@ -127,6 +127,47 @@ describe('createSessionTools', () => {
     assert.ok(t.getLastVerify() && t.getLastVerify().events.length === 1, 'diag source stored');
   });
 
+  // 197th-round review #1: the report-level environmental aggregation. The
+  // engine exemption gate reads report.environmental.waitsMs, but the
+  // producers stamp environmental.waitedMs on raw step results — verifyRun
+  // must bridge the two or the gate stays dead (the seventh envelope class).
+  it('verify.run stamps report.environmental from the run step receipts (waitsMs sum + any recovered)', async () => {
+    const { deps, state } = makeDeps({
+      runVerify: async () => ({
+        report: { ok: true, error: null, events: [], detectors: {} },
+        events: [],
+        raw: {
+          testResult: {
+            steps: [
+              { stepId: 's1', result: { posts: [{ t: 1 }], environmental: { recovered: true, state: 'locked', waitedMs: 65000 } } },
+              { stepId: 's2', result: { done: true, environmental: { recovered: false, state: 'locked', waitedMs: 15000 } } },
+              { stepId: 's3', result: { done: true } } // no marker — skipped cleanly
+            ]
+          },
+          error: null, breaker: null
+        }
+      })
+    });
+    const t = createSessionTools(deps);
+    state.draft = { targetUrl: 'https://example.com', steps: GOOD_STEPS };
+    await t.tools['verify.run']({});
+    const lv = t.getLastVerify();
+    assert.ok(lv && lv.report && lv.report.environmental, 'report carries the aggregated environmental stamp');
+    assert.equal(lv.report.environmental.waitsMs, 80000, 'sums waitedMs over the run step results');
+    assert.equal(lv.report.environmental.recovered, true, 'any recovered step marks the window recovered');
+  });
+
+  it('verify.run stamps a zero environmental window when no step receipt carries one', async () => {
+    const { deps, state } = makeDeps();
+    const t = createSessionTools(deps);
+    state.draft = { targetUrl: 'https://example.com', steps: GOOD_STEPS };
+    await t.tools['verify.run']({});
+    const lv = t.getLastVerify();
+    assert.ok(lv.report.environmental, 'shape is stable');
+    assert.equal(lv.report.environmental.waitsMs, 0);
+    assert.equal(lv.report.environmental.recovered, false);
+  });
+
   it('diag.read before verify → error; after verify → digests with counters', async () => {
     const { deps, state } = makeDeps();
     const t = createSessionTools(deps);
