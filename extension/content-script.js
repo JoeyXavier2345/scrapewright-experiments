@@ -1385,6 +1385,62 @@
     return await fn(); // RC56 sticky: activation persists, no release message
   }
 
+  // ===== Environmental failure self-healing (spec §2, 197th round) =====
+  // Query the SW screen-state detector. Content scripts cannot see
+  // chrome.idle directly in all contexts; the relay is authoritative.
+  function queryScreenState() {
+    return new Promise(function (resolve) {
+      try {
+        chrome.runtime.sendMessage({ type: 'GET_SCREEN_STATE' }, function (resp) {
+          if (chrome.runtime.lastError) { resolve({ state: 'unknown', confidence: 0, source: 'none' }); return; }
+          resolve(resp || { state: 'unknown', confidence: 0, source: 'none' });
+        });
+      } catch (e) { resolve({ state: 'unknown', confidence: 0, source: 'none' }); }
+    });
+  }
+
+  // Timeout-shaped failure + locked/idle screen -> wait for recovery and
+  // retry ONCE (spec §2). Transparent to the DSL caller: success surfaces
+  // normally (plus an environmental diagnostic); a never-recovering screen
+  // returns the ORIGINAL failure receipt plus environmental honesty.
+  // Wait time rides the parked semantics at the engine layer (disclosed in
+  // the TIME BUDGET line via environmental.waitedMs on the op receipt).
+  function withEnvironmentalRetry(label, op, opts, queryScreenStateFn, sleepFn) {
+    var q = queryScreenStateFn || queryScreenState;
+    var sleep = sleepFn || function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+    var o = opts || {};
+    var TIMEOUTISH = /timeout|no_hover_signal|deadline|hidden/i;
+    var maxWaitMs = (typeof o.maxWaitMs === 'number' && o.maxWaitMs > 0) ? o.maxWaitMs : 90000;
+    var cycleMs = (typeof o.cycleMs === 'number' && o.cycleMs > 0) ? o.cycleMs : 5000;
+    return op().then(function (first) {
+      var reasonish = first && (first.reason || first.error || '');
+      if (!TIMEOUTISH.test(String(reasonish))) return first;
+      return q().then(function (st) {
+        if (st.state !== 'locked' && st.state !== 'idle') return first;
+        var waited = 0;
+        var poll = function () {
+          if (waited >= maxWaitMs) {
+            first.environmental = { recovered: false, state: st.state, waitedMs: waited };
+            return first;
+          }
+          return sleep(cycleMs).then(function () {
+            waited += cycleMs;
+            return q().then(function (st2) {
+              if (st2.state === 'active') {
+                return op().then(function (second) {
+                  second.environmental = { recovered: true, state: st.state, waitedMs: waited };
+                  return second;
+                });
+              }
+              return poll();
+            });
+          });
+        };
+        return poll();
+      });
+    });
+  }
+
   // Forty-ninth log: the two pieces of evidence that explain a scroll that
   // moves nothing and loads nothing. Both read REAL values from the isolated
   // world — the visibility-keepalive MAIN-world override cannot touch them.
@@ -1785,7 +1841,10 @@
         }
         case 'hover': {
           const __t0 = Date.now();
-          result = await domHover(data.selector, data.args && data.args[0], data.args && data.args[1], data.deadlineAt);
+          // 197th round (spec §2): timeout-shaped hover failures consult the
+          // screen state; a locked/idle screen waits for recovery and retries
+          // once instead of concluding no popover exists.
+          result = await withEnvironmentalRetry('hover', function () { return domHover(data.selector, data.args && data.args[0], data.args && data.args[1], data.deadlineAt); });
           recordDomActivity('$hover', data.selector, result && result.hovered ? 1 : 0, Date.now() - __t0);
           break;
         }
