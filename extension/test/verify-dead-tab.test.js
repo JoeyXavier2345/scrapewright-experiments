@@ -54,6 +54,7 @@ function makeRunner(opts) {
   const calls = { removeTab: [], logs: [], order: [] };
   const deps = {
     orchestrate: o.orchestrate || greenOrchestrate({ count: o.throwsLeft || 0 }),
+    wizardUtils: o.wizardUtils,
     ensureLock: async () => {},
     getSignal: () => o.signal || null,
     log: (msg, level) => { calls.logs.push(String(msg)); },
@@ -263,5 +264,70 @@ describe('verify dead-tab guard (199th log)', () => {
     const bg = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
     assert.match(bg, /RELAY_FAILED:/, 'RELAY_FAILED producer must remain in background.js');
     assert.match(bg, /CONTENT_SCRIPT_NOT_READY/, 'CONTENT_SCRIPT_NOT_READY producer must remain (handleOpenTabExecute dead sub-tab)');
+  });
+
+  it('199th re-review: attempt-1 frozen-zero streaks must not carry into attempt 2 (the reset clears more than events)', async () => {
+    // Thresholds injected at streak 3 / elapsed 0: attempt 1 emits 2 frozen-zero
+    // events (streak 2, below trip) then RELAY_FAILED; attempt 2 emits 2 more
+    // then goes green. WITHOUT zeroCounterStreaks.clear(), attempt-2's second
+    // event completes a CROSS-ATTEMPT streak of 4 → breaker trips → the mock's
+    // next d.executeScript (the runner dep, which checks signalAborted) throws
+    // TEST_ABORTED and a recovering retry dies.
+    const WU = require('../lib/wizard-utils');
+    let calls = 0;
+    const orchestrate = async (svc, input, d, opts) => {
+      const tab = await d.createTab(svc.targetUrl);
+      await d.waitForTabLoad(tab.id);
+      calls += 1;
+      if (calls === 2) {
+        // deterministic elapsed ≥ MIN_ELAPSED (1ms) — without a sleep the two
+        // attempts can complete inside the same millisecond and the trip
+        // condition never fires, making the test vacuously green.
+        await new Promise((r) => setTimeout(r, 3));
+      }
+      opts.onEvent({ type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: '{"done":false,"uniqueCount":0,"noGrowth":0}' });
+      opts.onEvent({ type: 'STEP_ITERATION', stepId: 's1', iteration: 2, resultPreview: '{"done":false,"uniqueCount":0,"noGrowth":0}' });
+      await d.executeScript(tab.id, 'scrub', {}, 10000); // signalAborted check point (as the real orchestrator runs it)
+      if (calls === 1) throw new Error('RELAY_FAILED: Could not establish connection. Receiving end does not exist.');
+      return {
+        finalResult: { posts: [{ a: 1 }] },
+        steps: [{ stepId: 's1', stepName: 'one', result: { done: true }, snapshot: null }],
+        pages: [], pagesTruncated: false
+      };
+    };
+    const { runner } = makeRunner({
+      pingOkTabs: null, orchestrate,
+      // MIN_ELAPSED_MS must be 1, not 0 — the resolveWU bag builds it with
+      // `w.X || 60000`, and a falsy 0 falls back to the 60s production floor
+      // (the trip then never fires in test time and the test would pass
+      // vacuously — proven by mutation: removing the .clear() kept it green
+      // until this value was 1).
+      wizardUtils: Object.assign({}, WU, { FROZEN_ZERO_STREAK_THRESHOLD: 3, FROZEN_ZERO_MIN_ELAPSED_MS: 1 })
+    });
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.report.ok, true, 'attempt 2 must complete green — a cross-attempt streak must not trip the breaker, got ' + JSON.stringify(out.report.error));
+    assert.equal(out.raw.breaker, null, 'no breaker on a healthy retried run');
+    assert.equal(out.report.eventCount, 2, 'attempt-2 events only');
+  });
+
+  it('199th re-review: REAL StepOrchestrator passes a bare CONTENT_SCRIPT_NOT_READY rejection through unswallowed', async () => {
+    // F7's retry keys on the BARE token surviving the orchestrator's per-step
+    // catch. A future rewrap in step-orchestrator.js would disarm the retry
+    // while every mock-level test stayed green — pin the real propagation.
+    const deps = {
+      createTab: async (url) => ({ id: 31, url }),
+      executeScript: async () => { throw new Error('CONTENT_SCRIPT_NOT_READY'); },
+      waitForTabLoad: async () => {},
+      removeTab: async () => {},
+      captureSnapshot: async () => ({ html: '<html></html>' }),
+      evaluateCondition: async () => true,
+      getDomActivity: async () => [],
+      resetDomActivity: async () => {}
+    };
+    await assert.rejects(
+      StepOrchestrator.execute(SERVICE, {}, deps),
+      (err) => /CONTENT_SCRIPT_NOT_READY/.test(err.message),
+      'the bare sub-tab token must escape execute() intact (TAB_STATE_RETRY_RE keys on it)'
+    );
   });
 });

@@ -2160,7 +2160,7 @@
       // 138th log: operative-only specs — args, return shape, and the call-time
       // rules. Deep teaching lives in the knowledge units and the contract
       // base; a guard test pins the total size.
-      { name: 'page.open', args: '{url?}', returns: '{tabId,url,ready,bodyTextChars?,warning?} — {{param}} placeholders fill from the test input; a URL that still has one is rejected. bodyTextChars censuses rendered text: ready:true only means loaded — a tiny body is an unhydrated shell (page.settle next). A dead fresh tab (error page / dead content script) retries once on a second tab; a double-dead open errors naming the cause (no page left open)' },
+      { name: 'page.open', args: '{url?}', returns: '{tabId,url,ready,bodyTextChars?,warning?,tabRetryNote?} — {{param}} placeholders fill from the test input; a URL that still has one is rejected. bodyTextChars censuses rendered text: ready:true only means loaded — a tiny body is an unhydrated shell (page.settle next). A dead fresh tab (error page / dead content script) retries once on a second tab; a double-dead open errors naming the cause (no page left open). tabRetryNote discloses the retry on the receipt' },
       { name: 'page.state', args: '{}', returns: '{open,tabId,url,title,status}' },
       { name: 'page.settle', args: '{sel?,timeoutMs?}', returns: '{settled,sel,chars,waitedMs,textHead?,note?} — polls until content stops changing (default sel body). Settle before concluding a JS-heavy page is empty' },
       { name: 'probe.count', args: '{sel}', returns: '{count}' },
