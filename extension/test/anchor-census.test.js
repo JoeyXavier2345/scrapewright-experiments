@@ -95,9 +95,9 @@ describe('computeAnchorCensus — behavioral (JSDOM slice)', () => {
 });
 
 describe('domExtractWithHover wiring (source-text audit)', () => {
-  it('computes the census exactly when the call found 0 anchors, over the blind containers', () => {
-    assert.ok(/if \(anchorsFound === 0\) \{[\s\S]{0,400}computeAnchorCensus\(/.test(contentScriptSrc),
-      'census must be computed when anchorsFound === 0');
+  it('computes the census when the call found 0 anchors (blind containers) OR found anchors but captured none (202nd family-miss arm)', () => {
+    assert.ok(/if \(anchorsFound === 0 \|\| \(anchorsFound > 0 && hovercardsCaptured === 0\)\) \{[\s\S]{0,900}computeAnchorCensus\(/.test(contentScriptSrc),
+      'census must be computed when anchorsFound === 0 (blind) and on zero-capture batches (family miss)');
     assert.ok(contentScriptSrc.indexOf('_diagnostics.anchorCensus = computeAnchorCensus(') !== -1,
       'census lands on _diagnostics.anchorCensus');
   });

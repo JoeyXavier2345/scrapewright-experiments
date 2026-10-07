@@ -942,10 +942,16 @@
           ? [...new Set(h.addedNodesHtml.map((html) => stripTagsLocal(html).slice(0, 100)).filter(Boolean))].slice(0, 5)
           : []
       }));
+      // 202nd log: cardAnchors — the anchors whose hover MOUNTED popover
+      // text (captured + non-empty addedTexts). Pure receipt evidence: the
+      // next $extractWithHover anchorSel for hoverCards is written against
+      // THIS family, not against media permalinks where nothing mounts.
+      const cardAnchors = deriveCardAnchors(anchorLog);
       const out = {
         containerSel: containerSel,
         anchorSel: anchorSel,
         anchorLog: anchorLog,
+        cardAnchors: cardAnchors,
         // 机械-语义分离（spec 3.B）：heuristicValue 是日历通用正则的
         // 便捷默认（value 为旧名别名，保留一个版本周期）；识别职责归
         // 研究期 LLM —— candidates[]（原文+来源）才是一等公民。
@@ -1396,7 +1402,26 @@
     return { count, text, attrStats, labelledby, sample, hover, scroll, scrollUntil, extract, timestamp, loginState, snippet, skeleton, census, getLastSelectorDiagnostics: () => lastSelectorDiagnostics, getLastFetchedHtml: () => lastFetchedHtml };
   }
 
-  const api = { createProbeTools };
+  // 202nd log: derive the cardAnchors lane from a timestamp/census
+  // anchorLog — anchors whose hover MOUNTED popover text. Pure function so
+  // both the receipt and tests consume one implementation.
+  function deriveCardAnchors(anchorLog) {
+    if (!Array.isArray(anchorLog)) return [];
+    const out = [];
+    for (const e of anchorLog) {
+      if (!e) continue;
+      // 202nd-log evidence shape: the anchor that MOUNTED card text was
+      // captured:false (nodes added, picker rejected them — the 94th-round
+      // signature). The MOUNT is the evidence; picker capture is a separate
+      // problem. Gate on addedTexts alone.
+      const texts = (Array.isArray(e.addedTexts) ? e.addedTexts : []).filter((t) => typeof t === 'string' && t.trim());
+      if (texts.length === 0) continue;
+      out.push({ anchor: e.anchor, desc: e.desc || null, href: e.href || null, captured: e.captured === true, texts: texts.slice(0, 3) });
+    }
+    return out;
+  }
+
+  const api = { createProbeTools, deriveCardAnchors };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.ProbeTools = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));

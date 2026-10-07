@@ -48,6 +48,7 @@
       detectSiblingCountContrast: w.detectSiblingCountContrast,
       detectSeeMoreUnexpanded: w.detectSeeMoreUnexpanded,
       detectHovercardUnparsed: w.detectHovercardUnparsed,
+      detectHoverFamilyMiss: w.detectHoverFamilyMiss,
       detectImplausibleTimeFields: w.detectImplausibleTimeFields,
       detectPositionLikeIds: w.detectPositionLikeIds,
       detectLabelPrefixedCounts: w.detectLabelPrefixedCounts,
@@ -1001,6 +1002,38 @@
                 'Fix the container selector (check SELECTOR DIAGNOSTICS and the page HTML for the real list structure — prefer descendant selectors over rigid child-combinator chains), and propagate the same fix to every step that references this list.',
                 containersEmpty.stepId);
             }
+          }
+        }
+        if (!error && typeof WU.detectHoverFamilyMiss === 'function') {
+          // 202nd log: anchors FOUND but zero popovers mounted — the wrong
+          // ANCHOR FAMILY (media permalinks hovered; entity cards live on
+          // entity links). The user watched the screen: no author/group
+          // popover ever appeared, matching observedPopoverCount 0 across
+          // hundreds of discover cycles while the census had already
+          // captured card text on the entity anchors.
+          const familyMiss = WU.detectHoverFamilyMiss(events);
+          if (familyMiss) {
+            const stepDefFM = stepsDefs.find((st) => String(st.id) === String(familyMiss.stepId));
+            let censusTextFM = '';
+            const acFM = familyMiss.anchorCensus;
+            if (acFM && acFM.families && typeof acFM.families === 'object') {
+              const famFM = Object.keys(acFM.families).map((k) => k + '×' + acFM.families[k]).join(', ');
+              censusTextFM = ' ANCHOR CENSUS (inside the failing containers on THIS verify tab): ' + famFM + '.';
+              if (Array.isArray(acFM.hrefSamples) && acFM.hrefSamples.length) {
+                censusTextFM += ' href samples: ' + JSON.stringify(acFM.hrefSamples.slice(0, 5)) + '.';
+              }
+              if (Array.isArray(acFM.ariaLabelSamples) && acFM.ariaLabelSamples.length) {
+                censusTextFM += ' aria-label samples: ' + JSON.stringify(acFM.ariaLabelSamples.slice(0, 5)) + '.';
+              }
+            }
+            error = toError(
+              'HOVER_ANCHORS_FAMILY_MISS: step "' + (stepDefFM ? stepDefFM.name : familyMiss.stepId) + '" hovered ' +
+              familyMiss.anchorsFound + ' anchor(s) and ' + familyMiss.hovercardsCaptured + ' popover(s) mounted (' +
+              familyMiss.calls + ' call(s), ' + familyMiss.containersProcessed + ' container(s)) — the anchorSel FOUND anchors but no popover mounts on THAT family. ' +
+              'Entity cards (author/group profile cards) mount on the ENTITY links — the anchors whose hrefs point at the entity pages (page/profile/group URLs, see the href samples below) — while timestamp tooltips mount on the permalink/media anchors. ' +
+              'Union both families in anchorSel, or split the call: one $extractWithHover with entity anchors for hoverCards + $timestamp/probe.timestamp for postTime.' + censusTextFM +
+              ' Ground the entity anchors against the samples above (container-scoped tag+[attr] form). If you already dry-ran probe.census {hover:true}, its timeHover.cardAnchors lists the anchors whose hover MOUNTED card text — anchor on that family.',
+              familyMiss.stepId);
           }
         }
         if (!error && typeof WU.detectHoverAnchorsBlind === 'function') {

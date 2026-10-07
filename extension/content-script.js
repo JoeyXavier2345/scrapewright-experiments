@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '200b-enum-alias';
+  const SW_BUILD_TAG = '202-family-miss';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -5597,9 +5597,14 @@
     // verify-side HOVER_ANCHORS_BLIND error embeds it, so the next
     // anchorSel is authored against THIS population's observed elements
     // instead of research-tab guesses misread from un-scrolled shells.
-    if (anchorsFound === 0) {
+    if (anchorsFound === 0 || (anchorsFound > 0 && hovercardsCaptured === 0)) {
+      // 202nd log: the family-miss arm — anchors were FOUND but zero
+      // popovers mounted (wrong anchor FAMILY for the popover type; the
+      // verify-side HOVER_ANCHORS_FAMILY_MISS error needs this census over
+      // the processed containers as the contrast evidence).
       var _blindContainers = [];
       for (var ai = 0; ai < processed.length; ai++) {
+        if (anchorsFound > 0) { _blindContainers.push(processed[ai]); continue; }
         var _am = null;
         try { _am = processed[ai].querySelectorAll(hoverConfig.anchorSel); } catch (_) {}
         if (!_am || _am.length === 0) _blindContainers.push(processed[ai]);
