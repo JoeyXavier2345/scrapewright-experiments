@@ -2435,6 +2435,9 @@ function applySessionArtifact(a) {
   if (a.outputSchema && typeof a.outputSchema === 'object') wizardState.outputSchema = a.outputSchema;
   if (a.testInput && typeof a.testInput === 'object') wizardState.testInput = a.testInput;
   if (typeof a.name === 'string' && a.name.trim()) wizardState.serviceName = a.name.trim();
+  // 201st-round follow-up: LLM-registered page vocabulary rides the artifact
+  // (harvested from research evidence; censuses consult it with priority).
+  if (a.pageVocab && typeof a.pageVocab === 'object') wizardState.pageVocab = a.pageVocab;
   renderStepList();
 }
 
@@ -3530,6 +3533,24 @@ async function startResearchSession(seedOverride) {
             seed.ledger.entries.push({ id: 'prior-service-evidence', title: 'Prior session measurements', body: priorNote, confidence: 'high', provenance: 'prior-service' });
           }
         } catch (ePS) { /* prior-evidence seed is best-effort */ }
+        // 201st-round follow-up: the prior service's REGISTERED page
+        // vocabulary (affordance wording harvested at research time)
+        // carries to the next same-site session — re-attach it to the
+        // artifact so the censuses keep their page-truth priority and the
+        // model does not re-discover the tokens.
+        try {
+          if (svc.pageVocab && typeof svc.pageVocab === 'object') {
+            wizardState.pageVocab = svc.pageVocab;
+            if (seed.ledger) {
+              seed.ledger.entries = seed.ledger.entries || [];
+              const toks = [];
+              for (const k of Object.keys(svc.pageVocab)) {
+                for (const tk of (Array.isArray(svc.pageVocab[k]) ? svc.pageVocab[k] : [])) toks.push(String(tk));
+              }
+              seed.ledger.entries.push({ id: 'prior-service-pageVocab', title: 'Registered page vocabulary', body: 'Prior same-site session registered pageVocab tokens [' + toks.join(', ') + '] — re-attached to this session (censuses consult them with priority; expand the affordance BEFORE extracting).', confidence: 'high', provenance: 'prior-service' });
+            }
+          }
+        } catch (ePV) { /* vocabulary seed is best-effort */ }
         // Hundred-tenth log (user: "comments shares 都是空，反馈了也没修复"):
         // a rebuilt service concluded "the page never renders X" from one
         // cold-tab sweep while the PRIOR same-site service's execution

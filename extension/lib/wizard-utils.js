@@ -2307,8 +2307,21 @@ const SEE_MORE_TAIL_RE = /(?:…|\.{3})?\s*\(?["“]?(?:see more|show more|read 
 function isContentLikeFieldName(name) {
   return /content|text|body|desc|caption|summary/i.test(String(name || ''));
 }
-function detectSeeMoreUnexpanded(data, schema) {
+function detectSeeMoreUnexpanded(data, schema, pageVocab) {
   if (!data || typeof data !== 'object') return null;
+  // 201st-round follow-up (user design challenge): the fallback vocabulary
+  // is a web-convention list with a long tail — a page truncating with
+  // "…全文" escapes it forever. REGISTERED page vocabulary (LLM-authored at
+  // research time, harvested from evidence, persisted on the service
+  // artifact) is unioned in and takes disclosure precedence: page truth
+  // beats harness guesses.
+  const registered = (pageVocab && Array.isArray(pageVocab.truncationAffordances))
+    ? pageVocab.truncationAffordances.filter((t) => typeof t === 'string' && t.trim())
+    : [];
+  const registeredRes = registered.map((tok) => {
+    const esc = tok.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return { token: tok.trim(), re: new RegExp('(?:…|\\.{3})?\\s*\\(?["“]?' + esc + '\\)?["”]?\\s*$', 'i') };
+  });
   const props = (schema && schema.properties) || {};
   for (const arrField of Object.keys(props)) {
     const prop = props[arrField];
@@ -2319,16 +2332,28 @@ function detectSeeMoreUnexpanded(data, schema) {
     for (const field of Object.keys(itemProps)) {
       if (!isContentLikeFieldName(field)) continue;
       const samples = [];
+      const viaRegistered = [];
       for (let i = 0; i < records.length; i++) {
         const v = records[i] ? records[i][field] : undefined;
         if (typeof v !== 'string' || !v.trim()) continue;
-        if (SEE_MORE_TAIL_RE.test(v.trim())) samples.push(i + 1); // 1-based ordinals
+        const tail = v.trim();
+        let hit = SEE_MORE_TAIL_RE.test(tail);
+        let viaReg = false;
+        if (!hit) {
+          for (const rr of registeredRes) {
+            if (rr.re.test(tail)) { hit = true; viaReg = true; if (viaRegistered.indexOf(rr.token) === -1) viaRegistered.push(rr.token); break; }
+          }
+        }
+        if (hit) samples.push(i + 1); // 1-based ordinals
       }
       if (samples.length > 0) {
         return {
           field: arrField + '.' + field,
           affectedCount: samples.length,
           samples: samples.slice(0, 6),
+          matchedVia: viaRegistered.length
+            ? 'registered page vocabulary [' + viaRegistered.join(', ') + '] (page truth, takes precedence over the fallback list)'
+            : 'fallback convention list (no pageVocab registered for this shape — register via service.update pageVocab to pin the page wording)',
           note: 'content records still carry the collapsed-text affordance at the tail (records ' + samples.slice(0, 6).join(', ') + ') — the full text was never loaded. Expand BEFORE extracting: $click the see-more control inside each container (or $clickInList over the affordance selector) in a step that precedes extraction. Shipping "… See more" passes shape checks while the requirement asked for the full text.'
         };
       }

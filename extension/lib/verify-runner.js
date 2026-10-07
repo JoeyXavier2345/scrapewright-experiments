@@ -1487,7 +1487,10 @@
         // html/link while the confirmed schema declares type/role/extras —
         // captured but never parsed, with finish summaries overclaiming.
         if (typeof WU.detectSeeMoreUnexpanded === 'function') {
-          const smu = WU.detectSeeMoreUnexpanded(finalData, outputSchema);
+          // 201st-round follow-up: the ARTIFACT pageVocab (LLM-registered at
+          // research time) is consulted first — page truth beats the
+          // harness fallback list.
+          const smu = WU.detectSeeMoreUnexpanded(finalData, outputSchema, service && service.pageVocab);
           if (smu) detectors.seeMoreUnexpanded = smu;
         }
         if (typeof WU.detectHovercardUnparsed === 'function') {

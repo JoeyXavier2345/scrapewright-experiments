@@ -1002,10 +1002,86 @@
           try { r.routeNote = routeNote; } catch (_) { /* best-effort steering */ }
         }
         harvestDossierFeeds(name, r);
+        // 201st-round follow-up: harvest affordance vocabulary FROM evidence —
+        // the injection must not depend on the model noticing the truncation
+        // or on the harness fallback list happening to know the page wording.
+        // probe.extract receipts (structured records) are mined for repeated
+        // ellipsis tails; a hit attaches a registration proposal.
+        if (name === 'probe.extract') {
+          const prop = harvestVocabProposal(r);
+          if (prop && r && typeof r === 'object' && !Array.isArray(r)) {
+            try { r.vocabProposal = prop; } catch (_) { /* best-effort steering */ }
+          }
+        }
         // 89th-round D5: a page.open invalidates the captured skeleton.
         if (name === 'page.open' && containerHtmlMeta) containerHtmlMeta.staleBy = 'page.open';
         return r;
       };
+    }
+
+    // 201st-round follow-up: pageVocab shape validation. Tight caps keep a
+    // stray object from riding the artifact; every bound is generous
+    // against real affordance vocabulary (a page has a handful of tokens).
+    function pageVocabShapeError(pv) {
+      if (!pv || typeof pv !== 'object' || Array.isArray(pv)) {
+        return 'pageVocab must be an object of { <purpose>: [tokens] } — an array of strings per purpose key (e.g. {truncationAffordances:[\'全文\']})';
+      }
+      const keys = Object.keys(pv);
+      if (keys.length > 8) return 'pageVocab: at most 8 purpose keys (got ' + keys.length + ')';
+      let total = 0;
+      for (const k of keys) {
+        if (!k || typeof k !== 'string' || k.length > 40) return 'pageVocab: purpose keys are short strings (<= 40 chars)';
+        const arr = pv[k];
+        if (!Array.isArray(arr)) return 'pageVocab.' + k + ' must be an array of strings (the affordance tokens)';
+        if (arr.length > 20) return 'pageVocab.' + k + ': at most 20 tokens per purpose';
+        for (const tk of arr) {
+          if (typeof tk !== 'string' || !tk.trim()) return 'pageVocab.' + k + ': every token is a non-empty string';
+          if (tk.length > 60) return 'pageVocab.' + k + ': tokens are short (<= 60 chars) — affordance wording, not paragraphs';
+          total += 1;
+        }
+      }
+      if (total > 100) return 'pageVocab: at most 100 tokens total';
+      return null;
+    }
+
+    // 201st-round follow-up: mine a probe.extract result for a repeated
+    // affordance-like tail. Tight shape rules keep prose out: the value must
+    // END with an ellipsis variant and a short token after it, repeated on
+    // >=60% of valued records (min 2). The proposal teaches BOTH exits —
+    // registration (persistence + census priority) and the $clickInList
+    // expansion step — so the model can act without another round-trip.
+    function harvestVocabProposal(r) {
+      try {
+        const records = (r && Array.isArray(r.records)) ? r.records : null;
+        if (!records || records.length < 2) return null;
+        for (const field of Object.keys(records[0] || {})) {
+          if (!/content|text|body|desc|caption|summary/i.test(field)) continue;
+          const tails = new Map();
+          let valued = 0;
+          for (const rec of records) {
+            const v = rec ? rec[field] : undefined;
+            if (typeof v !== 'string' || v.trim().length < 8) continue;
+            valued += 1;
+            const tail = v.trim().match(/(?:…|\.{3})\s*([^\s…]{1,12})\s*$/);
+            if (!tail) continue;
+            const token = tail[1];
+            if (/^[\d\s.,;:!?…\-–—]+$/.test(token)) continue;
+            tails.set(token, (tails.get(token) || 0) + 1);
+          }
+          if (valued < 2) continue;
+          for (const [token, n] of tails) {
+            if (n >= 2 && n / valued >= 0.6) {
+              return {
+                field: field,
+                token: token,
+                records: n,
+                note: 'the "' + field + '" values of ' + n + '/' + valued + ' record(s) end with "…' + token + '" — likely this page\'s collapsed-text affordance (the harness fallback list cannot know page wording). If it IS one: (1) register it — service.update({pageVocab:{truncationAffordances:[\'' + token + '\']}}) — it persists with the artifact, feeds the SEE_MORE_UNEXPANDED verify census, and seeds the next same-site session; (2) expand BEFORE extracting — a $clickInList step over the affordance control preceding the extract step. If the tail is legitimate prose, ignore this note.'
+              };
+            }
+          }
+        }
+      } catch (e) { /* steering must never break the probe */ }
+      return null;
     }
 
     async function verifyRun(args, ctx) {
@@ -1656,6 +1732,15 @@
       // rejected here, before any branch that could apply it.
       const tiErr = testInputDriftError(a, ctx);
       if (tiErr) return { error: tiErr };
+      // 201st-round follow-up: pageVocab — LLM-registered page vocabulary
+      // (harvested from evidence at research time). Validated tightly: the
+      // object rides the service artifact, feeds the censuses WITH priority
+      // over the harness fallback lists, and seeds the next same-site
+      // session. Shape: { <purpose>: [tokens] }, all strings.
+      if (a.pageVocab != null) {
+        const pvErr = pageVocabShapeError(a.pageVocab);
+        if (pvErr) return { error: pvErr };
+      }
       // Fourteenth-log follow-up (user request): when an alternate input
       // value turned out to be the fix (INPUT_VALUE_SUSPECT loop), the model
       // must be able to ADOPT it without re-sending the whole step graph.
@@ -1668,6 +1753,17 @@
         }
         d.applyArtifact({ steps: currentSteps, testInput: a.testInput });
         return { updated: true, testInputAdopted: true, note: 'test input adopted — run verify.run WITHOUT an input override to confirm the default input works' };
+      }
+      // 201st-round follow-up: steps-less pageVocab-only registration —
+      // the harvest proposal teaches exactly this call shape; re-authoring
+      // the whole graph to register one token would be churn.
+      if (!steps.length && a.pageVocab != null) {
+        if (!currentSteps.length) {
+          return { error: 'no artifact yet — a steps-less pageVocab update needs an existing step graph; author it with service.update({steps,...}) first' };
+        }
+        d.applyArtifact({ steps: currentSteps, pageVocab: a.pageVocab });
+        if (lastVerify) lastVerify.staleArtifact = true;
+        return { updated: true, vocabRegistered: true, note: 'page vocabulary registered — it persists with the artifact, feeds the SEE_MORE_UNEXPANDED census with priority over the fallback list, and seeds the next same-site session' };
       }
       // Twenty-first log: a steps-less schema-only amendment — the model
       // landing the confirmed contract into an artifact authored without
@@ -1957,6 +2053,14 @@
           if (attached) parts.push('the confirmed I/O contract was attached (your update omitted schemas) — verify.run now scores against it');
           if (attachedTestInput) parts.push('the confirmed test request values were attached (your update omitted testInput) — verify.run WITHOUT an override now runs them');
           if (parseCheckNote) parts.push(parseCheckNote);
+          if (merged.pageVocab) {
+            const toks = [];
+            for (const k of Object.keys(merged.pageVocab)) {
+              const arr = Array.isArray(merged.pageVocab[k]) ? merged.pageVocab[k] : [];
+              for (const tk of arr) toks.push(String(tk));
+            }
+            parts.push('pageVocab registered [' + toks.slice(0, 8).join(', ') + (toks.length > 8 ? ', …' : '') + '] — censuses consult it with priority over the harness fallback lists');
+          }
           return Object.assign({ updated: true, version: version, schemasAttached: attached, testInputAttached: attachedTestInput, note: parts.join('; ') }, staticLint.length ? { staticLint: staticLint } : {}, endgameWarning(ctx));
         }
       } catch (e) {
