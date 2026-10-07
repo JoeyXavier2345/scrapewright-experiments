@@ -2337,7 +2337,12 @@ function makeWizardRail() {
       // timeoutMs knob dead — the rail forwards per-call opts.timeoutMs here
       // and the executor budget follows it (capped at 90s).
       executor.timeoutMs = (opts && Number(opts.timeoutMs) > 0) ? Math.min(Math.floor(Number(opts.timeoutMs)), 90000) : 30000;
-      const r = await executor.execute(snippet, {});
+      // 199th log: opts.input is the dry-run's __input__ (verify.run
+      // {preflight:true} builds it from the confirmed testInput). The old
+      // hardcoded {} silently dry-ran with an empty input — the step opened
+      // "?q=undefined" and the preflight verdict described the wrong page.
+      const input = (opts && opts.input && typeof opts.input === 'object' && !Array.isArray(opts.input)) ? opts.input : {};
+      const r = await executor.execute(snippet, input);
       // Twenty-third log: return the {result, selectorDiagnostics} envelope —
       // unwrapping here discarded selectorDiagnostics for every probe, so the
       // count visible/invisible census never reached probe.count. Probe-tools
