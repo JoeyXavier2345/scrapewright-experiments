@@ -1777,7 +1777,10 @@
           break;
         }
         case 'openTab':
-          result = await domOpenTab(data.args[0], data.args[1]);
+          // 199th log: args[2] is the step input object — it rides the relay
+          // so the sub-tab execution gets __input__ (the fn is serialized by
+          // source; outer closures are invisible in the sub-tab).
+          result = await domOpenTab(data.args[0], data.args[1], data.args[2]);
           break;
         case 'exists': {
           const __t0 = Date.now();
@@ -5678,7 +5681,7 @@
   let openTabCounter = 0;
   const OPEN_TAB_LOCAL_TIMEOUT_MS = 60000; // B9: local cap — background must answer within this
 
-  async function domOpenTab(url, fnStr, timeoutMs) {
+  async function domOpenTab(url, fnStr, input, timeoutMs) {
     const budget = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : OPEN_TAB_LOCAL_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
       const reqId = ++openTabCounter;
@@ -5699,6 +5702,10 @@
           reqId,
           url,
           script: fnStr,
+          // 199th log: the step input object — background injects it into the
+          // sub-tab execution as __input__ so the fn can re-derive values it
+          // cannot close over (source serialization loses closures).
+          input: (input && typeof input === 'object') ? input : null,
           parentTabId: currentSenderTabId
         });
       } catch (e) {

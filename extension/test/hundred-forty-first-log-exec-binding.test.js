@@ -140,7 +140,7 @@ describe('141st log — offscreen routes by execution identity (source audit)', 
   it('the script function is compiled WITH the API parameter list and invoked with the bag values', () => {
     assert.match(SANDBOX_SRC, /new Function\('__input__', '__stepResults__', '__lastResult__', \.\.\.API_PARAM_NAMES/, 'parameter injection at compile');
     assert.match(SANDBOX_SRC, /API_PARAM_NAMES\.map\(\(k\) => execApi\[k\]\)/, 'bag values built per execution');
-    assert.match(SANDBOX_SRC, /makeExecApi\(execId, deadlineAt\)/, 'the bag binds the envelope identity');
+    assert.match(SANDBOX_SRC, /makeExecApi\(execId, deadlineAt, input\)/, 'the bag binds the envelope identity (199th round: + input for $openTab __input__ threading)');
   });
 
   it('the background relay whitelists execId through to the content script', () => {

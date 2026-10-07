@@ -1808,6 +1808,14 @@
           }
         }
       }
+      // 199th log: $openTab fns are serialized by source — outer variables
+      // are invisible in the sub-tab ("N is not defined" class, live twice).
+      // Advisory-only, same contract as the un-awaited-$ lint above.
+      if (typeof WU.detectOpenTabClosureRefs === 'function') {
+        for (const h of (WU.detectOpenTabClosureRefs(steps) || [])) {
+          staticLint.push('OPENTAB_CLOSURE_REF: step "' + String(h.stepId) + '": the $openTab body references outer variable(s) [' + h.names.join(', ') + '] — the body is serialized by source and re-created in the sub-tab, where outer variables do NOT exist ("X is not defined"). Re-derive the values INSIDE the body from __input__ (the step input IS injected into the sub-tab) or inline them as literals.');
+        }
+      }
       // 171st round: SELECTOR_PARTIAL_FIT. Each container selector in
       // the steps is sampled at first/middle/last; a selector matching
       // only some positions is over-fitted to one card shape. Advisory

@@ -63,7 +63,11 @@
   // ENVELOPE's execId + deadlineAt — a concurrent execution's EXECUTE can no
   // longer restamp this execution's requests (the 140th bug A), and every
   // request is attributable for routing (bug B's class).
-  function makeExecApi(execId, deadlineAt) {
+  // 199th log: input rides the bag so $openTab can inject it into the
+  // sub-tab execution as __input__ — the fn is serialized by source and
+  // outer closures are invisible there, so __input__ is the ONLY sanctioned
+  // way to carry values into the sub-tab.
+  function makeExecApi(execId, deadlineAt, input) {
     const send = (action, selector, args) => sendDomRequest(execId, deadlineAt, action, selector, args);
     return {
       '$': (sel) => send('querySelector', sel, []),
@@ -78,7 +82,7 @@
       '$count': (sel) => send('count', sel, []),
       '$list': (sel) => send('list', sel, []),
       '$waitForStable': (sel, opts) => send('waitForStable', sel, [opts || {}]),
-      '$openTab': (url, fn) => send('openTab', null, [url, fn ? fn.toString() : '']),
+      '$openTab': (url, fn) => send('openTab', null, [url, fn ? fn.toString() : '', (input && typeof input === 'object') ? input : null]),
       '$extractList': (containerSel, fieldMap, opts) => send('extractList', containerSel, [fieldMap, opts || {}]),
       '$extractListMulti': (containerSel, fieldMap, opts) => send('extractListMulti', containerSel, [fieldMap, opts || {}]),
       '$extractWithHover': (containerSel, fieldMap, opts) => send('extractWithHover', containerSel, [fieldMap, opts || {}]),
@@ -345,7 +349,7 @@ window.$waitForStable = (sel, opts) => legacySend('waitForStable', sel, [opts ||
             deadlineTimer = setTimeout(() => rej(new Error('SANDBOX_DEADLINE: the script exceeded its own execution budget and was abandoned in the sandbox (the caller already timed out) — in-flight $ calls were rejected.')), Math.max(0, deadlineAt - Date.now()));
           })
         : null;
-      const execApi = makeExecApi(execId, deadlineAt);
+      const execApi = makeExecApi(execId, deadlineAt, input);
       const apiValues = API_PARAM_NAMES.map((k) => execApi[k]);
       let result;
       try {

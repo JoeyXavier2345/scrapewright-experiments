@@ -24,7 +24,7 @@ AVAILABLE API FUNCTIONS:
 - $timestamp(containerSel, {anchorSel?, timeoutMs?, index?}): ONE call returns the card's timestamp value — {value, absolute, absoluteSource, relative, candidates[], anchorsProbed, hoversDispatched, note?}. It enumerates the card's time-ish anchors (default union; narrow with anchorSel), reads EACH anchor's labelledby + aria-label + VISIBLE TEXT (the source that survives cold mount — labelledby reference chains often do not resolve on freshly-opened tabs), and hovers up to the first 3 anchors (default timeoutMs 4500 — tooltips mount in 600-1600ms; do NOT narrow the dwell below that, the capture window closes before the popover appears) reading the captured popover's own text. Candidates are date-shape filtered (a string that merely MENTIONS a duration is prose, not a date), ABSOLUTE preferred over a relative age; heuristicValue（日历通用正则的便捷默认——识别职责在你：优先读 candidates[] 原文自行判断；value 为旧名别名）is the pick, '' when nothing date-shaped exists. postTime = (await $timestamp(cardSel)).value — do NOT hand-roll the labelledby/text/popover candidate dance with custom filters and regex lists in step JS: eight artifact versions of that dance shipped junk from media anchors, dropped the hovered popover's capture on arrival, and never survived a cold verify tab.
 - $wait(selector, delayMs?): Wait for element (up to 30s via MutationObserver), then optional extra delay. Returns true. The selector is REQUIRED. If you only need a delay without waiting for an element, use 'await new Promise(r => setTimeout(r, ms))' instead. THROWS ELEMENT_NOT_FOUND if the selector never appears within the cap — never $wait on a selector whose ABSENCE is your poll condition (content still loading); $count it and return { done: false } so maxIterations drives the wait.
 - $check(selector, property): Read element property (e.g., 'checked', 'disabled'). Returns value.
-- $openTab(url, functionBody): Open new tab at the given URL, wait for page load, then execute the function body (a string of JavaScript statements) in the new tab context. Returns whatever the function body returns. Use to scrape detail pages. Example: await $openTab(href, \`const title = await $extract('h1'); return { title };\`)
+- $openTab(url, functionBody): Open new tab at the given URL, wait for page load, then execute the function body (a string of JavaScript statements, or an async fn) in the new tab context. Returns whatever the function body returns. Use to scrape detail pages. Example: await $openTab(href, \`const title = await $extract('h1'); return { title };\`). CRITICAL — the body is SERIALIZED BY SOURCE and re-created in the sub-tab: variables declared OUTSIDE the body (const/let in your step script) are NOT visible inside it and fail with "X is not defined". The step's INPUT object IS available inside the body as __input__ — re-derive every value you need from __input__ inside the body (or inline literals); never reference outer variables.
 - $count(selector): Count elements matching selector (main document + same-origin iframes). Returns number. Do NOT use with :nth-child() to iterate — use $list() instead.
 - $list(selector): Get ALL matching elements across main document + same-origin iframes. Returns array of { tagName, id, className, textContent, value, href, src, checked, disabled }. Use this for iterating multiple elements. Same data-object limitation as $().
 - $extractList(containerSel, fieldMap, opts?): Extract a list of records in ONE call. fieldMap is { subField: subSelector | { selector, attr?, labelledby? } }; labelledby:true (or an attr name like aria-describedby) resolves the ARIA reference on each match and returns the referenced elements' concatenated text — the read for anti-scrambled pages where the visible textContent is decoy junk (the clean value lives in the hidden elements the reference points at; same resolution as $labelledby, INCLUDING its descendant fallback: when the matched element carries no reference attribute, resolution descends to the first descendant that carries one, so the sub-selector may point at the ANCHOR while a child span holds the aria-labelledby). each sub-selector is evaluated INSIDE each container element and returns the FIRST match per container. Returns an array of objects in container order. Prefers this over $list-per-field for multi-field lists (avoids field-misalignment when fields are missing on some items). Throws 'empty list' if no container matches; set opts.allowEmpty=true to return [] instead.
@@ -222,13 +222,15 @@ ATTACHMENT ITERATION (use $list for elements that may be inside iframes):
 DO NOT use $count + :nth-child() loop to iterate elements — it breaks when elements span multiple iframes because $count sums across all documents but :nth-child() searches one document at a time.
 
 DETAIL PAGE SCRAPING (use $openTab to scrape each item's detail page):
-  const linkEl = await $('a.detail-link');
-  const href = linkEl.href;
-  const detail = await $openTab(href, \`
+  // The URL may use outer variables (it is evaluated in the step scope);
+  // the BODY may not — it runs re-created in the sub-tab. Read counts,
+  // keywords, limits from __input__ INSIDE the body.
+  const detail = await $openTab(buildDetailUrl(__input__), \`
+    const want = Number(__input__.count) || 5;
     await $wait('.detail-content', 3000);
     const title = await $extract('h1');
     const body = await $extract('.detail-content');
-    return { title, body };
+    return { title, body, want };
   \`);
 
 AI CHAT / STREAMING RESPONSE (wait for content to finish generating):
@@ -6306,6 +6308,119 @@ function detectUnawaitedDollarCalls(script) {
   return hits;
 }
 
+// 199th log: $openTab serializes its fn by SOURCE and re-creates it in the
+// sub-tab sandbox — outer variables are NOT visible there (a live session
+// died "N is not defined" twice because the fn referenced the step's outer
+// const N). Advisory lint at service.update: flag fn bodies that reference
+// names declared OUTSIDE the $openTab call. The fix shape is to re-derive
+// values from __input__ inside the fn (the step input IS injected into the
+// sub-tab execution as of this round).
+function detectOpenTabClosureRefs(steps) {
+  const hits = [];
+  for (const st of (steps || [])) {
+    const script = String((st && st.script) || '');
+    if (!script || script.indexOf('$openTab') === -1) continue;
+    const fnSpans = [];
+    let searchFrom = 0;
+    for (;;) {
+      const idx = script.indexOf('$openTab', searchFrom);
+      if (idx === -1) break;
+      let p = idx + '$openTab'.length;
+      while (p < script.length && /\s/.test(script[p])) p += 1;
+      if (script[p] !== '(') { searchFrom = idx + 8; continue; }
+      const span = extractOpenTabFnSpan(script, p);
+      if (span) {
+        fnSpans.push(span);
+        searchFrom = span.callEnd + 1;
+      } else {
+        searchFrom = idx + 8;
+      }
+    }
+    if (!fnSpans.length) continue;
+    const inFn = (pos) => fnSpans.some((s) => pos >= s.start && pos < s.end);
+    const declRe = /\b(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)/g;
+    const outerNames = new Set();
+    let dm;
+    while ((dm = declRe.exec(script)) !== null) {
+      if (!inFn(dm.index + dm[0].length)) outerNames.add(dm[1]);
+    }
+    for (const span of fnSpans) {
+      const fnSrc = script.slice(span.start, span.end);
+      const body = unwrapOpenTabStringBody(fnSrc);
+      const local = new Set();
+      const localDeclRe = /\b(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)/g;
+      let lm;
+      while ((lm = localDeclRe.exec(body)) !== null) local.add(lm[1]);
+      for (const param of openTabFnParamNames(fnSrc)) local.add(param);
+      const refs = [];
+      for (const name of outerNames) {
+        if (local.has(name)) continue;
+        const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (new RegExp('(?<![A-Za-z0-9_$.])' + esc + '\\b').test(body)) refs.push(name);
+      }
+      if (refs.length) {
+        hits.push({ stepId: (st && (st.id != null ? st.id : st.name)) || null, names: refs });
+        break;
+      }
+    }
+  }
+  return hits;
+}
+
+// String/quote-aware scan of a $openTab(...) call; returns the source span
+// of the SECOND top-level argument (the fn) plus the call end index.
+function extractOpenTabFnSpan(script, openParenIdx) {
+  let depth = 0;
+  let arg = 0;
+  let start = -1;
+  let quote = null;
+  for (let i = openParenIdx; i < script.length; i++) {
+    const ch = script[i];
+    if (quote) {
+      if (ch === '\\') { i += 1; continue; }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '\'' || ch === '"' || ch === '`') { quote = ch; continue; }
+    if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+    else if (ch === ')' || ch === ']' || ch === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return (arg === 1 && start !== -1)
+          ? { start: start, end: i, callEnd: i }
+          : null;
+      }
+    } else if (ch === ',' && depth === 1) {
+      if (arg === 0) { arg = 1; start = i + 1; }
+      // deeper args after the fn are irrelevant
+    }
+  }
+  return null;
+}
+
+// The guide teaches template-literal bodies — unwrap the outer quotes so the
+// body statements are scannable. Non-string args return the source as-is.
+function unwrapOpenTabStringBody(fnSrc) {
+  const t = fnSrc.trim();
+  if ((t[0] === '`' || t[0] === '\'' || t[0] === '"') && t.length > 1) {
+    return t.slice(1, -1);
+  }
+  return fnSrc;
+}
+
+function openTabFnParamNames(fnSrc) {
+  const t = fnSrc.trim();
+  let m = t.match(/^(?:async\s*)?\(([^)]*)\)\s*=>/);
+  if (m) {
+    return m[1].split(',').map((seg) => {
+      const idm = seg.replace(/\.\.\./g, '').trim().match(/^([A-Za-z_$][\w$]*)/);
+      return idm ? idm[1] : null;
+    }).filter(Boolean);
+  }
+  m = t.match(/^(?:async\s*)?([A-Za-z_$][\w$]*)\s*=>/);
+  return m ? [m[1]] : [];
+}
+
 // Returns true when the $-call at `index` (matched text `matchText`) is an
 // intentional un-awaited usage; false means record it as a hit. Kept FLAT
 // (single-level guards, early returns): deep control-flow nests reading
@@ -7060,7 +7175,7 @@ function syncLastVerifiedFromVerify(state, lv) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { normalizeIdValueForIdentity, idValueShape, inferFieldSemantics, semanticPredicatePasses, countPoolTextPasses, summarizePriorServiceEvidence, extractFailingFieldNames, computeSampleDiversity, detectInventedIdFallbacks, detectShellHovercards, pickPrimaryResultForPanel, detectDuplicateNestedEntries, extractInventedPseudoCandidates, detectInventedPseudoSelectors, recordContentSignature, countUniqueRecords, detectMediaArrayHygiene, unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectHardcodedNestedRoles, detectHoverEntityCoverage, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectResultStrayKeys, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
+var WU_EXPORT_BAG = { normalizeIdValueForIdentity, idValueShape, inferFieldSemantics, semanticPredicatePasses, countPoolTextPasses, summarizePriorServiceEvidence, extractFailingFieldNames, computeSampleDiversity, detectInventedIdFallbacks, detectShellHovercards, pickPrimaryResultForPanel, detectDuplicateNestedEntries, extractInventedPseudoCandidates, detectInventedPseudoSelectors, recordContentSignature, countUniqueRecords, detectMediaArrayHygiene, unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectHardcodedNestedRoles, detectHoverEntityCoverage, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectResultStrayKeys, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, detectOpenTabClosureRefs, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;

@@ -1312,7 +1312,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Prefer the browser-authenticated sender tab over the message field.
     // The latter is retained only for compatibility with older relay paths.
     const openTabParentId = sender.tab?.id || message.parentTabId;
-    handleOpenTabExecute(message.url, message.script, openTabParentId, message.reqId)
+    handleOpenTabExecute(message.url, message.script, openTabParentId, message.reqId, message.input)
       .catch(err => {
         debugLogger.log('error', 'background', 'handleOpenTabExecute failed', { error: err.message });
         if (openTabParentId) {
@@ -1752,7 +1752,7 @@ async function captureSubTabSnapshot(tabId, label) {
   }
 }
 
-async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
+async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId, input) {
   debugLogger.log('info', 'background', 'handleOpenTabExecute start', { url, parentTabId, reqId });
   let parentUrl = null;
   if (parentTabId != null) {
@@ -1834,7 +1834,11 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
     const script = isFullFnSource
       ? `return await (${fnSource})();`
       : `return await (async () => { ${scriptStr} })();`;
-    const envelope = await executor.execute(script, {});
+    // 199th log: inject the step input as __input__ — the fn is serialized
+    // by source, outer closures are invisible in the sub-tab, and __input__
+    // is the sanctioned way to carry values in (the "?q=undefined" and
+    // "N is not defined" incidents both trace to this gap).
+    const envelope = await executor.execute(script, (input && typeof input === 'object' && !Array.isArray(input)) ? input : {});
 
     // RC16: capture the sub-tab's HTML BEFORE destroying it, on BOTH success
     // and failure paths. The success-path capture is NEW — previously only

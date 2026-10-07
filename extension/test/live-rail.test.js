@@ -172,13 +172,13 @@ describe('createLiveRail', () => {
     assert.equal(r.tabId, 7);
   });
 
-  it('pageOpen degrades a pingReady throw to ready:false + warning, never throws', async () => {
+  it('pageOpen degrades a pingReady throw to an honest error receipt, never throws (199th round: dead-tab retry, then named failure)', async () => {
     const d = makeDeps({ pingReady: async () => { throw new Error('PING_FAILED'); } });
     const rail = createLiveRail(d);
     const r = await rail.pageOpen({});
-    assert.equal(r.tabId, 7);
-    assert.equal(r.ready, false);
-    assert.match(r.warning, /content script not responding/);
+    assert.ok(r.error, 'two dead fresh tabs → error receipt');
+    assert.match(r.error, /content script never responded|error page/i);
+    assert.match(r.error, /two fresh tabs/i);
   });
 
   it('dispose during an in-flight open waits, then closes the created tab', async () => {

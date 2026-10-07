@@ -67,6 +67,7 @@ describe('$openTab background wiring', () => {
       /const openTabParentId = sender\.tab\?\.id \|\| message\.parentTabId;/,
       'OPEN_TAB_EXECUTE must not trust a message-provided parent ID when sender.tab.id is available'
     );
-    assert.match(background, /handleOpenTabExecute\(message\.url, message\.script, openTabParentId, message\.reqId\)/);
+    assert.match(background, /handleOpenTabExecute\(message\.url, message\.script, openTabParentId, message\.reqId, message\.input\)/,
+      'the step input rides the relay (199th log: sub-tab __input__)');
   });
 });
