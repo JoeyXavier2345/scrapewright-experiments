@@ -95,6 +95,96 @@ describe('detectOpenTabClosureRefs (199th log lint)', () => {
     const hits = WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]);
     assert.deepEqual(hits, []);
   });
+
+  // 199th re-review: executed repros against the shipped lint — F2 flagged
+  // object-literal KEYS as refs, F3 missed ...rest and multi-declarator
+  // bindings, F6's blanker erased ${} interpolations and let a lone quote
+  // inside a regex class open a phantom string to EOF, F7 ran the outer
+  // declaration scan on the RAW script (phantom bindings from comments and
+  // from strings inside destructuring defaults).
+  describe('199th re-review repros', () => {
+    it('F2: object-literal KEY position is not a reference (posts: recs)', () => {
+      const s = "const posts = []; return await $openTab(u, async () => { const recs = await $extractList('div',{t:{selector:'.t'}}); return { posts: recs }; });";
+      assert.deepEqual(WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]), []);
+    });
+
+    it('F2: shorthand object values ARE still references', () => {
+      const s = "const recs = []; return await $openTab(u, async () => { return { recs }; });";
+      const hits = WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]);
+      assert.equal(hits.length, 1);
+      assert.ok(hits[0].names.includes('recs'), 'shorthand {recs} references the outer binding');
+    });
+
+    it('F3a: ...rest destructuring binds (const {...cfg} = __input__ flags cfg)', () => {
+      const s = "const {...cfg} = __input__; return await $openTab(u, async () => ({ v: cfg.x }));";
+      const hits = WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]);
+      assert.equal(hits.length, 1, 'cfg flagged, got ' + JSON.stringify(hits));
+      assert.ok(hits[0].names.includes('cfg'));
+    });
+
+    it('F3b: multi-declarator const (N = 5, LIMIT = 10) flags LIMIT', () => {
+      const s = "const N = 5, LIMIT = 10; return await $openTab(u, async () => ({ v: LIMIT }));";
+      const hits = WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]);
+      assert.equal(hits.length, 1, 'LIMIT flagged, got ' + JSON.stringify(hits));
+      assert.ok(hits[0].names.includes('LIMIT'));
+    });
+
+    it('F3b: multi-declarator with destructuring in the sibling slot', () => {
+      const s = "const kw = 'x', {q} = __input__; return await $openTab(u, async () => ({ v: q }));";
+      const hits = WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]);
+      assert.equal(hits.length, 1);
+      assert.ok(hits[0].names.includes('q'));
+    });
+
+    it('F3b: for-of header const does NOT swallow loop-body names', () => {
+      // The sibling-declarator scan must stop at the for-header's closing
+      // paren — `doB` in the body is a call, never a declarator.
+      const s = "return await $openTab(u, async () => { for (const x of list) { await \$extractList(x, {}); } return {v:1}; });";
+      const hits = WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]);
+      assert.deepEqual(hits, []);
+    });
+
+    it('F6a: a reference inside a template ${} interpolation is visible', () => {
+      const s = "const N = 5; return await $openTab(u, async () => { const s = `x${N}y`; return {s}; });";
+      const hits = WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]);
+      assert.equal(hits.length, 1, 'N in ${N} flagged, got ' + JSON.stringify(hits));
+      assert.ok(hits[0].names.includes('N'));
+    });
+
+    it('F6a: template plain-text content is still NOT a reference', () => {
+      const s = "const N = 5; return await $openTab(u, async () => { const s = `N is big`; return {s}; });";
+      assert.deepEqual(WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]), []);
+    });
+
+    it('F6b: a lone quote inside a regex class must not open a phantom string', () => {
+      const s = "const N = 5; return await $openTab(u, async () => { const v = /[^a-z']/i.test('x'); return { v, n: N }; });";
+      const hits = WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]);
+      assert.equal(hits.length, 1, 'N after the regex literal flagged, got ' + JSON.stringify(hits));
+      assert.ok(hits[0].names.includes('N'));
+    });
+
+    it('F6b: division is still division (no phantom regex swallowing a string)', () => {
+      const s = "const N = 5; return await $openTab(u, async () => { const v = (10 / 2) + N; return {v}; });";
+      const hits = WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]);
+      assert.equal(hits.length, 1);
+      assert.ok(hits[0].names.includes('N'));
+    });
+
+    it('F7: a declaration living only in an outer comment is a phantom (no flag)', () => {
+      const s = "// const posts = []\nreturn await $openTab(u, async () => { return { posts: out }; });";
+      assert.deepEqual(WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]), []);
+    });
+
+    it('F7: comment-declared name referenced as a VALUE is a phantom (no flag)', () => {
+      const s = "// const posts = []\nreturn await $openTab(u, async () => { return { v: posts.length }; });";
+      assert.deepEqual(WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]), []);
+    });
+
+    it('F7: string contents inside a destructuring default are not bindings (c stays unflagged)', () => {
+      const s = "const {q = 'b c'} = __input__; return await $openTab(u, async () => { return { v: c }; });";
+      assert.deepEqual(WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]), []);
+    });
+  });
 });
 
 // 199th review F3: the unit tests above pin WU.detectOpenTabClosureRefs, but

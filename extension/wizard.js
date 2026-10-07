@@ -2221,21 +2221,35 @@ function waitForTabLoad(tabId, timeoutMs = 120000) { // sixtieth-round: slow-net
 // one top-level helper — was duplicated verbatim in the rail and runner
 // dep bags (the documented sync-drift hazard class).
 async function probeTabHealth(tabId) {
+  // 199th re-review F1: a wedged-but-alive renderer never settles
+  // executeScript — race it against a 4s timer (the same condition the
+  // waitForTabLoad probe above guards with 3s) so a dead tab answers
+  // "unreachable" in bounded time instead of hanging page.open and the
+  // verify turn. The loser's timer is cleared.
+  let timer = null;
   try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tabId },
-      func: () => ({
-        readyState: document.readyState,
-        bodyChars: (document.body && document.body.textContent || '').length
-      })
-    });
+    const results = await Promise.race([
+      chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        func: () => ({
+          readyState: document.readyState,
+          bodyChars: (document.body && document.body.textContent || '').length
+        })
+      }),
+      new Promise((res) => { timer = setTimeout(() => res(null), 4000); })
+    ]);
+    clearTimeout(timer);
+    timer = null;
     const p = results && results[0] && results[0].result;
-    return p
-      ? { reachable: true, errorPage: false, readyState: p.readyState, bodyChars: p.bodyChars }
-      : { reachable: false, errorPage: false };
+    if (p) {
+      return { reachable: true, errorPage: false, readyState: p.readyState, bodyChars: p.bodyChars };
+    }
+    return { reachable: false, errorPage: false, reason: 'health probe timed out — tab unreachable or main thread blocked' };
   } catch (e) {
     const msg = String((e && e.message) || e);
     return { reachable: false, errorPage: /error page/i.test(msg), reason: msg };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -2331,6 +2345,17 @@ function makeWizardRail() {
           const r = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
           if (r && r.pong) return true;
         } catch (e) { /* not ready yet */ }
+        // 199th re-review F4: an error page NEVER becomes ready — probe once
+        // after the first failed PING and stop instead of sleeping the full
+        // 6s window at a dead tab (mirrors the verify-runner F4 early-exit).
+        if (i === 0) {
+          try {
+            const h = await probeTabHealth(tabId);
+            if (h && (h.errorPage || (h.reachable === false && /error page/i.test(String(h.reason || ''))))) {
+              return false;
+            }
+          } catch (e) { /* best-effort — keep the readiness loop */ }
+        }
         await new Promise((res) => setTimeout(res, 300));
       }
       return false;

@@ -8,6 +8,8 @@
 // two fresh tabs are both dead.
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const LiveRail = require('../lib/live-rail');
 
 function makeRail(opts) {
@@ -141,5 +143,33 @@ describe('live-rail dead-tab retry (199th log)', () => {
     assert.ok(r.error, 'budget-capped open must be an error receipt');
     assert.match(r.error, /open budget/i, r.error);
     assert.equal(calls.createTab.length, 1, 'no second attempt past the cap, got ' + JSON.stringify(calls.createTab));
+  });
+});
+
+// 199th re-review F1/F4: the top-level probeTabHealth helper and the rail's
+// pingReady live embedded in wizard.js (not exported), so pin them by source
+// audit — the repo's standard pattern for wizard.js internals.
+describe('wizard.js probeTabHealth / rail pingReady (199th re-review source audit)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
+
+  function fnBody(marker, span) {
+    const i = src.indexOf(marker);
+    assert.ok(i !== -1, 'marker found: ' + marker);
+    return src.slice(i, i + (span || 2000));
+  }
+
+  it('F1: probeTabHealth races executeScript against a 4s timer and clears the loser', () => {
+    const body = fnBody('async function probeTabHealth(', 2200);
+    assert.match(body, /Promise\.race/, 'the executeScript await is raced');
+    assert.match(body, /4000/, 'against a 4s timeout');
+    assert.match(body, /clearTimeout|clearInterval/, 'the loser timer is cleared (no dangling timer)');
+    assert.match(body, /health probe timed out/, 'timeout reason discloses the wedged-renderer diagnosis');
+  });
+
+  it('F4: rail pingReady probes tab health after the first failed PING and bails early on an error page', () => {
+    const body = fnBody('pingReady: async (tabId) => {', 1600);
+    assert.match(body, /probeTabHealth/, 'the health probe is consulted inside the readiness loop');
+    assert.match(body, /errorPage/, 'the early exit keys on the error-page discriminator');
+    assert.match(body, /return false/, 'and returns false instead of sleeping the full window');
   });
 });

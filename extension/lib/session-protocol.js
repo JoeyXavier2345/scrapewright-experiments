@@ -446,13 +446,28 @@
     return '{' + parts.join(',') + '}';
   }
 
+  // 199th re-review F5: Error instances JSON.stringify to {} (message and
+  // stack are non-enumerable) — the RELAY_FAILED class vanished from
+  // compacted receipts exactly when the model needed it. Duck-check covers
+  // cross-realm Errors.
+  const isErrorLikeForLLM = (v) =>
+    v instanceof Error || (v && typeof v === 'object' && typeof v.message === 'string' && typeof v.stack === 'string');
+  const jsonStringifyWithErrors = (x) => JSON.stringify(x, (k, val) => {
+    if (isErrorLikeForLLM(val)) return { name: val.name, message: val.message };
+    return val;
+  });
+
   function compactValueForLLM(v, budget) {
     if (budget <= 24) return '"…"';
     if (v === null || typeof v === 'number' || typeof v === 'boolean') return JSON.stringify(v);
     if (typeof v === 'string') return compactStringForLLM(v, budget);
+    // Bare Error value: the message text IS the payload.
+    if (isErrorLikeForLLM(v)) return compactStringForLLM(v.message || String(v), budget);
     let s;
-    try { s = JSON.stringify(v); } catch (e) { s = null; }
+    try { s = jsonStringifyWithErrors(v); } catch (e) { s = null; }
     if (s == null) return compactStringForLLM(String(v), budget);
+    // Nested Errors ride the replacer above even on the fits-the-budget
+    // short-circuit (which never recurses into keys).
     if (s.length <= budget) return s;
     if (Array.isArray(v)) return compactArrayForLLM(v, budget);
     if (typeof v === 'object') return compactObjectForLLM(v, budget);

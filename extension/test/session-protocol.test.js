@@ -232,3 +232,26 @@ describe('parseAssistantTurn malformed-JSON classification (third live log)', ()
     assert.ok(r.detail.indexOf('think') !== -1, 'detail lists observed keys');
   });
 });
+
+// 199th re-review F5: Error instances JSON.stringify to {} (message/stack
+// are non-enumerable) — the RELAY_FAILED class vanished from compacted tool
+// receipts exactly when the model needed it most.
+describe('compactValueForLLM Error instances (199th re-review F5)', () => {
+  it('an Error value keeps its message text (via compactObjectForLLM)', () => {
+    const out = Protocol.compactObjectForLLM({ error: new Error('RELAY_FAILED: boom') }, 4000);
+    assert.match(out, /RELAY_FAILED: boom/, 'message survives, got: ' + out);
+  });
+
+  it('an Error inside a compacted tool result keeps its message text', () => {
+    const out = Protocol.compactToolResultForLLM('probe.snippet', { ok: false, error: new Error('SYNTAX_ERROR: boom at line 2') }, 2000);
+    assert.match(out, /SYNTAX_ERROR: boom at line 2/, 'message survives, got: ' + out);
+  });
+
+  it('cross-realm-looking errors (message+stack, not instanceof) also keep the message', () => {
+    const fake = Object.create(null);
+    fake.message = 'FRAME with ID 7 is showing error page';
+    fake.stack = 'Error: fake';
+    const out = Protocol.compactObjectForLLM({ error: fake }, 4000);
+    assert.match(out, /showing error page/, 'duck-checked error message survives, got: ' + out);
+  });
+});

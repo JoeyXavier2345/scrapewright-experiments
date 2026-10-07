@@ -6257,26 +6257,80 @@ function headTailSlice(s, cap) {
   return s.slice(0, headLen) + sep + s.slice(-tailLen);
 }
 
-// Length-preserving blanker for the static lint below: comment bodies and
+// Length-preserving blanker for the static lints below: comment bodies and
 // string/template CONTENTS become spaces (delimiters and newlines stay), so
 // character indices keep aligning with the original script.
+// 199th re-review F6: rewritten as an explicit state machine — (a) template
+// `${…}` interpolations are CODE (a reference inside one counts; the old
+// blanker erased them with the template contents), and (b) a `/` in operand
+// position opens a REGEX literal (a lone `'` inside a regex character class
+// used to open a phantom string to EOF, blanking every reference after it).
 function blankStringsAndCommentsForLint(src) {
   let out = '';
-  let mode = null; // "'" | '"' | '`' | '//' | '/*'
+  let mode = 'code';        // code | line | block | str | regex
+  let quote = null;         // str: the opening quote char
+  let brace = 0;            // unmatched '{' in the current code context
+  const tplStack = [];      // saved brace depths of enclosing ${ interpolations
+  let rxClass = false;      // regex: inside a [...] character class
+  // Regex-operand discriminator: what token precedes this `/`? Division
+  // follows an identifier/number/closing paren; a regex follows an operator,
+  // an opener, or return/case/typeof. Reads back from `out` — code-mode
+  // chars are emitted verbatim, blanks are whitespace anyway.
+  const regexOperandPosition = () => {
+    let j = out.length - 1;
+    while (j >= 0 && (out[j] === ' ' || out[j] === '\n' || out[j] === '\t')) j -= 1;
+    if (j < 0) return true;
+    if (/[A-Za-z0-9_$]/.test(out[j])) {
+      let k = j;
+      while (k >= 0 && /[A-Za-z0-9_$]/.test(out[k])) k -= 1;
+      const w = out.slice(k + 1, j + 1);
+      return w === 'return' || w === 'case' || w === 'typeof';
+    }
+    return '(,=:[!&|?;{}'.indexOf(out[j]) !== -1;
+  };
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
     const d = i + 1 < src.length ? src[i + 1] : '';
-    if (mode) {
+    if (mode === 'line') {
+      if (c === '\n') { out += '\n'; mode = 'code'; } else out += ' ';
+      continue;
+    }
+    if (mode === 'block') {
+      if (c === '*' && d === '/') { out += '  '; i += 1; mode = 'code'; }
+      else out += (c === '\n') ? '\n' : ' ';
+      continue;
+    }
+    if (mode === 'str') {
       if (c === '\\') { out += '  '; i += 1; continue; }
-      if (mode === '//' && c === '\n') { out += '\n'; mode = null; continue; }
-      if (mode === '/*' && c === '*' && d === '/') { out += '  '; i += 1; mode = null; continue; }
-      if ((mode === "'" || mode === '"' || mode === '`') && c === mode) { out += c; mode = null; continue; }
+      if (quote === '`' && c === '$' && d === '{') {
+        out += '  '; i += 1;
+        tplStack.push(brace); brace = 1; mode = 'code';
+        continue;
+      }
+      if (c === quote) { out += c; mode = 'code'; continue; }
       out += (c === '\n') ? '\n' : ' ';
       continue;
     }
-    if (c === '/' && d === '/') { mode = '//'; out += '  '; i += 1; continue; }
-    if (c === '/' && d === '*') { mode = '/*'; out += '  '; i += 1; continue; }
-    if (c === "'" || c === '"' || c === '`') { mode = c; out += c; continue; }
+    if (mode === 'regex') {
+      if (c === '\\') { out += '  '; i += 1; continue; }
+      if (c === '[') rxClass = true;
+      else if (c === ']') rxClass = false;
+      else if (c === '/' && !rxClass) { out += c; mode = 'code'; continue; }
+      out += (c === '\n') ? '\n' : ' ';
+      continue;
+    }
+    // code mode
+    if (c === '/' && d === '/') { out += '  '; i += 1; mode = 'line'; continue; }
+    if (c === '/' && d === '*') { out += '  '; i += 1; mode = 'block'; continue; }
+    if (c === '/' && regexOperandPosition()) { out += c; mode = 'regex'; rxClass = false; continue; }
+    if (c === "'" || c === '"' || c === '`') { out += c; mode = 'str'; quote = c; continue; }
+    if (c === '{') { brace += 1; out += c; continue; }
+    if (c === '}') {
+      if (brace > 0) { brace -= 1; out += c; }
+      else if (tplStack.length) { out += ' '; brace = tplStack.pop(); mode = 'str'; }
+      else out += c; // unmatched — snippet boundary, keep as code
+      continue;
+    }
     out += c;
   }
   return out;
@@ -6334,8 +6388,9 @@ function balancedInnerSpanForLint(src, openIdx) {
 }
 
 // Binding names from a destructuring pattern: identifiers followed by `:`
-// are object KEYS (the binding is the value side); identifiers preceded by
-// `.` (covers `a.b` and `...rest`) are not fresh bindings.
+// are object KEYS (the binding is the value side); identifiers preceded by a
+// single `.` are member accesses. 199th re-review F3(a): `...rest` IS a
+// binding — the old blanket `.`-prefix skip dropped it.
 function patternBindingNamesForLint(patternSrc) {
   const names = [];
   const idRe = /[A-Za-z_$][\w$]*/g;
@@ -6346,14 +6401,58 @@ function patternBindingNamesForLint(patternSrc) {
     if (patternSrc[j] === ':') continue;
     let k = im.index - 1;
     while (k >= 0 && /\s/.test(patternSrc[k])) k -= 1;
-    if (k >= 0 && patternSrc[k] === '.') continue;
+    if (k >= 0 && patternSrc[k] === '.') {
+      if (patternSrc[k - 1] === '.' && patternSrc[k - 2] === '.') names.push(im[0]);
+      continue;
+    }
     names.push(im[0]);
   }
   return names;
 }
 
+// 199th re-review F3(b): `const A = 1, B = 2` — comma-separated declarators
+// after the first. Pragmatic scan at bracket depth 0 (callers pass BLANKED
+// src, so strings cannot fake separators) until `;`, a newline without a
+// trailing comma, or an unbalanced closer — a for-header starts inside
+// unbalanced parens, so its `)` stops the scan before loop-body commas can
+// be misread as declarators.
+function collectSiblingDeclaratorsForLint(src, fromIdx, names) {
+  let depth = 0;
+  let i = fromIdx;
+  while (i < src.length) {
+    const ch = src[i];
+    if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+    else if (ch === ')' || ch === ']' || ch === '}') {
+      depth -= 1;
+      if (depth < 0) return;
+    } else if (ch === ';' && depth === 0) return;
+    else if (ch === '\n' && depth === 0) {
+      let k = i - 1;
+      while (k >= 0 && (src[k] === ' ' || src[k] === '\t')) k -= 1;
+      if (src[k] !== ',') return; // ASI statement end (trailing comma continues)
+    } else if (ch === ',' && depth === 0) {
+      const sm = /^\s*([A-Za-z_$][\w$]*)/.exec(src.slice(i + 1));
+      if (sm) { names.push(sm[1]); i += sm[0].length; continue; }
+      const dm = /^\s*([{\[])/.exec(src.slice(i + 1));
+      if (dm) {
+        const openIdx = i + 1 + dm[0].length - 1;
+        const inner = balancedInnerSpanForLint(src, openIdx);
+        if (inner) {
+          for (const n of patternBindingNamesForLint(inner)) names.push(n);
+          i = openIdx + inner.length + 2; // past the closing bracket
+          continue;
+        }
+      }
+      return; // not a declarator list — bail
+    }
+    i += 1;
+  }
+}
+
 // All declaration bindings in src as [{start, names[]}] — simple
-// (`const N`) and destructured (`const {a, c: d} = x`) forms.
+// (`const N`), destructured (`const {a, c: d} = x`), rest (`const {...r}`),
+// and multi-declarator (`const A = 1, B = 2`) forms. src should be BLANKED
+// (strings/comments erased) — 199th re-review F7.
 function collectDeclBindingsForLint(src) {
   const decls = [];
   const kwRe = /\b(?:const|let|var|function)\s*/g;
@@ -6361,12 +6460,32 @@ function collectDeclBindingsForLint(src) {
   while ((m = kwRe.exec(src)) !== null) {
     const rest = src.slice(m.index + m[0].length);
     const simple = /^([A-Za-z_$][\w$]*)/.exec(rest);
-    if (simple) { decls.push({ start: m.index, names: [simple[1]] }); continue; }
+    if (simple) {
+      const names = [simple[1]];
+      collectSiblingDeclaratorsForLint(src, m.index + m[0].length + simple[1].length, names);
+      decls.push({ start: m.index, names: names });
+      continue;
+    }
     if (rest[0] !== '{' && rest[0] !== '[') continue; // anonymous fn / non-binding
     const inner = balancedInnerSpanForLint(src, m.index + m[0].length);
-    if (inner) decls.push({ start: m.index, names: patternBindingNamesForLint(inner) });
+    if (inner) {
+      const names = patternBindingNamesForLint(inner);
+      collectSiblingDeclaratorsForLint(src, m.index + m[0].length + inner.length + 2, names);
+      decls.push({ start: m.index, names: names });
+    }
   }
   return decls;
+}
+
+// 199th re-review F2: an identifier in KEY position (`{ posts: recs }`) is
+// not a reference. Blank `IDENT:` when directly preceded by `{` or `,`
+// (object-literal positions) — ternary consequents (`? a : b`) and
+// statement labels never sit there. Length-preserving so later indices
+// (if any) stay aligned.
+function blankObjectKeyPositionsForLint(blankedBody) {
+  return blankedBody.replace(/([{,]\s*)([A-Za-z_$][\w$]*)\s*:/g, (m, pre, ident) => {
+    return pre + ' '.repeat(ident.length) + ' '.repeat(m.length - pre.length - ident.length);
+  });
 }
 
 // 199th log: $openTab serializes its fn by SOURCE and re-creates it in the
@@ -6399,8 +6518,15 @@ function detectOpenTabClosureRefs(steps) {
     }
     if (!fnSpans.length) continue;
     const inFn = (pos) => fnSpans.some((s) => pos >= s.start && pos < s.end);
+    // 199th re-review F7: collect outer names from the BLANKED script — a
+    // declaration living only in a comment (`// const posts = …`) or inside
+    // a string within a destructuring default (`const {q = 'b c'} = x`) used
+    // to become a phantom outer binding. Span extraction above stays RAW
+    // (it needs real quotes/parens); the blanker is length-preserving, so
+    // the inFn position check still aligns.
+    const blankedScript = blankStringsAndCommentsForLint(script);
     const outerNames = new Set();
-    for (const decl of collectDeclBindingsForLint(script)) {
+    for (const decl of collectDeclBindingsForLint(blankedScript)) {
       if (!inFn(decl.start)) for (const n of decl.names) outerNames.add(n);
     }
     for (const span of fnSpans) {
@@ -6409,7 +6535,7 @@ function detectOpenTabClosureRefs(steps) {
       // 199th review F3(b): blank string-literal/comment regions before BOTH
       // the local-decl scan and the reference test — a name that only ever
       // appears inside a string literal ('N is big') is not a closure ref.
-      const blankedBody = blankStringsAndCommentsForLint(body);
+      const blankedBody = blankObjectKeyPositionsForLint(blankStringsAndCommentsForLint(body));
       const local = new Set();
       for (const decl of collectDeclBindingsForLint(blankedBody)) {
         for (const n of decl.names) local.add(n);
@@ -6432,19 +6558,43 @@ function detectOpenTabClosureRefs(steps) {
 
 // String/quote-aware scan of a $openTab(...) call; returns the source span
 // of the SECOND top-level argument (the fn) plus the call end index.
+// 199th re-review F6: a quote inside a regex literal (`/[^a-z']/`) used to
+// open a phantom string that swallowed the call's closing paren — the span
+// came back null and the whole step silently skipped the closure lint. The
+// regex-operand discriminator mirrors blankStringsAndCommentsForLint.
 function extractOpenTabFnSpan(script, openParenIdx) {
   let depth = 0;
   let arg = 0;
   let start = -1;
   let quote = null;
+  let inRegex = false;
+  let rxClass = false;
+  let prevSig = '';
+  let word = '';
+  const regexOperand = () => {
+    if (word) return word === 'return' || word === 'case' || word === 'typeof';
+    return prevSig === '' || '(,=:[!&|?;{}'.indexOf(prevSig) !== -1;
+  };
   for (let i = openParenIdx; i < script.length; i++) {
     const ch = script[i];
+    if (inRegex) {
+      if (ch === '\\') { i += 1; continue; }
+      if (ch === '[') rxClass = true;
+      else if (ch === ']') rxClass = false;
+      else if (ch === '/' && !rxClass) inRegex = false;
+      continue;
+    }
     if (quote) {
       if (ch === '\\') { i += 1; continue; }
       if (ch === quote) quote = null;
       continue;
     }
-    if (ch === '\'' || ch === '"' || ch === '`') { quote = ch; continue; }
+    if (ch === '/' && regexOperand()) { inRegex = true; rxClass = false; prevSig = ''; word = ''; continue; }
+    if (ch === '\'' || ch === '"' || ch === '`') { quote = ch; prevSig = ch; word = ''; continue; }
+    if (!/\s/.test(ch)) {
+      if (/[A-Za-z0-9_$]/.test(ch)) word += ch;
+      else { prevSig = ch; word = ''; }
+    }
     if (ch === '(' || ch === '[' || ch === '{') depth += 1;
     else if (ch === ')' || ch === ']' || ch === '}') {
       depth -= 1;
