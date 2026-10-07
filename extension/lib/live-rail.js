@@ -25,6 +25,8 @@
     }
     const defaultUrl = typeof d.defaultUrl === 'string' ? d.defaultUrl : '';
     const log = typeof d.log === 'function' ? d.log : function () {};
+    // 199th review F10 seam: injectable clock so the open wall cap is testable.
+    const now = typeof d.now === 'function' ? d.now : Date.now;
 
     let currentTab = null;
     let lockHeld = false;
@@ -117,6 +119,9 @@
         let warning = null;
         let ready = false;
         let retryNote = null;
+        // 199th review F10: wall cap over the WHOLE open — a slow first
+        // attempt must not pin the session for a second full load budget.
+        const openedAt = now();
         for (let attempt = 1; attempt <= 2; attempt++) {
           try {
             tab = await d.createTab(url);
@@ -135,16 +140,33 @@
             catch (e) { ready = false; }
           }
           if (ready) break;
-          try { await d.removeTab(tab.id); } catch (e) { /* idempotent close */ }
-          if (attempt === 1) {
-            retryNote = 'first fresh tab never answered — retried with a second fresh tab';
-            continue;
-          }
-          // Both fresh tabs dead: diagnose WHY before failing.
+          // 199th review F1: probe tab health BEFORE removeTab closes the
+          // tab — after removal the probe can only report "no tab with id",
+          // so the error-page diagnosis never fired in production.
           let health = null;
           if (typeof d.probeTabHealth === 'function') {
             try { health = await d.probeTabHealth(tab.id); } catch (e) { /* best-effort */ }
           }
+          try { await d.removeTab(tab.id); } catch (e) { /* idempotent close */ }
+          if (warning) {
+            // 199th review F5: load timeout AND dead ping means the page
+            // never loaded at all — a second full-budget attempt only
+            // doubles the wait. Fail now, naming the timeout.
+            return {
+              error: 'page.open failed: the page never finished loading within the budget (' + warning +
+                ') — slow or refused load; retry page.open later or change the target.'
+            };
+          }
+          if (attempt === 1) {
+            if (now() - openedAt > 150000) {
+              return { error: 'page.open failed: first attempt consumed the open budget (' +
+                Math.round((now() - openedAt) / 1000) + 's) without a responding tab — not retrying; wait before re-opening or change the target.' };
+            }
+            retryNote = 'first fresh tab never answered — retried with a second fresh tab';
+            continue;
+          }
+          // Both fresh tabs dead: diagnose WHY before failing (health was
+          // captured while the tabs were still alive — see F1 above).
           const cause = (health && health.errorPage)
             ? 'two fresh tabs landed on browser error pages — the site is refusing these loads (often rate-limiting after repeated heavy opens, or a transient network failure); error pages never receive a content script'
             : 'two fresh tabs loaded but the content script never responded — extension injection was blocked or the tabs died';
@@ -154,7 +176,9 @@
         epoch = 1;
         engageWatch(tab.id);
         const out = { tabId: tab.id, url: url, ready: !!ready };
-        if (retryNote) out.tabRetry = retryNote;
+        // 199th review F9: tabRetryNote (string) — verify-runner's report
+        // object {attempts, firstError} is the only thing called tabRetry.
+        if (retryNote) out.tabRetryNote = retryNote;
         // Thirty-sixth log RC-E: ready:true means the content script answers
         // PING — NOT that the page rendered content. The model probed an
         // unhydrated shell for ~8 turns because nothing distinguished

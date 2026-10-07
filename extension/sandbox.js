@@ -111,6 +111,9 @@
   window.$count = (sel) => legacySend('count', sel, []);
   window.$list = (sel) => legacySend('list', sel, []);
 window.$waitForStable = (sel, opts) => legacySend('waitForStable', sel, [opts || {}]);
+  // Legacy bag: no step input exists in this scope, so an $openTab fn here
+  // cannot read __input__ — executed scripts use the per-execution API bag
+  // (makeExecApi) which threads the step input through.
   window.$openTab = (url, fn) => legacySend('openTab', null, [url, fn ? fn.toString() : '']);
   window.$extractList = (containerSel, fieldMap, opts) => legacySend('extractList', containerSel, [fieldMap, opts || {}]);
   // Multi-match variant: each field returns Array of ALL matches (not just first).

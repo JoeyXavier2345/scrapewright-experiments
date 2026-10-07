@@ -10,6 +10,8 @@
 // once with a fresh tab, disclose the retry.
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { createVerifyRunner } = require('../lib/verify-runner');
 
 // 199th review F2: the tests above mock d.orchestrate, so nothing proves the
@@ -45,14 +47,15 @@ function greenOrchestrate(throws) {
 }
 
 function makeRunner(opts) {
-  // opts: { pingOkTabs: Set<number> of tab ids where PING answers, errorPageTabs: Set<number>, throwsLeft: number }
+  // opts: { pingOkTabs: Set<number>, errorPageTabs: Set<number>, throwsLeft: number,
+  //         orchestrate: fn override, signal: abort signal shape }
   const o = opts || {};
   let nextId = 10;
-  const calls = { removeTab: [], logs: [] };
+  const calls = { removeTab: [], logs: [], order: [] };
   const deps = {
-    orchestrate: greenOrchestrate({ count: o.throwsLeft || 0 }),
+    orchestrate: o.orchestrate || greenOrchestrate({ count: o.throwsLeft || 0 }),
     ensureLock: async () => {},
-    getSignal: () => null,
+    getSignal: () => o.signal || null,
     log: (msg, level) => { calls.logs.push(String(msg)); },
     onEvent: () => {},
     createTab: async (url) => { nextId += 1; return { id: nextId, url }; },
@@ -60,6 +63,7 @@ function makeRunner(opts) {
     waitForTabLoad: async () => {},
     sendMessage: async (tabId, msg) => {
       if (msg && msg.type === 'PING') {
+        calls.order.push('ping:' + tabId);
         const okTabs = o.pingOkTabs;
         if (!okTabs || okTabs.has(tabId)) return { pong: true };
         throw new Error('Could not establish connection. Receiving end does not exist.');
@@ -67,6 +71,7 @@ function makeRunner(opts) {
       return { pong: true };
     },
     probeTabHealth: async (tabId) => {
+      calls.order.push('probe:' + tabId);
       if (o.errorPageTabs && o.errorPageTabs.has(tabId)) {
         return { reachable: false, errorPage: true, reason: 'Frame with ID 0 is showing error page' };
       }
@@ -178,5 +183,85 @@ describe('verify dead-tab guard (199th log)', () => {
       'the named error-page cause must escape execute() unswallowed'
     );
     assert.deepEqual(calls.removeTab, [21], 'the orchestrator still cleans up the dead tab');
+  });
+
+  it('F2: retry starts clean — attempt-1 events do not ride the attempt-2 report', async () => {
+    let calls = 0;
+    const orchestrate = async (svc, input, d, opts) => {
+      calls += 1;
+      if (calls === 1) {
+        opts.onEvent({ type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: '{"posts":[]}' });
+        throw new Error('RELAY_FAILED: Could not establish connection. Receiving end does not exist.');
+      }
+      return {
+        finalResult: { posts: [{ a: 1 }, { a: 2 }] },
+        steps: [{ stepId: 's1', stepName: 'one', result: { done: true }, snapshot: null }],
+        pages: [], pagesTruncated: false
+      };
+    };
+    const { runner } = makeRunner({ pingOkTabs: null, orchestrate });
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.report.ok, true, 'attempt 2 goes green, got ' + JSON.stringify(out.report.error));
+    assert.equal(out.report.eventCount, 0, 'attempt-1 events must be dropped on retry, got ' + out.report.eventCount);
+    assert.equal(out.events.length, 0, 'raw event log is attempt-2 only');
+  });
+
+  it('F4: probeTabHealth consulted after the FIRST failed PING (before the 2nd PING attempt)', async () => {
+    const { runner, calls } = makeRunner({ pingOkTabs: new Set([]), errorPageTabs: null });
+    await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    const pings11 = calls.order.map((x, i) => (x === 'ping:11' ? i : -1)).filter((i) => i >= 0);
+    const firstProbe = calls.order.indexOf('probe:11');
+    assert.ok(pings11.length >= 2, 'a dead-but-reachable tab keeps PINGing');
+    assert.ok(firstProbe !== -1 && firstProbe < pings11[1],
+      'health probe must fire before the 2nd PING, order: ' + JSON.stringify(calls.order.slice(0, 5)));
+  });
+
+  it('F4: proven error page breaks the PING loop early — exactly ONE PING before the named error', async () => {
+    const { runner, calls } = makeRunner({ pingOkTabs: new Set([]), errorPageTabs: new Set([11, 12, 13]) });
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /VERIFY_TAB_ERROR_PAGE/);
+    const pingCount = calls.order.filter((x) => x === 'ping:11').length;
+    assert.equal(pingCount, 1, 'no full PING window on a proven error page, got ' + pingCount + ' PINGs');
+  });
+
+  it('F6: an aborted signal kills the fresh-tab retry — TEST_ABORTED surfaces, orchestrate ran exactly once', async () => {
+    let orchestrateCalls = 0;
+    const orchestrate = async () => {
+      orchestrateCalls += 1;
+      throw new Error('RELAY_FAILED: Could not establish connection. Receiving end does not exist.');
+    };
+    const { runner } = makeRunner({ pingOkTabs: null, orchestrate, signal: { aborted: true } });
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /TEST_ABORTED/, 'got: ' + out.report.error.message);
+    assert.equal(out.report.aborted, true);
+    assert.equal(orchestrateCalls, 1, 'no fresh-tab retry after an abort, got ' + orchestrateCalls + ' orchestrates');
+  });
+
+  it('F7: bare CONTENT_SCRIPT_NOT_READY (dead $openTab sub-tab) is retried once with a fresh tab', async () => {
+    let calls = 0;
+    const orchestrate = async (svc, input, d) => {
+      calls += 1;
+      const tab = await d.createTab(svc.targetUrl);
+      await d.waitForTabLoad(tab.id);
+      if (calls === 1) throw new Error('CONTENT_SCRIPT_NOT_READY');
+      return {
+        finalResult: { posts: [{ a: 1 }] },
+        steps: [{ stepId: 's1', stepName: 'one', result: { done: true }, snapshot: null }],
+        pages: [], pagesTruncated: false
+      };
+    };
+    const { runner } = makeRunner({ pingOkTabs: null, orchestrate });
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.report.ok, true, 'retry fires and goes green, got ' + JSON.stringify(out.report.error));
+    assert.ok(out.report.tabRetry, 'retry disclosed');
+    assert.match(out.report.tabRetry.firstError, /CONTENT_SCRIPT_NOT_READY/);
+  });
+
+  it('F7 drift guard: background.js still throws the strings the retry regex keys on', () => {
+    const bg = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+    assert.match(bg, /RELAY_FAILED:/, 'RELAY_FAILED producer must remain in background.js');
+    assert.match(bg, /CONTENT_SCRIPT_NOT_READY/, 'CONTENT_SCRIPT_NOT_READY producer must remain (handleOpenTabExecute dead sub-tab)');
   });
 });

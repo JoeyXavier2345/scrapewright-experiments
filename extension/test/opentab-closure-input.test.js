@@ -68,6 +68,33 @@ describe('detectOpenTabClosureRefs (199th log lint)', () => {
     const hits = WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: shadow }]);
     assert.deepEqual(hits, []);
   });
+
+  it('F3a: destructured outer declarations are collected — {keyword} referenced in the fn is flagged', () => {
+    const s = "const {keyword} = __input__;\nreturn await $openTab(u, async()=>{ return {k: keyword}; });";
+    const hits = WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]);
+    assert.equal(hits.length, 1);
+    assert.ok(hits[0].names.includes('keyword'), 'keyword flagged, got ' + JSON.stringify(hits[0].names));
+  });
+
+  it('F3a: renamed destructured bindings (c: d) contribute d, not the key c', () => {
+    const s = "const {c: d} = __input__;\nreturn await $openTab(u, async()=>{ return {v: d}; });";
+    const hits = WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]);
+    assert.equal(hits.length, 1);
+    assert.ok(hits[0].names.includes('d'), 'binding d flagged, got ' + JSON.stringify(hits[0].names));
+    assert.ok(!hits[0].names.includes('c'), 'c is a key, not a binding');
+  });
+
+  it('F3a: destructured locals INSIDE the fn shadow outer names (not flagged)', () => {
+    const s = "const kw='x'; return await $openTab(u, async()=>{ const {kw} = __input__; return {k: kw}; });";
+    const hits = WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]);
+    assert.deepEqual(hits, []);
+  });
+
+  it('F3b: a name appearing only inside a string literal in the fn body is not a ref', () => {
+    const s = "const N=6; return await $openTab(u, `const label = 'N is big'; return label;`);";
+    const hits = WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: s }]);
+    assert.deepEqual(hits, []);
+  });
 });
 
 // 199th review F3: the unit tests above pin WU.detectOpenTabClosureRefs, but

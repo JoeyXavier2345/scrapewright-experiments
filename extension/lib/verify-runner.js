@@ -586,10 +586,22 @@
       // verdicts — one fresh-tab retry mirrors the fifty-sixth-log tab-create
       // precedent. A run that produced data is never retried (side-effect
       // safety); script-shape errors are not tab-state errors.
-      const TAB_STATE_RETRY_RE = /VERIFY_TAB_ERROR_PAGE|VERIFY_TAB_CONTENT_SCRIPT_NOT_READY|RELAY_FAILED/;
+      // 199th review F7: bare CONTENT_SCRIPT_NOT_READY is thrown by
+      // background.js handleOpenTabExecute for a dead $openTab SUB-tab — one
+      // bounded retry with a fresh sub-tab is safe.
+      const TAB_STATE_RETRY_RE = /VERIFY_TAB_ERROR_PAGE|VERIFY_TAB_CONTENT_SCRIPT_NOT_READY|CONTENT_SCRIPT_NOT_READY|RELAY_FAILED/;
       let tabRetry = null;
       for (let tabAttempt = 1; tabAttempt <= 2; tabAttempt++) {
         orchestrationError = null; // a successful retry must not inherit attempt 1's error
+        if (tabAttempt > 1) {
+          // 199th review F2: attempt 2 starts clean — attempt 1's events,
+          // zero-counter streaks and abort state must not poison the retry's
+          // report nor kill its executeScript calls.
+          events.length = 0;
+          zeroCounterStreaks.clear();
+          zeroCounterBreaker = null;
+          internalAbort.aborted = false;
+        }
         try {
           result = await d.orchestrate(service, input, {
           createTab: async (url) => {
@@ -646,6 +658,17 @@
                 const r = await d.sendMessage(tabId, { type: 'PING' });
                 if (r && r.pong) { ready = true; break; }
               } catch (e) { /* not ready yet */ }
+              if (i === 0 && typeof d.probeTabHealth === 'function') {
+                // 199th review F4: an error page NEVER becomes ready — probe
+                // once after the first failed PING and skip the remaining
+                // ~5.5s sleep window instead of PINGing a dead page. The
+                // post-loop probe still runs for the final diagnosis (a tab
+                // can die mid-window).
+                try {
+                  const h0 = await d.probeTabHealth(tabId);
+                  if (h0 && h0.errorPage) break;
+                } catch (e) { /* best-effort */ }
+              }
               await new Promise((res) => setTimeout(res, pingIntervalMs));
             }
             if (ready) return;
@@ -661,8 +684,8 @@
               try { health = await d.probeTabHealth(tabId); } catch (e) { /* best-effort */ }
             }
             const cause = (health && health.errorPage)
-              ? 'VERIFY_TAB_ERROR_PAGE: the fresh verify tab landed on a browser error page — the site refused this load (often rate-limiting after repeated heavy loads, or a transient network failure); error pages never receive a content script'
-              : 'VERIFY_TAB_CONTENT_SCRIPT_NOT_READY: the page is reachable but the content script never answered PING within the readiness window — extension injection was blocked or the tab died';
+              ? 'VERIFY_TAB_ERROR_PAGE: the fresh verify tab landed on a browser error page — the site refused this load (often rate-limiting after repeated heavy loads, or a transient network failure); error pages never receive a content script; a fresh-tab retry is automatic — if both attempts fail, wait before re-verifying (the site is likely refusing rapid repeated loads)'
+              : 'VERIFY_TAB_CONTENT_SCRIPT_NOT_READY: the page is reachable but the content script never answered PING within the readiness window — extension injection was blocked or the tab died; a fresh-tab retry is automatic — if both attempts fail, wait before re-verifying (the site is likely refusing rapid repeated loads)';
             throw new Error(cause);
           },
           resetDomActivity: async (tabId) => {
@@ -726,6 +749,12 @@
         } finally {
           if (tab) await d.removeTab(tab.id).catch(() => {});
           tab = null; // closed; a retry attempt creates its own fresh tab
+        }
+        // 199th review F6: an aborted session must not spend a fresh-tab
+        // retry — surface the abort semantics instead of a second orchestrate.
+        if (signalAborted()) {
+          orchestrationError = new Error('TEST_ABORTED');
+          break;
         }
         const retriable = !result && orchestrationError &&
           TAB_STATE_RETRY_RE.test(String((orchestrationError && orchestrationError.message) || orchestrationError));

@@ -6309,6 +6309,66 @@ function detectUnawaitedDollarCalls(script) {
   return hits;
 }
 
+// 199th review F3(a): destructured declarations (`const {a, b = 1, c: d} = x`,
+// `const [e] = y`) bind the PATTERN identifiers, not a single name — the old
+// `const NAME =`-only collector missed them, so `const {keyword} = __input__`
+// outside $openTab escaped the lint while the fn referenced it.
+function balancedInnerSpanForLint(src, openIdx) {
+  let depth = 0;
+  let quote = null;
+  for (let i = openIdx; i < src.length; i++) {
+    const ch = src[i];
+    if (quote) {
+      if (ch === '\\') { i += 1; continue; }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '\'' || ch === '"' || ch === '`') { quote = ch; continue; }
+    if (ch === '{' || ch === '[' || ch === '(') depth += 1;
+    else if (ch === '}' || ch === ']' || ch === ')') {
+      depth -= 1;
+      if (depth === 0) return src.slice(openIdx + 1, i);
+    }
+  }
+  return null;
+}
+
+// Binding names from a destructuring pattern: identifiers followed by `:`
+// are object KEYS (the binding is the value side); identifiers preceded by
+// `.` (covers `a.b` and `...rest`) are not fresh bindings.
+function patternBindingNamesForLint(patternSrc) {
+  const names = [];
+  const idRe = /[A-Za-z_$][\w$]*/g;
+  let im;
+  while ((im = idRe.exec(patternSrc)) !== null) {
+    let j = im.index + im[0].length;
+    while (j < patternSrc.length && /\s/.test(patternSrc[j])) j += 1;
+    if (patternSrc[j] === ':') continue;
+    let k = im.index - 1;
+    while (k >= 0 && /\s/.test(patternSrc[k])) k -= 1;
+    if (k >= 0 && patternSrc[k] === '.') continue;
+    names.push(im[0]);
+  }
+  return names;
+}
+
+// All declaration bindings in src as [{start, names[]}] — simple
+// (`const N`) and destructured (`const {a, c: d} = x`) forms.
+function collectDeclBindingsForLint(src) {
+  const decls = [];
+  const kwRe = /\b(?:const|let|var|function)\s*/g;
+  let m;
+  while ((m = kwRe.exec(src)) !== null) {
+    const rest = src.slice(m.index + m[0].length);
+    const simple = /^([A-Za-z_$][\w$]*)/.exec(rest);
+    if (simple) { decls.push({ start: m.index, names: [simple[1]] }); continue; }
+    if (rest[0] !== '{' && rest[0] !== '[') continue; // anonymous fn / non-binding
+    const inner = balancedInnerSpanForLint(src, m.index + m[0].length);
+    if (inner) decls.push({ start: m.index, names: patternBindingNamesForLint(inner) });
+  }
+  return decls;
+}
+
 // 199th log: $openTab serializes its fn by SOURCE and re-creates it in the
 // sub-tab sandbox — outer variables are NOT visible there (a live session
 // died "N is not defined" twice because the fn referenced the step's outer
@@ -6339,25 +6399,27 @@ function detectOpenTabClosureRefs(steps) {
     }
     if (!fnSpans.length) continue;
     const inFn = (pos) => fnSpans.some((s) => pos >= s.start && pos < s.end);
-    const declRe = /\b(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)/g;
     const outerNames = new Set();
-    let dm;
-    while ((dm = declRe.exec(script)) !== null) {
-      if (!inFn(dm.index + dm[0].length)) outerNames.add(dm[1]);
+    for (const decl of collectDeclBindingsForLint(script)) {
+      if (!inFn(decl.start)) for (const n of decl.names) outerNames.add(n);
     }
     for (const span of fnSpans) {
       const fnSrc = script.slice(span.start, span.end);
       const body = unwrapOpenTabStringBody(fnSrc);
+      // 199th review F3(b): blank string-literal/comment regions before BOTH
+      // the local-decl scan and the reference test — a name that only ever
+      // appears inside a string literal ('N is big') is not a closure ref.
+      const blankedBody = blankStringsAndCommentsForLint(body);
       const local = new Set();
-      const localDeclRe = /\b(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)/g;
-      let lm;
-      while ((lm = localDeclRe.exec(body)) !== null) local.add(lm[1]);
+      for (const decl of collectDeclBindingsForLint(blankedBody)) {
+        for (const n of decl.names) local.add(n);
+      }
       for (const param of openTabFnParamNames(fnSrc)) local.add(param);
       const refs = [];
       for (const name of outerNames) {
         if (local.has(name)) continue;
         const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        if (new RegExp('(?<![A-Za-z0-9_$.])' + esc + '\\b').test(body)) refs.push(name);
+        if (new RegExp('(?<![A-Za-z0-9_$.])' + esc + '\\b').test(blankedBody)) refs.push(name);
       }
       if (refs.length) {
         hits.push({ stepId: (st && (st.id != null ? st.id : st.name)) || null, names: refs });

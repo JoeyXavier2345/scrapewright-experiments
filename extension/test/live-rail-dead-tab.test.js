@@ -11,14 +11,21 @@ const assert = require('node:assert/strict');
 const LiveRail = require('../lib/live-rail');
 
 function makeRail(opts) {
-  // opts: { pingOkTabs: Set, errorPageTabs: Set }
+  // opts: { pingOkTabs: Set, errorPageTabs: Set, loadFailTabs: Set,
+  //         nowFn: () => ms, loadHook: (tabId) => void }
   const o = opts || {};
-  const calls = { createTab: [], removeTab: [] };
+  const calls = { createTab: [], removeTab: [], order: [] };
+  const removed = new Set();
   let nextId = 10;
   const deps = {
     createTab: async (url) => { nextId += 1; calls.createTab.push(nextId); return { id: nextId, url }; },
-    removeTab: async (id) => { calls.removeTab.push(id); },
-    waitForTabLoad: async () => {},
+    removeTab: async (id) => { calls.removeTab.push(id); removed.add(id); },
+    waitForTabLoad: async (tabId) => {
+      if (o.loadHook) o.loadHook(tabId);
+      if (o.loadFailTabs && o.loadFailTabs.has(tabId)) {
+        throw new Error('Page load timeout (120s): readyState=loading, bodyChars=0');
+      }
+    },
     execute: async () => ({ result: 'x', selectorDiagnostics: [] }),
     acquireLock: async () => {},
     releaseLock: async () => {},
@@ -26,13 +33,19 @@ function makeRail(opts) {
       if (!o.pingOkTabs) return true;
       return o.pingOkTabs.has(tabId);
     },
+    // 199th review F1: model tab liveness — a removed tab can no longer be
+    // probed, so probeTabHealth must answer "no tab with id" for it (this is
+    // exactly what the old probe-after-removeTab ordering hit in production).
     probeTabHealth: async (tabId) => {
+      calls.order.push('probe:' + tabId);
+      if (removed.has(tabId)) return { reachable: false, errorPage: false, reason: 'no tab with id ' + tabId };
       if (o.errorPageTabs && o.errorPageTabs.has(tabId)) {
         return { reachable: false, errorPage: true, reason: 'Frame with ID 0 is showing error page' };
       }
       return { reachable: true, errorPage: false, readyState: 'complete', bodyChars: 4200 };
     }
   };
+  if (o.nowFn) deps.now = o.nowFn;
   const rail = LiveRail.createLiveRail(deps);
   return { rail, calls, deps };
 }
@@ -43,15 +56,15 @@ describe('live-rail dead-tab retry (199th log)', () => {
     const r = await rail.pageOpen({ url: 'https://example.com/search' });
     assert.equal(r.ready, true, 'second tab answers: ' + JSON.stringify(r));
     assert.equal(r.tabId, 12);
-    assert.ok(r.tabRetry, 'retry disclosed on the receipt');
-    assert.match(String(r.tabRetry), /fresh tab/i);
+    assert.ok(r.tabRetryNote, 'retry disclosed on the receipt');
+    assert.match(String(r.tabRetryNote), /fresh tab/i);
     assert.ok(calls.removeTab.includes(11), 'dead first tab closed, got ' + JSON.stringify(calls.removeTab));
     const st = await rail.pageState();
     assert.equal(st.open, true);
     assert.equal(st.tabId, 12);
   });
 
-  it('TWO dead fresh tabs → honest error naming the error page, rail left with NO open page (not a zombie currentTab)', async () => {
+  it('TWO dead fresh tabs (both error pages) → error names the error-page cause even though the tabs are already removed', async () => {
     const { rail, calls } = makeRail({ pingOkTabs: new Set(), errorPageTabs: new Set([11, 12, 13]) });
     const r = await rail.pageOpen({ url: 'https://example.com/search' });
     assert.ok(r.error, 'double-dead open must be an error receipt');
@@ -73,7 +86,60 @@ describe('live-rail dead-tab retry (199th log)', () => {
     const { rail, calls } = makeRail({ pingOkTabs: null });
     const r = await rail.pageOpen({ url: 'https://example.com/search' });
     assert.equal(r.ready, true);
-    assert.equal(r.tabRetry, undefined);
+    assert.equal(r.tabRetryNote, undefined);
     assert.deepEqual(calls.createTab, [11]);
+  });
+
+  it('F1: probeTabHealth is consulted BEFORE removeTab closes the dead tab', async () => {
+    // Interleaved order log: record every probe and every remove in ONE
+    // sequence so the ordering assertion is direct.
+    const seq = [];
+    const o = { pingOkTabs: new Set(), errorPageTabs: new Set([11, 12, 13]) };
+    const base = makeRail(o);
+    base.deps.probeTabHealth = async (tabId) => {
+      seq.push('probe:' + tabId);
+      return (o.errorPageTabs.has(tabId))
+        ? { reachable: false, errorPage: true, reason: 'error page' }
+        : { reachable: true, errorPage: false };
+    };
+    base.deps.removeTab = async (id) => { seq.push('remove:' + id); base.calls.removeTab.push(id); };
+    const r = await base.rail.pageOpen({ url: 'https://example.com/search' });
+    assert.ok(r.error);
+    assert.match(r.error, /error page/i);
+    const probeIdx = seq.indexOf('probe:11');
+    const removeIdx = seq.indexOf('remove:11');
+    assert.ok(probeIdx !== -1 && removeIdx !== -1, 'both recorded: ' + JSON.stringify(seq));
+    assert.ok(probeIdx < removeIdx, 'health probe must precede tab removal, got ' + JSON.stringify(seq));
+  });
+
+  it('F5: load timeout + dead ping → NO second createTab; error names the timeout', async () => {
+    const { rail, calls } = makeRail({ pingOkTabs: new Set(), loadFailTabs: new Set([11, 12, 13]) });
+    const r = await rail.pageOpen({ url: 'https://example.com/search' });
+    assert.ok(r.error, 'expected error receipt, got ' + JSON.stringify(r));
+    assert.match(r.error, /load timeout/i, 'error carries the load-timeout warning: ' + r.error);
+    assert.match(r.error, /never finished loading/i);
+    assert.equal(calls.createTab.length, 1, 'no second 120s budget for a page that never loaded');
+  });
+
+  it('F5: load timeout + ping ALIVE → old behavior preserved (tab kept, warning on the receipt)', async () => {
+    const { rail, calls } = makeRail({ pingOkTabs: new Set([11]), loadFailTabs: new Set([11]) });
+    const r = await rail.pageOpen({ url: 'https://example.com/search' });
+    assert.equal(r.ready, true, 'ready path unchanged: ' + JSON.stringify(r));
+    assert.match(String(r.warning), /load timeout/i);
+    assert.deepEqual(calls.createTab, [11]);
+    assert.deepEqual(calls.removeTab, [], 'the loaded tab is kept');
+  });
+
+  it('F10: a first attempt that consumed the open budget (>150s) gets NO second attempt', async () => {
+    let clock = 1000000;
+    const { rail, calls } = makeRail({
+      pingOkTabs: new Set(),
+      nowFn: () => clock,
+      loadHook: (tabId) => { if (tabId === 11) clock += 151000; }
+    });
+    const r = await rail.pageOpen({ url: 'https://example.com/search' });
+    assert.ok(r.error, 'budget-capped open must be an error receipt');
+    assert.match(r.error, /open budget/i, r.error);
+    assert.equal(calls.createTab.length, 1, 'no second attempt past the cap, got ' + JSON.stringify(calls.createTab));
   });
 });
