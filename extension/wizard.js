@@ -2310,6 +2310,27 @@ function makeWizardRail() {
       }
       return false;
     },
+    // 199th log: error-page discrimination for the research rail (see the
+    // probeTabHealth comment on getWizardRunner — chrome.scripting rejects
+    // with "showing error page" exactly there).
+    probeTabHealth: async (tabId) => {
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tabId },
+          func: () => ({
+            readyState: document.readyState,
+            bodyChars: (document.body && document.body.textContent || '').length
+          })
+        });
+        const p = results && results[0] && results[0].result;
+        return p
+          ? { reachable: true, errorPage: false, readyState: p.readyState, bodyChars: p.bodyChars }
+          : { reachable: false, errorPage: false };
+      } catch (e) {
+        const msg = String((e && e.message) || e);
+        return { reachable: false, errorPage: /error page/i.test(msg), reason: msg };
+      }
+    },
     execute: async (tabId, snippet, opts) => {
       const executor = new OffscreenExecutor(tabId);
       // Sixty-ninth review F1: the hardcoded 30s made probe.snippet's

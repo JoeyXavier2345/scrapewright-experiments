@@ -2038,7 +2038,16 @@
         'return { settled: st === true, chars: chars, textHead: textHead };';
       const env = await d.rail.executeDsl(snippet);
       if (env && typeof env === 'object' && typeof env.error === 'string') {
-        return { error: env.error + ' — settle needs an open page; call page.open first' };
+        // 199th log: "settle needs an open page; call page.open first" was
+        // appended even when a page WAS open but its tab was dead (error
+        // page / content script never injected) — misleading guidance that
+        // sent the model in circles. Discriminate on the rail's own state.
+        let openState = null;
+        try { openState = (typeof d.rail.pageState === 'function') ? await d.rail.pageState() : null; } catch (e) { /* best-effort */ }
+        const guidance = (openState && openState.open)
+          ? 'the open page (tab ' + openState.tabId + ') is not answering — its tab likely landed on an error page or lost its content script; call page.open again for a fresh tab'
+          : 'settle needs an open page; call page.open first';
+        return { error: env.error + ' — ' + guidance };
       }
       let r = null;
       if (env && typeof env === 'object' && !Array.isArray(env) && env.result && typeof env.result === 'object') r = env.result;

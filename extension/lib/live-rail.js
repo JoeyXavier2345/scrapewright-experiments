@@ -106,27 +106,55 @@
       opening = (async () => {
         await closeTab();
         await ensureLock();
+        // 199th log: a fresh tab can land on a browser ERROR PAGE (site
+        // refusing repeated heavy loads / transient network failure) — error
+        // pages never receive a content script, and the old flow kept the
+        // dead tab as the rail tab, so the next settle died RELAY_FAILED with
+        // misleading "call page.open first" guidance. Retry once with a
+        // second fresh tab; if both are dead, fail honestly and leave NO
+        // open page instead of a zombie currentTab.
         let tab = null;
-        try {
-          tab = await d.createTab(url);
-        } catch (e) {
-          return { error: 'tab creation failed: ' + String((e && e.message) || e) };
+        let warning = null;
+        let ready = false;
+        let retryNote = null;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            tab = await d.createTab(url);
+          } catch (e) {
+            return { error: 'tab creation failed: ' + String((e && e.message) || e) };
+          }
+          warning = null;
+          try {
+            await d.waitForTabLoad(tab.id);
+          } catch (e) {
+            warning = 'load timeout: ' + String((e && e.message) || e);
+          }
+          ready = true;
+          if (typeof d.pingReady === 'function') {
+            try { ready = await d.pingReady(tab.id); }
+            catch (e) { ready = false; }
+          }
+          if (ready) break;
+          try { await d.removeTab(tab.id); } catch (e) { /* idempotent close */ }
+          if (attempt === 1) {
+            retryNote = 'first fresh tab never answered — retried with a second fresh tab';
+            continue;
+          }
+          // Both fresh tabs dead: diagnose WHY before failing.
+          let health = null;
+          if (typeof d.probeTabHealth === 'function') {
+            try { health = await d.probeTabHealth(tab.id); } catch (e) { /* best-effort */ }
+          }
+          const cause = (health && health.errorPage)
+            ? 'two fresh tabs landed on browser error pages — the site is refusing these loads (often rate-limiting after repeated heavy opens, or a transient network failure); error pages never receive a content script'
+            : 'two fresh tabs loaded but the content script never responded — extension injection was blocked or the tabs died';
+          return { error: 'page.open failed: ' + cause + '. Wait before re-opening or change the target.' };
         }
         currentTab = { id: tab.id, url: url };
-        let warning = null;
-        try {
-          await d.waitForTabLoad(tab.id);
-        } catch (e) {
-          warning = 'load timeout: ' + String((e && e.message) || e);
-        }
         epoch = 1;
         engageWatch(tab.id);
-        let ready = true;
-        if (typeof d.pingReady === 'function') {
-          try { ready = await d.pingReady(tab.id); }
-          catch (e) { ready = false; }
-        }
         const out = { tabId: tab.id, url: url, ready: !!ready };
+        if (retryNote) out.tabRetry = retryNote;
         // Thirty-sixth log RC-E: ready:true means the content script answers
         // PING — NOT that the page rendered content. The model probed an
         // unhydrated shell for ~8 turns because nothing distinguished
@@ -144,7 +172,6 @@
         }
         if (warning) out.warning = warning;
         else if (templateWarn) out.warning = templateWarn;
-        else if (!ready) out.warning = 'content script not responding yet';
         else if (typeof out.bodyTextChars === 'number' && out.bodyTextChars < 200) {
           out.warning = 'body text is only ' + out.bodyTextChars + ' chars — the page is likely an UNHYDRATED SHELL (splash/loading markup; client JS has not rendered content yet). Call page.settle (or re-open and re-check) before probing and concluding the page is empty';
         }

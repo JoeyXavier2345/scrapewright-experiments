@@ -708,6 +708,35 @@ describe('io.confirm — early I/O contract gate', () => {
     assert.ok(snippets[1].includes('$waitForStable("#main"'), 'custom sel forwarded');
   });
 
+  it('page.settle error while a page IS open names the dead tab, not "call page.open first" (199th log)', async () => {
+    const base = makeDeps();
+    const { deps } = makeDeps({
+      rail: Object.assign(base.deps.rail, {
+        executeDsl: async () => ({ error: 'RELAY_FAILED: Could not establish connection. Receiving end does not exist.' }),
+        pageState: async () => ({ open: true, tabId: 1761024737, url: 'https://example.com/search' })
+      })
+    });
+    const t = createSessionTools(deps);
+    const r = await t.tools['page.settle']({});
+    assert.match(r.error, /RELAY_FAILED/);
+    assert.match(r.error, /1761024737/, 'names the dead tab');
+    assert.match(r.error, /error page|content script/i);
+    assert.doesNotMatch(r.error, /call page\.open first/, 'the misleading no-page guidance must not fire when a page IS open');
+  });
+
+  it('page.settle error with NO page open keeps the open-a-page guidance', async () => {
+    const base = makeDeps();
+    const { deps } = makeDeps({
+      rail: Object.assign(base.deps.rail, {
+        executeDsl: async () => ({ error: 'no page open — call page.open first' }),
+        pageState: async () => ({ open: false, hint: 'no page open' })
+      })
+    });
+    const t = createSessionTools(deps);
+    const r = await t.tools['page.settle']({});
+    assert.match(r.error, /settle needs an open page; call page\.open first/);
+  });
+
   it('page.settle unsettled result carries shell guidance, not silence', async () => {
     const base = makeDeps();
     const { deps } = makeDeps({
