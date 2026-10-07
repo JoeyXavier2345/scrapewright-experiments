@@ -20,8 +20,19 @@
 // hours is not.
 
 const JOURNAL_STORAGE_KEY = 'sessionJournalRolling';
-const DEFAULT_MAX_LINES = 40000;
-const DEFAULT_MAX_CHARS = 40 * 1024 * 1024;
+// 201st round (user: "session log 是不是限制了条数还是长度？"): the journal
+// sat AT the 40MB/40k cap and line-level trimming silently fragmented the
+// oldest sessions — ~1.1k lines of 10-04 history vanished from an export
+// with one orphaned "12 oldest line(s) dropped" marker the only trace
+// (earlier markers had themselves been trimmed). The manifest carries
+// unlimitedStorage, so the caps now hold whole-session histories for
+// months; trimming is SESSION-GRANULAR (drop the oldest whole session,
+// named in the marker) and only falls back to line-level when a single
+// session alone exceeds the cap.
+const DEFAULT_MAX_LINES = 200000;
+const DEFAULT_MAX_CHARS = 150 * 1024 * 1024;
+const BIG_JOURNAL_FLUSH_DEBOUNCE_MS = 30000;
+const BIG_JOURNAL_THRESHOLD_CHARS = 20 * 1024 * 1024;
 
 function createSessionJournal(backend, opts) {
   const o = opts || {};
@@ -29,34 +40,87 @@ function createSessionJournal(backend, opts) {
   const maxChars = typeof o.maxChars === 'number' ? o.maxChars : DEFAULT_MAX_CHARS;
   let lines = null; // null = not yet loaded
   let flushTimer = null;
+  // Running totals — recomputed only on wholesale hydration; append/shift
+  // keep them current so trimming never rescans the whole buffer (the old
+  // totalChars() walk made every append O(n) — quadratic across a session).
+  let charTotal = 0;
 
-  function totalChars(arr) {
+  function entryChars(e) {
+    return (e.text || '').length + (e.label || '').length;
+  }
+  function recomputeTotals(arr) {
     let n = 0;
-    for (let i = 0; i < arr.length; i++) n += (arr[i].text || '').length + (arr[i].label || '').length;
-    return n;
+    for (let i = 0; i < arr.length; i++) n += entryChars(arr[i]);
+    charTotal = n;
+  }
+  function isOverCap() {
+    return lines.length > maxLines || charTotal > maxChars;
+  }
+  function isSessionStart(e) {
+    return e && e.kind === 'marker' && String(e.label || '').indexOf('=== SESSION ') === 0;
   }
 
   function trimInPlace() {
-    let dropped = 0;
-    while ((lines.length > maxLines || totalChars(lines) > maxChars) && lines.length > 1) {
-      lines.shift();
-      dropped += 1;
+    // Session-granular pass: while over cap AND at least two sessions are
+    // present, drop everything before the SECOND-oldest session start (the
+    // oldest session whole, plus any pre-session noise).
+    let droppedSessions = 0;
+    let droppedLines = 0;
+    let lastNameDropped = '';
+    for (;;) {
+      if (!isOverCap()) break;
+      let secondIdx = -1;
+      let firstIdx = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (!isSessionStart(lines[i])) continue;
+        if (firstIdx === -1) { firstIdx = i; continue; }
+        secondIdx = i;
+        break;
+      }
+      // Need a session we can drop whole AND a surviving session after it.
+      if (secondIdx === -1 || secondIdx <= firstIdx) break;
+      lastNameDropped = String(lines[firstIdx].label || '').replace(/^=== SESSION (\S+) START.*===$/, '\$1') || '(unnamed)';
+      for (let i = 0; i < secondIdx; i++) {
+        charTotal -= entryChars(lines[i]);
+        droppedLines += 1;
+      }
+      lines.splice(0, secondIdx);
+      droppedSessions += 1;
     }
-    if (dropped > 0) {
-      lines.unshift({ t: Date.now(), kind: 'marker', label: '[journal trimmed: ' + dropped + ' oldest line(s) dropped]', text: '' });
+    // Line-level fallback: a single session alone exceeds the cap.
+    let lineDropped = 0;
+    while (isOverCap() && lines.length > 1) {
+      charTotal -= entryChars(lines[0]);
+      lines.shift();
+      lineDropped += 1;
+    }
+    if (droppedSessions > 0) {
+      lines.unshift({ t: Date.now(), kind: 'marker',
+        label: '[journal trimmed: dropped ' + droppedSessions + ' whole session(s) (' + droppedLines + ' line(s), oldest ' + (lastNameDropped || '(unnamed)') + ') — session-granular, nothing fragmented]',
+        text: '' });
+    } else if (lineDropped > 0) {
+      lines.unshift({ t: Date.now(), kind: 'marker',
+        label: '[journal trimmed: ' + lineDropped + ' oldest line(s) dropped — a single session exceeds the cap]',
+        text: '' });
     }
   }
 
   function ensureLoaded() {
-    if (lines === null) lines = [];
+    if (lines === null) { lines = []; charTotal = 0; }
   }
 
   function scheduleFlush() {
     if (flushTimer !== null) return;
+    // Adaptive debounce: a 100MB+ array serialized every 2s would dominate
+    // the page; big journals flush on a slower cadence (losing the last
+    // window to a hard reload stays acceptable — losing hours does not).
+    const debounce = (o.flushDebounceMs != null)
+      ? o.flushDebounceMs
+      : (charTotal > BIG_JOURNAL_THRESHOLD_CHARS ? BIG_JOURNAL_FLUSH_DEBOUNCE_MS : 2000);
     flushTimer = setTimeout(function () {
       flushTimer = null;
       flush();
-    }, o.flushDebounceMs || 2000);
+    }, debounce);
   }
 
   function flush() {
@@ -66,11 +130,15 @@ function createSessionJournal(backend, opts) {
 
   return {
     __hydrate: function (stored) {
-      if (Array.isArray(stored) && (lines === null || stored.length >= lines.length)) lines = stored.slice();
+      if (Array.isArray(stored) && (lines === null || stored.length >= lines.length)) {
+        lines = stored.slice();
+        recomputeTotals(lines);
+      }
     },
     append: function (kind, label, text) {
       ensureLoaded();
       lines.push({ t: Date.now(), kind: kind || 'mirror', label: String(label || ''), text: String(text == null ? '' : text) });
+      charTotal += entryChars(lines[lines.length - 1]);
       trimInPlace();
       scheduleFlush();
     },
@@ -79,9 +147,12 @@ function createSessionJournal(backend, opts) {
       flush();
     },
     all: function () {
-      if (lines === null) lines = [];
+      if (lines === null) { lines = []; charTotal = 0; }
       if (backend) return backend.load().then(function (stored) {
-        if (Array.isArray(stored) && stored.length >= lines.length) lines = stored;
+        if (Array.isArray(stored) && stored.length >= lines.length) {
+          lines = stored;
+          recomputeTotals(lines);
+        }
         return lines.slice();
       }).catch(function () { return lines.slice(); });
       return Promise.resolve(lines.slice());

@@ -80,6 +80,61 @@ describe('158th A — session journal unit', () => {
     assert.match(marker.label, /sess-abc/);
     assert.match(marker.label, /resume/i, 'the resumed flag rides the marker');
   });
+
+  // 201st round (user question: "session log 是不是限制了条数还是长度？"):
+  // the journal sat AT its 40MB cap and line-level trimming silently
+  // fragmented the oldest sessions (~1.1k lines of 10-04 history gone,
+  // a single orphaned "12 oldest line(s) dropped" marker the only trace —
+  // earlier markers had themselves been trimmed). Trimming must be
+  // SESSION-GRANULAR: drop the oldest WHOLE session with a marker naming
+  // it, never fragment a session silently.
+  it('over-cap drops the OLDEST WHOLE SESSION with a marker naming it — sessions are never fragmented', async () => {
+    const j = createSessionJournal(memBackend(), { maxLines: 7, maxChars: 100000 });
+    j.markSessionStart('rs-old', false);
+    for (let i = 0; i < 5; i++) j.append('mirror', 'old-' + i, 'x');
+    j.markSessionStart('rs-new', false);
+    for (let i = 0; i < 5; i++) j.append('mirror', 'new-' + i, 'y');
+    await j.flush();
+    const all = await j.all();
+    const labels = all.map((e) => String(e.label));
+    assert.ok(!labels.some((l) => /=== SESSION rs-old/.test(l)), 'the over-cap oldest session start marker is gone');
+    assert.ok(labels.some((l) => /=== SESSION rs-new/.test(l)), 'the newest session start survives whole');
+    assert.ok(!labels.some((l) => /^old-\d$/.test(l)), 'no orphaned lines of the dropped session remain');
+    assert.ok(labels.some((l) => /journal trimmed/i.test(l) && /rs-old/.test(l)), 'the trim marker NAMES the dropped session');
+    assert.ok(labels.some((l) => /^new-4$/.test(l)), 'newest payload survives');
+  });
+
+  it('a SINGLE session larger than the cap falls back to line-level trim inside it (still disclosed)', async () => {
+    const j = createSessionJournal(memBackend(), { maxLines: 4, maxChars: 100000 });
+    j.markSessionStart('rs-solo', false);
+    for (let i = 0; i < 9; i++) j.append('mirror', 's-' + i, 'x');
+    const all = await j.all();
+    const payload = all.filter((e) => e.kind !== 'marker');
+    assert.ok(payload.length <= 4, 'cap holds');
+    assert.ok(all.some((e) => /journal trimmed/i.test(String(e.label))), 'line-level fallback still disclosed');
+    assert.match(all[all.length - 1].label, /s-8/, 'newest survives');
+  });
+
+  it('char-cap triggers the same session-granular trim (running total, no per-append full scan)', async () => {
+    const j = createSessionJournal(memBackend(), { maxLines: 100000, maxChars: 45 });
+    j.markSessionStart('rs-a', false);
+    j.append('mirror', 'a-1', 'xxxxx'); // session A alone: 26+8 = 34 <= 45 (fits while alone)
+    j.markSessionStart('rs-b', false);
+    j.append('mirror', 'b-1', 'yyyyy'); // combined > 45 → drop session A WHOLE
+    await j.flush();
+    const all = await j.all();
+    const labels = all.map((e) => String(e.label));
+    assert.ok(!labels.some((l) => /=== SESSION rs-a/.test(l)), 'char over-cap drops the oldest whole session');
+    assert.ok(labels.some((l) => /=== SESSION rs-b/.test(l)), 'newest session survives');
+    assert.ok(labels.some((l) => /journal trimmed/i.test(l) && /rs-a/.test(l)), 'marker names rs-a');
+  });
+
+  it('201st round: defaults are raised for unlimitedStorage — 200k lines / 150MB chars', async () => {
+    const src = fs.readFileSync(path.join(EXT, 'lib', 'session-journal.js'), 'utf8');
+    assert.match(src, /DEFAULT_MAX_LINES\s*=\s*(\d{5,})/, 'line cap raised (was 40000)');
+    assert.ok(Number(/DEFAULT_MAX_LINES\s*=\s*(\d+)/.exec(src)[1]) >= 100000, '>= 100k lines');
+    assert.ok(Number(/DEFAULT_MAX_CHARS\s*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024/.exec(src)[1]) >= 100, '>= 100MB chars (was 40MB)');
+  });
 });
 
 describe('158th B — mirrorLines journals every chunk it prints', () => {

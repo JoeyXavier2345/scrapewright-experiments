@@ -24,7 +24,11 @@ const registry = new ServiceRegistry();
 // session log). debugLogger.log is wrapped in place: no call-site
 // changes; flush is debounced because the SW can suspend between lines.
 const SW_DEBUG_JOURNAL_KEY = 'swDebugJournal';
-const SW_DEBUG_JOURNAL_MAX = 6000;
+// 201st round: raised with the journal caps — the ring rode storage.session
+// (dies with the browser session) at 6000 lines; SW-side volume is lower
+// than the wizard journal (no LLM bodies) but the export merge deserves
+// the same whole-session coverage.
+const SW_DEBUG_JOURNAL_MAX = 20000;
 let swDebugRing = null;
 let swDebugFlushTimer = null;
 function swDebugJournalLoad() {
