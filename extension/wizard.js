@@ -2361,6 +2361,28 @@ function getWizardRunner() {
         args: [conditionExpr]
       });
       return results[0] && results[0].result ? results[0].result : false;
+    },
+    // 199th log: distinguish "verify tab is a browser ERROR PAGE" (content
+    // scripts never inject there) from "content script merely late" —
+    // chrome.scripting REJECTS with "showing error page" on error pages,
+    // which is exactly the discriminator the RELAY_FAILED incident lacked.
+    probeTabHealth: async (tabId) => {
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tabId },
+          func: () => ({
+            readyState: document.readyState,
+            bodyChars: (document.body && document.body.textContent || '').length
+          })
+        });
+        const p = results && results[0] && results[0].result;
+        return p
+          ? { reachable: true, errorPage: false, readyState: p.readyState, bodyChars: p.bodyChars }
+          : { reachable: false, errorPage: false };
+      } catch (e) {
+        const msg = String((e && e.message) || e);
+        return { reachable: false, errorPage: /error page/i.test(msg), reason: msg };
+      }
     }
   });
   return wizardRunner;

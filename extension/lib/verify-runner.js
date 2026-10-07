@@ -581,8 +581,17 @@
       let orchestrationError = null;
       let result = null;
 
-      try {
-        result = await d.orchestrate(service, input, {
+      // 199th log: tab-state failures (error page / content script never
+      // ready / relay dead) are INFRASTRUCTURE failures, not artifact
+      // verdicts — one fresh-tab retry mirrors the fifty-sixth-log tab-create
+      // precedent. A run that produced data is never retried (side-effect
+      // safety); script-shape errors are not tab-state errors.
+      const TAB_STATE_RETRY_RE = /VERIFY_TAB_ERROR_PAGE|VERIFY_TAB_CONTENT_SCRIPT_NOT_READY|RELAY_FAILED/;
+      let tabRetry = null;
+      for (let tabAttempt = 1; tabAttempt <= 2; tabAttempt++) {
+        orchestrationError = null; // a successful retry must not inherit attempt 1's error
+        try {
+          result = await d.orchestrate(service, input, {
           createTab: async (url) => {
             // The 10s budget covers only site-independent work (tabs.create +
             // keepalive inject; verify runs detached in scrape-tab.js). When it
@@ -631,14 +640,30 @@
             // Wait for the content-script to be listening before the first
             // DOM_REQUEST — prevents the RELAY_FAILED (tabId:null) race.
             let ready = false;
+            const pingIntervalMs = (typeof d.csPingIntervalMs === 'number' && d.csPingIntervalMs > 0) ? d.csPingIntervalMs : 300;
             for (let i = 0; i < 20; i++) {
               try {
                 const r = await d.sendMessage(tabId, { type: 'PING' });
                 if (r && r.pong) { ready = true; break; }
               } catch (e) { /* not ready yet */ }
-              await new Promise((res) => setTimeout(res, 300));
+              await new Promise((res) => setTimeout(res, pingIntervalMs));
             }
-            if (!ready) log('Warning: content script not responding; proceeding anyway.', 'warn');
+            if (ready) return;
+            // 199th log (live, twice in one session): a fresh verify tab can
+            // land on a browser ERROR PAGE (site refusing repeated heavy
+            // loads / transient network failure) — error pages never receive
+            // a content script. The old path logged a warning and PROCEEDED
+            // ANYWAY, so the step's first $ op rode the 4x1s relay retry into
+            // a 84s RELAY_FAILED red verify. Fail fast with a named cause
+            // instead; the runVerify retry loop then gets one fresh tab.
+            let health = null;
+            if (typeof d.probeTabHealth === 'function') {
+              try { health = await d.probeTabHealth(tabId); } catch (e) { /* best-effort */ }
+            }
+            const cause = (health && health.errorPage)
+              ? 'VERIFY_TAB_ERROR_PAGE: the fresh verify tab landed on a browser error page — the site refused this load (often rate-limiting after repeated heavy loads, or a transient network failure); error pages never receive a content script'
+              : 'VERIFY_TAB_CONTENT_SCRIPT_NOT_READY: the page is reachable but the content script never answered PING within the readiness window — extension injection was blocked or the tab died';
+            throw new Error(cause);
           },
           resetDomActivity: async (tabId) => {
             await d.sendMessage(tabId, { type: 'RESET_DOM_ACTIVITY' }).catch(() => {});
@@ -696,10 +721,20 @@
             } catch (_) { /* breaker must never kill the run loop */ }
           }
         });
-      } catch (e) {
-        orchestrationError = e;
-      } finally {
-        if (tab) await d.removeTab(tab.id).catch(() => {});
+        } catch (e) {
+          orchestrationError = e;
+        } finally {
+          if (tab) await d.removeTab(tab.id).catch(() => {});
+          tab = null; // closed; a retry attempt creates its own fresh tab
+        }
+        const retriable = !result && orchestrationError &&
+          TAB_STATE_RETRY_RE.test(String((orchestrationError && orchestrationError.message) || orchestrationError));
+        if (!retriable || tabAttempt === 2) break;
+        tabRetry = {
+          attempts: tabAttempt + 1,
+          firstError: String((orchestrationError && orchestrationError.message) || orchestrationError).slice(0, 300)
+        };
+        log('Verify tab was dead on arrival — retrying once with a fresh tab (' + String(tabRetry.firstError).split(':')[0] + ').', 'warn');
       }
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
@@ -2329,6 +2364,10 @@
           ? (result.pagesTruncated ? result.pages.length + '+' : String(result.pages.length))
           : '0',
         eventCount: events.length,
+        // 199th log: infra-level tab retry disclosure (error page / dead
+        // content script) — the verdict is from the SECOND fresh tab; the
+        // first attempt's cause rides here for the journal.
+        tabRetry: tabRetry || undefined,
         degraded: wuMissing ? ('wizard-utils functions unavailable, detectors degraded: ' + wuMissing.join(', ')) : undefined,
         // TAG strings for knowledge auto-attach — the engine reads result.events on the tool result, so this key name is contract, not preference (raw event log is the sibling top-level return field)
         events: eventTags()
