@@ -2299,6 +2299,94 @@ function detectInventedPseudoSelectors(steps, doc) {
 // a number carries extractable data — teach the parse, don't just disclose.
 const LABEL_PREFIXED_COUNT_RE = /^[^0-9\n]{1,24}?\d/u;
 
+// 201st log: content fields shipped "… See more" — the requirement family
+// asks for EXPANSION of the see-more affordance BEFORE extraction; the
+// artifact shipped truncated text with no detector and no disclosure.
+// Report-only census: teach the $click expansion exit, never veto.
+const SEE_MORE_TAIL_RE = /(?:…|\.{3})?\s*\(?["“]?(?:see more|show more|read more|查看更多|显示更多|顯示更多|展開|展开)\)?["”]?\s*$/i;
+function isContentLikeFieldName(name) {
+  return /content|text|body|desc|caption|summary/i.test(String(name || ''));
+}
+function detectSeeMoreUnexpanded(data, schema) {
+  if (!data || typeof data !== 'object') return null;
+  const props = (schema && schema.properties) || {};
+  for (const arrField of Object.keys(props)) {
+    const prop = props[arrField];
+    if (!prop || prop.type !== 'array' || !prop.items || prop.items.type !== 'object') continue;
+    const records = data[arrField];
+    if (!Array.isArray(records) || records.length < 1) continue;
+    const itemProps = (prop.items && prop.items.properties) || {};
+    for (const field of Object.keys(itemProps)) {
+      if (!isContentLikeFieldName(field)) continue;
+      const samples = [];
+      for (let i = 0; i < records.length; i++) {
+        const v = records[i] ? records[i][field] : undefined;
+        if (typeof v !== 'string' || !v.trim()) continue;
+        if (SEE_MORE_TAIL_RE.test(v.trim())) samples.push(i + 1); // 1-based ordinals
+      }
+      if (samples.length > 0) {
+        return {
+          field: arrField + '.' + field,
+          affectedCount: samples.length,
+          samples: samples.slice(0, 6),
+          note: 'content records still carry the collapsed-text affordance at the tail (records ' + samples.slice(0, 6).join(', ') + ') — the full text was never loaded. Expand BEFORE extracting: $click the see-more control inside each container (or $clickInList over the affordance selector) in a step that precedes extraction. Shipping "… See more" passes shape checks while the requirement asked for the full text.'
+        };
+      }
+    }
+  }
+  return null;
+}
+
+// 201st log: hovercards[] shipped as raw {link, htmlSnippet} while the
+// confirmed schema declared type/role/extras on the same items — the
+// popover went UNPARSED and the finish summary claimed name/followers/
+// category the artifact did not carry. Schema-gated (no declaration → no
+// flag) and report-only: teach the parse, never veto.
+function detectHovercardUnparsed(data, schema) {
+  if (!data || typeof data !== 'object') return null;
+  const props = (schema && schema.properties) || {};
+  for (const arrField of Object.keys(props)) {
+    const prop = props[arrField];
+    if (!prop || prop.type !== 'array' || !prop.items || prop.items.type !== 'object') continue;
+    const records = data[arrField];
+    if (!Array.isArray(records) || records.length < 1) continue;
+    const itemProps = (prop.items && prop.items.properties) || {};
+    for (const hcField of Object.keys(itemProps)) {
+      const hcProp = itemProps[hcField];
+      if (!hcProp || hcProp.type !== 'array' || !hcProp.items || hcProp.items.type !== 'object') continue;
+      const declaredParseFields = Object.keys((hcProp.items && hcProp.items.properties) || {})
+        .filter((k) => /type|role|extras|label|category|followers/i.test(k));
+      if (declaredParseFields.length === 0) continue; // the contract never promised parsing
+      let unparsed = 0;
+      let total = 0;
+      for (const r of records) {
+        const cards = r ? r[hcField] : null;
+        if (!Array.isArray(cards)) continue;
+        for (const c of cards) {
+          if (!c || typeof c !== 'object') continue;
+          const hasPayload = String(c.htmlSnippet || c.html || c.link || '').length > 0;
+          if (!hasPayload) continue;
+          total += 1;
+          const allEmpty = declaredParseFields.every((k) => {
+            const v = c[k];
+            return v == null || v === '' || (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0);
+          });
+          if (allEmpty) unparsed += 1;
+        }
+      }
+      if (unparsed > 0) {
+        return {
+          field: arrField + '.' + hcField,
+          unparsedCount: unparsed,
+          total: total,
+          note: unparsed + ' of ' + total + ' ' + hcField + ' entr' + (total === 1 ? 'y' : 'ies') + ' ship raw ' + 'html/link while the confirmed schema declares [' + declaredParseFields.join(', ') + '] as empty — the popover was captured but never parsed into those fields. Read hovercards[].skeletonSnippet (the compressed popover view) and populate the declared fields (account-vs-group classification, role, key-values like followers), or renegotiate the contract via io.confirm to drop them. A finish summary may not claim parsing the artifact does not carry.'
+        };
+      }
+    }
+  }
+  return null;
+}
+
 function detectLabelPrefixedCounts(data, schema) {
   const out = [];
   if (!data || typeof data !== 'object') return null;
@@ -7391,7 +7479,7 @@ function syncLastVerifiedFromVerify(state, lv) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { normalizeIdValueForIdentity, idValueShape, inferFieldSemantics, semanticPredicatePasses, countPoolTextPasses, summarizePriorServiceEvidence, extractFailingFieldNames, computeSampleDiversity, detectInventedIdFallbacks, detectShellHovercards, pickPrimaryResultForPanel, detectDuplicateNestedEntries, extractInventedPseudoCandidates, detectInventedPseudoSelectors, recordContentSignature, countUniqueRecords, detectMediaArrayHygiene, unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectHardcodedNestedRoles, detectHoverEntityCoverage, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectResultStrayKeys, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, detectOpenTabClosureRefs, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
+var WU_EXPORT_BAG = { normalizeIdValueForIdentity, idValueShape, inferFieldSemantics, semanticPredicatePasses, countPoolTextPasses, summarizePriorServiceEvidence, extractFailingFieldNames, computeSampleDiversity, detectInventedIdFallbacks, detectShellHovercards, pickPrimaryResultForPanel, detectDuplicateNestedEntries, extractInventedPseudoCandidates, detectInventedPseudoSelectors, recordContentSignature, countUniqueRecords, detectMediaArrayHygiene, unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectHardcodedNestedRoles, detectHoverEntityCoverage, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectSeeMoreUnexpanded, detectHovercardUnparsed, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectResultStrayKeys, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, detectOpenTabClosureRefs, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;

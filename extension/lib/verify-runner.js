@@ -46,6 +46,8 @@
       detectFrozenZeroCounter: w.detectFrozenZeroCounter,
       detectFrozenScrollCount: w.detectFrozenScrollCount,
       detectSiblingCountContrast: w.detectSiblingCountContrast,
+      detectSeeMoreUnexpanded: w.detectSeeMoreUnexpanded,
+      detectHovercardUnparsed: w.detectHovercardUnparsed,
       detectImplausibleTimeFields: w.detectImplausibleTimeFields,
       detectPositionLikeIds: w.detectPositionLikeIds,
       detectLabelPrefixedCounts: w.detectLabelPrefixedCounts,
@@ -768,7 +770,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, shellHovercards: null, capturedValueUnbound: null, inventedIdFallbacks: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null, resultStrayKeys: null, hardcodedNestedRoles: null, hoverEntityCoverage: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, shellHovercards: null, capturedValueUnbound: null, inventedIdFallbacks: null, siblingCountContrast: null, seeMoreUnexpanded: null, hovercardUnparsed: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null, resultStrayKeys: null, hardcodedNestedRoles: null, hoverEntityCoverage: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -1478,6 +1480,19 @@
           // routes was premature (likes 5/5 empty vs shares 5/5 populated).
           const scc = WU.detectSiblingCountContrast(finalData, outputSchema) || [];
           if (scc.length) detectors.siblingCountContrast = scc;
+        }
+        // 201st log: report-only pair. (a) content still carrying the
+        // collapsed-text affordance ("… See more") — the requirement family
+        // asks for expansion BEFORE extraction. (b) hovercards shipped as raw
+        // html/link while the confirmed schema declares type/role/extras —
+        // captured but never parsed, with finish summaries overclaiming.
+        if (typeof WU.detectSeeMoreUnexpanded === 'function') {
+          const smu = WU.detectSeeMoreUnexpanded(finalData, outputSchema);
+          if (smu) detectors.seeMoreUnexpanded = smu;
+        }
+        if (typeof WU.detectHovercardUnparsed === 'function') {
+          const hcu = WU.detectHovercardUnparsed(finalData, outputSchema);
+          if (hcu) detectors.hovercardUnparsed = hcu;
         }
         if (typeof WU.detectDuplicateIdValues === 'function') {
           // Forty-ninth log: report-only. An id-like value shared by several
@@ -2243,6 +2258,8 @@
         if (detectors.implausibleTimeFields) add('TIME_FIELD_IMPLAUSIBLE');
         if (detectors.positionLikeIds) add('POSITION_LIKE_ID');
         if (detectors.labelPrefixedCounts) add('LABEL_PREFIXED_COUNT');
+        if (detectors.seeMoreUnexpanded) add('SEE_MORE_UNEXPANDED');
+        if (detectors.hovercardUnparsed) add('HOVERCARD_UNPARSED');
         if (detectors.mediaHygiene) add('MEDIA_ARRAY_HYGIENE');
         if (detectors.junkShapeRecords) add('JUNK_SHAPE_RECORDS');
         if (detectors.duplicateIdValues) add('DUPLICATE_ID_VALUES');
