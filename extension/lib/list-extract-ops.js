@@ -748,6 +748,17 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
   // array now, carrying NON-ENUMERABLE partial/records annotations — array
   // consumers (slice/map/spread) keep working, envelope consumers keep
   // working, and JSON serialization of the records stays clean.
+  // 200th log (THIRD recurrence): the records self-alias existed only on
+  // the partial branch — a live session read `r.records[i]` inside a
+  // DEPLOYED step and `r.records.length` in three dry-runs on all-fit runs
+  // (bare array, no alias), burning a full verify and the session budget.
+  // The alias is now unconditional; only `partial` stays budget-hit-only.
+  try {
+    Object.defineProperty(outRecords, 'records', {
+      get() { return outRecords; },
+      enumerable: false, configurable: true
+    });
+  } catch (_) { /* annotations are best-effort */ }
   if (processedCount < containers.length) {
     try {
       Object.defineProperty(outRecords, 'partial', {
@@ -759,10 +770,6 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
             ' containers processed; re-run with containerRange:[' + processedCount + ',' + containers.length +
             '] (or maxContainers) to continue, or raise opts.maxWallMs'
         },
-        enumerable: false, configurable: true
-      });
-      Object.defineProperty(outRecords, 'records', {
-        get() { return outRecords; },
         enumerable: false, configurable: true
       });
     } catch (_) { /* annotations are best-effort */ }

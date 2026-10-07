@@ -93,6 +93,17 @@ for (const [label, getOps] of opsFactories()) {
       assert.ok(Array.isArray(out), 'all-fit keeps the plain array');
       assert.equal(out.length, 4);
       assert.equal(out[3].hovercards.length, 1);
+      // 200th log (THIRD envelope-class recurrence: a live session burned a
+      // verify and three dry-runs on `r.records[i]`/`r.records.length` — the
+      // alias existed only on the partial branch, so all-fit runs returned a
+      // bare array and envelope-style readers crashed). The records
+      // self-alias must ride EVERY run; only `partial` stays budget-hit-only.
+      assert.equal(out.records, out, 'records self-alias resolves on ALL runs, not just partial');
+      assert.equal(out.records.length, 4, 'the deployed-step read shape r.records[i] works');
+      assert.ok(out.records[0] && typeof out.records[0].title === 'string', 'r.records[0] is a record');
+      assert.equal(out.partial, undefined, 'partial annotation stays budget-hit-only');
+      assert.ok(!JSON.stringify(out).includes('"records"'), 'non-enumerable — serialization stays clean');
+      assert.equal(out.slice(0, 1).length, 1, 'array consumers unaffected');
     });
 
     it('default budget is 25000ms (no opt → all-fit on a fast stub)', async () => {

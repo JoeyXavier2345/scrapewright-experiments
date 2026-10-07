@@ -360,6 +360,7 @@ every anchor inside each container in one atomic call, eliminating the
 alignment failure mode of the manual-loop pattern.
 
 Signature: \$extractWithHover(containerSel, fieldMap, opts) → Promise<Array<Record>>
+  RETURNS THE RECORDS ARRAY ITSELF: iterate r directly (r.length, r[i], r.map) — a wall-budget hit attaches non-enumerable r.partial {processed,total} (finish the tail with containerRange). r.records is a non-enumerable self-alias that ALSO resolves to the array on every run (both read styles work; NEVER expect {records:[...]} as a wrapper object).
   - containerSel: CSS selector for the list containers (e.g. 'li.result-item').
   - fieldMap: same shape as \$extractList ({ fieldName: subSel | { selector, attr? } }).
     Each field gets ONE value (the first match) per container — scalar, not array.

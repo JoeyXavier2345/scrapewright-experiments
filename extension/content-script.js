@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '199-relay-resilience';
+  const SW_BUILD_TAG = '200-records-alias';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -507,6 +507,15 @@
         // the records array with NON-ENUMERABLE partial/records annotations
         // — `rs.slice(...)` on a budget-hit result crashed twice (86th v10,
         // 88th v5).
+        // 200th log (inline mirror kept in sync): the records self-alias
+        // rides EVERY run (a deployed step read r.records[i] on an all-fit
+        // run and crashed); only partial stays budget-hit-only.
+        try {
+          Object.defineProperty(outRecords, 'records', {
+            get() { return outRecords; },
+            enumerable: false, configurable: true
+          });
+        } catch (_) { /* annotations are best-effort */ }
         if (processedCount < containers.length) {
           try {
             Object.defineProperty(outRecords, 'partial', {
@@ -518,10 +527,6 @@
                   ' containers processed; re-run with containerRange:[' + processedCount + ',' + containers.length +
                   '] (or maxContainers) to continue, or raise opts.maxWallMs'
               },
-              enumerable: false, configurable: true
-            });
-            Object.defineProperty(outRecords, 'records', {
-              get() { return outRecords; },
               enumerable: false, configurable: true
             });
           } catch (_) { /* annotations are best-effort */ }
