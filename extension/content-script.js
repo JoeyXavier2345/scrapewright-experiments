@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '200-records-alias';
+  const SW_BUILD_TAG = '200b-enum-alias';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -504,16 +504,24 @@
         // Seventieth log F1 (inline mirror): budget-hit runs return the
         // partial envelope; all-fit runs keep the plain array.
         // Eighty-eighth log (inline mirror kept in sync): the envelope IS
-        // the records array with NON-ENUMERABLE partial/records annotations
-        // — `rs.slice(...)` on a budget-hit result crashed twice (86th v10,
-        // 88th v5).
+        // the records array with partial/records annotations — `rs.slice(...)`
+        // on a budget-hit result crashed twice (86th v10, 88th v5).
         // 200th log (inline mirror kept in sync): the records self-alias
         // rides EVERY run (a deployed step read r.records[i] on an all-fit
         // run and crashed); only partial stays budget-hit-only.
+        // 201st round (inline mirror kept in sync): the annotations are
+        // ENUMERABLE because the sandbox relay chain (sendResponse →
+        // background → offscreen postMessage → sandbox) structuredClones at
+        // every hop and structuredClone keeps only OWN ENUMERABLE props —
+        // the 200th round left them non-enumerable, so they never survived
+        // the relay and step scripts still saw r.records === undefined (the
+        // real root of that incident). Enumerable annotations survive the
+        // hops and stay JSON-invisible on arrays. Accepted cost: Object.keys
+        // shows records/partial, and slice/map copies drop the alias.
         try {
           Object.defineProperty(outRecords, 'records', {
             get() { return outRecords; },
-            enumerable: false, configurable: true
+            enumerable: true, configurable: true
           });
         } catch (_) { /* annotations are best-effort */ }
         if (processedCount < containers.length) {
@@ -527,7 +535,7 @@
                   ' containers processed; re-run with containerRange:[' + processedCount + ',' + containers.length +
                   '] (or maxContainers) to continue, or raise opts.maxWallMs'
               },
-              enumerable: false, configurable: true
+              enumerable: true, configurable: true
             });
           } catch (_) { /* annotations are best-effort */ }
           return outRecords;

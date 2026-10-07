@@ -745,18 +745,28 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
   // helper, so [processed, total) composes natively without re-hovering).
   // Eighty-eighth log (SECOND crash occurrence: 86th v10 + 88th v5 both
   // died as `rs.slice is not a function`): the envelope IS the records
-  // array now, carrying NON-ENUMERABLE partial/records annotations — array
-  // consumers (slice/map/spread) keep working, envelope consumers keep
-  // working, and JSON serialization of the records stays clean.
+  // array now, carrying partial/records annotations — array consumers
+  // (slice/map/spread) keep working, envelope consumers keep working, and
+  // JSON serialization of the records stays clean.
   // 200th log (THIRD recurrence): the records self-alias existed only on
   // the partial branch — a live session read `r.records[i]` inside a
   // DEPLOYED step and `r.records.length` in three dry-runs on all-fit runs
   // (bare array, no alias), burning a full verify and the session budget.
   // The alias is now unconditional; only `partial` stays budget-hit-only.
+  // 201st round: the 200th fix kept the annotations NON-ENUMERABLE, but the
+  // sandbox relay chain (content-script sendResponse → background →
+  // offscreen postMessage → sandbox) structuredClones at every hop, and
+  // structuredClone keeps only OWN ENUMERABLE props — the non-enumerable
+  // annotations never survived the relay (the 200th incident's real root:
+  // step scripts and probe.snippet still saw r.records === undefined).
+  // ENUMERABLE own props survive the hops identity-preserved and stay
+  // JSON-invisible on arrays (JSON.stringify serializes index props only).
+  // Accepted cost: Object.keys(r) now shows records/partial, and slice()/
+  // map copies drop the alias (copies are plain arrays).
   try {
     Object.defineProperty(outRecords, 'records', {
       get() { return outRecords; },
-      enumerable: false, configurable: true
+      enumerable: true, configurable: true
     });
   } catch (_) { /* annotations are best-effort */ }
   if (processedCount < containers.length) {
@@ -770,7 +780,7 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
             ' containers processed; re-run with containerRange:[' + processedCount + ',' + containers.length +
             '] (or maxContainers) to continue, or raise opts.maxWallMs'
         },
-        enumerable: false, configurable: true
+        enumerable: true, configurable: true
       });
     } catch (_) { /* annotations are best-effort */ }
     return outRecords;

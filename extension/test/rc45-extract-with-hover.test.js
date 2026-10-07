@@ -257,8 +257,12 @@ describe('RC45 Task 3: inline fallback mirrors extractWithHoverRecords', () => {
     const src = readSrc('content-script.js');
     const fnStart = src.indexOf('function createInlineListExtractOps');
     assert.ok(fnStart > -1, 'createInlineListExtractOps must exist');
-    // Slice the function body using a reasonable window.
-    const window = src.slice(fnStart, fnStart + 40000); // F8/F9 + 200th-round additions grew the factory
+    // Structural window (201st round): slice to the next sibling marker —
+    // the same pattern helpers/inline-ops-factory.js uses — so factory
+    // growth can never push the export out of a fixed-size window. Fall
+    // back to an unbounded tail slice when the marker moves.
+    const fnEnd = src.indexOf('\n  function getListExtractOps()', fnStart);
+    const window = fnEnd > fnStart ? src.slice(fnStart, fnEnd) : src.slice(fnStart);
     assert.ok(/extractWithHoverRecords/.test(window),
       'inline fallback must define extractWithHoverRecords (drift guard will also enforce this)');
     // Must be returned from the inline api object.

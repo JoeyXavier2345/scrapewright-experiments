@@ -360,7 +360,7 @@ every anchor inside each container in one atomic call, eliminating the
 alignment failure mode of the manual-loop pattern.
 
 Signature: \$extractWithHover(containerSel, fieldMap, opts) → Promise<Array<Record>>
-  RETURNS THE RECORDS ARRAY ITSELF: iterate r directly (r.length, r[i], r.map) — a wall-budget hit attaches non-enumerable r.partial {processed,total} (finish the tail with containerRange). r.records is a non-enumerable self-alias that ALSO resolves to the array on every run (both read styles work; NEVER expect {records:[...]} as a wrapper object).
+  RETURNS THE RECORDS ARRAY ITSELF: iterate r directly (r.length, r[i], r.map) — a wall-budget hit attaches enumerable r.partial {processed,total} (finish the tail with containerRange). r.records is an enumerable self-alias that ALSO resolves to the array on every run (both read styles work; NEVER expect {records:[...]} as a wrapper object).
   - containerSel: CSS selector for the list containers (e.g. 'li.result-item').
   - fieldMap: same shape as \$extractList ({ fieldName: subSel | { selector, attr? } }).
     Each field gets ONE value (the first match) per container — scalar, not array.
@@ -381,13 +381,15 @@ Signature: \$extractWithHover(containerSel, fieldMap, opts) → Promise<Array<Re
   - opts.maxWallMs: wall-clock budget for the hover batch (default 25000ms).
     Each hovered anchor burns ~5-10s even when no popover appears, so a long
     feed can outlive the step budget with ZERO results. When the budget is
-    hit, the call does NOT error — it resolves to the partial envelope:
-      { records: [...processed so far...],
-        partial: { processed: K, total: N, maxWallMs: M,
-                   note: 'wall budget reached — K of N containers processed; re-run with containerRange:[K,N] (or maxContainers) to continue, or raise opts.maxWallMs' } }
-    Resume by re-running with containerRange:[K,N] (already-processed containers are NOT re-hovered).
-    When ALL containers fit the budget, the call returns the plain records
-    array exactly as before (check partial first; Array.isArray means all-fit).
+    hit, the call does NOT error — it resolves to the SAME records array,
+    shortened to the containers processed so far; rs.partial (enumerable, so
+    it survives the sandbox relay hops) carries
+      { processed: K, total: N, maxWallMs: M,
+        note: 'wall budget reached — K of N containers processed; re-run with containerRange:[K,N] ...' }
+    Resume by re-running with containerRange:[K,N] (already-processed
+    containers are NOT re-hovered). When ALL containers fit the budget, rs is
+    the full records array and rs.partial is undefined — Array.isArray(rs)
+    holds on every run.
 
 Returned records (one per processed container, in document order):
   [

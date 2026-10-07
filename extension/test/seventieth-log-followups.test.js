@@ -84,6 +84,25 @@ for (const [label, getOps] of opsFactories()) {
       // must not throw.
       assert.equal(out.slice(0, 1).length, 1, 'rs.slice works on the partial result');
       assert.equal(out.map((r) => r.title).length, out.length, 'rs.map works too');
+      // 201st round (relay round-trip): chrome message relays
+      // (content-script sendResponse → background → offscreen postMessage →
+      // sandbox) all structuredClone, and structuredClone keeps only OWN
+      // ENUMERABLE props — the 200th round left the annotations
+      // non-enumerable, so step scripts and probe.snippet still saw
+      // r.records === undefined after the hops. Assert the annotations
+      // SURVIVE two clone hops (one hop per boundary; clone identity of the
+      // self-alias may differ from the original — assert shape, not ===).
+      const relayed = structuredClone(structuredClone(out));
+      assert.ok(Array.isArray(relayed.records) && relayed.records.length === out.length,
+        'records self-alias survives the relay hops');
+      assert.equal(relayed.records[0], relayed[0], 'the alias points at the relayed array itself');
+      assert.ok(relayed.partial && relayed.partial.processed >= 1,
+        'partial annotation survives the relay hops on budget-hit runs');
+      assert.equal(JSON.stringify(out), JSON.stringify(relayed),
+        'array JSON stays index-only on both sides (named props never serialize on arrays)');
+      assert.ok(Array.isArray(out.slice(1)), 'slice() copies stay plain arrays (the alias does NOT ride copies — accepted cost)');
+      assert.ok(Object.keys(out).includes('records') && Object.keys(out).includes('partial'),
+        'enumerability tradeoff pinned: Object.keys shows records/partial (the price of relay survival)');
     });
 
     it('all containers fit → plain records array, no envelope', async () => {
@@ -102,8 +121,22 @@ for (const [label, getOps] of opsFactories()) {
       assert.equal(out.records.length, 4, 'the deployed-step read shape r.records[i] works');
       assert.ok(out.records[0] && typeof out.records[0].title === 'string', 'r.records[0] is a record');
       assert.equal(out.partial, undefined, 'partial annotation stays budget-hit-only');
-      assert.ok(!JSON.stringify(out).includes('"records"'), 'non-enumerable — serialization stays clean');
+      assert.ok(!JSON.stringify(out).includes('"records"'), 'enumerable-but-array: serialization stays index-only');
       assert.equal(out.slice(0, 1).length, 1, 'array consumers unaffected');
+      // 201st round relay round-trip (see the budget-hit test above): the
+      // records alias must survive structuredClone hops on ALL-FIT runs too —
+      // that was exactly the 200th incident's read shape (r.records[i] in a
+      // deployed step on an all-fit run).
+      const relayed = structuredClone(structuredClone(out));
+      assert.ok(Array.isArray(relayed.records) && relayed.records.length === out.length,
+        'records self-alias survives the relay hops on all-fit runs');
+      assert.equal(relayed.records[0], relayed[0], 'the alias points at the relayed array itself');
+      assert.equal(relayed.partial, undefined, 'no partial annotation on all-fit runs, before or after relays');
+      assert.equal(JSON.stringify(out), JSON.stringify(relayed),
+        'array JSON stays index-only on both sides');
+      assert.ok(Array.isArray(out.slice(1)), 'slice() copies stay plain arrays');
+      assert.ok(Object.keys(out).includes('records'),
+        'enumerability tradeoff pinned: Object.keys shows records (the price of relay survival)');
     });
 
     it('default budget is 25000ms (no opt → all-fit on a fast stub)', async () => {
