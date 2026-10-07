@@ -13,6 +13,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const WU = require('../lib/wizard-utils');
+const { createSessionTools } = require('../lib/session-tools');
 
 const INCIDENT_SCRIPT = [
   "const kw=encodeURIComponent(String(__input__.keyword));",
@@ -66,6 +67,48 @@ describe('detectOpenTabClosureRefs (199th log lint)', () => {
     const shadow = "const N=6; return await $openTab(u, async(N)=>{ return {v:N}; });";
     const hits = WU.detectOpenTabClosureRefs([{ id: 's1', name: 'one', script: shadow }]);
     assert.deepEqual(hits, []);
+  });
+});
+
+// 199th review F3: the unit tests above pin WU.detectOpenTabClosureRefs, but
+// nothing proved the AGGREGATION loop in session-tools service.update — a
+// dropped push or a renamed marker there would leave the lint dead at the
+// tool boundary while every unit test stayed green.
+describe('service.update surfaces OPENTAB_CLOSURE_REF (tool-level aggregation)', () => {
+  it('a steps update carrying the incident script lands with an advisory naming variable N', async () => {
+    const deps = {
+      rail: {
+        executeDsl: async () => ({ result: { ok: true }, selectorDiagnostics: [] }),
+        pageState: async () => ({ open: true, tabId: 1 }),
+        ensureLock: async () => {}, releaseLock: async () => {}, dispose: async () => {}, tabId: 1
+      },
+      runVerify: async () => ({
+        report: { ok: true, error: null, aborted: false, score: { score: 100, isData: true, breakdown: {} }, schemaOk: true, schemaMissing: [], detectors: {}, steps: [], finalResult: null, pages: '0', eventCount: 0, events: [] },
+        events: [], raw: { testResult: null, error: null, breaker: null }
+      }),
+      getDraftService: () => null,
+      applyArtifact: () => {},
+      getTestInput: () => ({}),
+      getOutputSchema: () => ({ type: 'object' }),
+      getSteps: () => [],
+      ioConfirmBridge: { request: async () => ({ confirmed: true }) },
+      probeFactory: () => ({ snippet: async () => ({ result: 'dry-run ok' }) })
+    };
+    const t = createSessionTools(deps);
+    const ctx = { session: { state: () => ({ session: { artifactVersions: [] } }) } };
+    await t.tools['io.confirm']({
+      inputSchema: { type: 'object' },
+      outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } }
+    }, ctx);
+    const out = await t.tools['service.update']({
+      steps: [{ id: 'collect', name: 'collect', script: INCIDENT_SCRIPT, onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }]
+    }, ctx);
+    assert.equal(out.updated, true, 'advisory is non-blocking — the artifact still lands (got: ' + JSON.stringify(out.error || out.updated) + ')');
+    const lint = (out.staticLint || []).find((l) => /OPENTAB_CLOSURE_REF/.test(String(l)));
+    assert.ok(lint, 'staticLint carries the OPENTAB_CLOSURE_REF entry, got: ' + JSON.stringify(out.staticLint));
+    assert.match(lint, /collect/, 'names the offending step');
+    assert.match(lint, /N/, 'names variable N');
+    assert.match(lint, /__input__/, 'teaches the re-derive-from-__input__ exit');
   });
 });
 

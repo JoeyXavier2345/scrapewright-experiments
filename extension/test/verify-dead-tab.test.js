@@ -12,6 +12,15 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { createVerifyRunner } = require('../lib/verify-runner');
 
+// 199th review F2: the tests above mock d.orchestrate, so nothing proves the
+// REAL StepOrchestrator surfaces the runner-built waitForTabLoad wrapper's
+// VERIFY_TAB_ERROR_PAGE throw — a future tolerant catch inside execute()
+// would silently convert the named cause back into a downstream RELAY_FAILED.
+// Mirror the SW globals step-orchestrator resolves at call time.
+global.debugLogger = global.debugLogger || { log: () => {} };
+global.UrlTemplate = global.UrlTemplate || require('../lib/url-template');
+const { StepOrchestrator } = require('../lib/step-orchestrator');
+
 const SERVICE = { targetUrl: 'https://example.com', steps: [{ id: 's1', name: 'one', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} };
 
 // A minimal orchestrate stand-in: creates the tab through the runner-built
@@ -144,5 +153,30 @@ describe('verify dead-tab guard (199th log)', () => {
     assert.equal(out.report.ok, false);
     assert.equal(orchestrateCalls, 1, 'script-shape errors are not tab-state errors — one attempt only');
     assert.match(out.report.error.message, /STEP_FAILED/);
+  });
+
+  it('REAL StepOrchestrator.execute propagates the VERIFY_TAB_ERROR_PAGE rejection from deps.waitForTabLoad', async () => {
+    const calls = { removeTab: [] };
+    const deps = {
+      createTab: async (url) => ({ id: 21, url }),
+      // MUST resolve — the orchestrator runs the sandbox scrub through
+      // executeScript BEFORE waitForTabLoad (best-effort, but keep it clean
+      // so the only throw under test is the wrapper's).
+      executeScript: async () => ({ result: 'ok', selectorDiagnostics: [] }),
+      waitForTabLoad: async () => {
+        throw new Error('VERIFY_TAB_ERROR_PAGE: the fresh verify tab landed on a browser error page');
+      },
+      removeTab: async (id) => { calls.removeTab.push(id); },
+      captureSnapshot: async () => ({ html: '<html></html>' }),
+      evaluateCondition: async () => true,
+      getDomActivity: async () => [],
+      resetDomActivity: async () => {}
+    };
+    await assert.rejects(
+      StepOrchestrator.execute(SERVICE, {}, deps),
+      (err) => /VERIFY_TAB_ERROR_PAGE/.test(err.message),
+      'the named error-page cause must escape execute() unswallowed'
+    );
+    assert.deepEqual(calls.removeTab, [21], 'the orchestrator still cleans up the dead tab');
   });
 });

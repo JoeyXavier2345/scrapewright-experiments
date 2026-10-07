@@ -222,10 +222,11 @@ ATTACHMENT ITERATION (use $list for elements that may be inside iframes):
 DO NOT use $count + :nth-child() loop to iterate elements — it breaks when elements span multiple iframes because $count sums across all documents but :nth-child() searches one document at a time.
 
 DETAIL PAGE SCRAPING (use $openTab to scrape each item's detail page):
-  // The URL may use outer variables (it is evaluated in the step scope);
-  // the BODY may not — it runs re-created in the sub-tab. Read counts,
-  // keywords, limits from __input__ INSIDE the body.
-  const detail = await $openTab(buildDetailUrl(__input__), \`
+  // The URL is evaluated in the STEP scope (outer variables allowed);
+  // the BODY is re-created in the sub-tab (outer variables NOT visible —
+  // read __input__ inside the body instead).
+  const href = 'https://example.com/item/' + encodeURIComponent(String(__input__.keyword));
+  const detail = await $openTab(href, \`
     const want = Number(__input__.count) || 5;
     await $wait('.detail-content', 3000);
     const title = await $extract('h1');

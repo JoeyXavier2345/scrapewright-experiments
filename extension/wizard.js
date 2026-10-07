@@ -2214,6 +2214,31 @@ function waitForTabLoad(tabId, timeoutMs = 120000) { // sixtieth-round: slow-net
   });
 }
 
+// 199th log: distinguish "tab is a browser ERROR PAGE" (content scripts
+// never inject there) from "content script merely late" — chrome.scripting
+// REJECTS with "showing error page" on error pages, which is exactly the
+// discriminator the RELAY_FAILED incident lacked. 199th review: hoisted to
+// one top-level helper — was duplicated verbatim in the rail and runner
+// dep bags (the documented sync-drift hazard class).
+async function probeTabHealth(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: () => ({
+        readyState: document.readyState,
+        bodyChars: (document.body && document.body.textContent || '').length
+      })
+    });
+    const p = results && results[0] && results[0].result;
+    return p
+      ? { reachable: true, errorPage: false, readyState: p.readyState, bodyChars: p.bodyChars }
+      : { reachable: false, errorPage: false };
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    return { reachable: false, errorPage: /error page/i.test(msg), reason: msg };
+  }
+}
+
 async function sendMessageWithRetry(tabId, message, maxRetries = 5) {
   for (let i = 0; i < maxRetries; i++) {
     try {
@@ -2311,26 +2336,9 @@ function makeWizardRail() {
       return false;
     },
     // 199th log: error-page discrimination for the research rail (see the
-    // probeTabHealth comment on getWizardRunner — chrome.scripting rejects
-    // with "showing error page" exactly there).
-    probeTabHealth: async (tabId) => {
-      try {
-        const results = await chrome.scripting.executeScript({
-          target: { tabId: tabId },
-          func: () => ({
-            readyState: document.readyState,
-            bodyChars: (document.body && document.body.textContent || '').length
-          })
-        });
-        const p = results && results[0] && results[0].result;
-        return p
-          ? { reachable: true, errorPage: false, readyState: p.readyState, bodyChars: p.bodyChars }
-          : { reachable: false, errorPage: false };
-      } catch (e) {
-        const msg = String((e && e.message) || e);
-        return { reachable: false, errorPage: /error page/i.test(msg), reason: msg };
-      }
-    },
+    // probeTabHealth comment on the top-level helper — chrome.scripting
+    // rejects with "showing error page" exactly there).
+    probeTabHealth: (tabId) => probeTabHealth(tabId),
     execute: async (tabId, snippet, opts) => {
       const executor = new OffscreenExecutor(tabId);
       // Sixty-ninth review F1: the hardcoded 30s made probe.snippet's
@@ -2389,27 +2397,9 @@ function getWizardRunner() {
       return results[0] && results[0].result ? results[0].result : false;
     },
     // 199th log: distinguish "verify tab is a browser ERROR PAGE" (content
-    // scripts never inject there) from "content script merely late" —
-    // chrome.scripting REJECTS with "showing error page" on error pages,
-    // which is exactly the discriminator the RELAY_FAILED incident lacked.
-    probeTabHealth: async (tabId) => {
-      try {
-        const results = await chrome.scripting.executeScript({
-          target: { tabId: tabId },
-          func: () => ({
-            readyState: document.readyState,
-            bodyChars: (document.body && document.body.textContent || '').length
-          })
-        });
-        const p = results && results[0] && results[0].result;
-        return p
-          ? { reachable: true, errorPage: false, readyState: p.readyState, bodyChars: p.bodyChars }
-          : { reachable: false, errorPage: false };
-      } catch (e) {
-        const msg = String((e && e.message) || e);
-        return { reachable: false, errorPage: /error page/i.test(msg), reason: msg };
-      }
-    }
+    // scripts never inject there) from "content script merely late" — see
+    // the top-level probeTabHealth helper for the discriminator.
+    probeTabHealth: (tabId) => probeTabHealth(tabId)
   });
   return wizardRunner;
 }
