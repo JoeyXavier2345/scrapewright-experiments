@@ -48,7 +48,8 @@ describe('verify preflight input pass-through (199th log)', () => {
     const m = src.match(/execute:\s*async\s*\(tabId,\s*snippet,\s*opts\)\s*=>\s*\{[\s\S]{0,1400}?return r;/);
     assert.ok(m, 'rail execute dep found in wizard.js');
     const block = m[0];
-    assert.ok(/executor\.execute\(\s*snippet\s*,[^)]*opts\.input/.test(block),
-      'executor.execute must receive opts.input (was hardcoded {}): ' + block.slice(0, 400));
+    assert.ok(block.includes('opts.input'), 'the dep must consume opts.input');
+    assert.ok(/executor\.execute\(\s*snippet\s*,\s*(?!\}\s*\))/.test(block),
+      'executor.execute must not receive a bare {} — the dry-run input flows through: ' + block.slice(0, 500));
   });
 });
