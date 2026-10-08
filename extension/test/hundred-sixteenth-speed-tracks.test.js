@@ -169,7 +169,7 @@ describe('117th log: token-budget visibility (tokenCap stop with null detail + z
     }
     const ctx = {}; vm.createContext(ctx);
     vm.runInContext(RS.slice(RS.indexOf('function buildTokenCapDetail'), j + 1) + '\nthis.__f = buildTokenCapDetail;', ctx);
-    const d = ctx.__f({ promptTokens: 1800000, completionTokens: 200000, llmCalls: 62 }, { tokenCap: 2000000 });
+    const d = ctx.__f({ promptTokens: 1800000, completionTokens: 200000, llmCalls: 62 }, { tokenCap: 2000000 }, { lastVerifyOk: true, greenArtifactVersion: 6 }); // 205th round: the ship-verified exit is conditional on a green existing
     assert.match(d, /1,?800,?000/);
     assert.match(d, /prompt-dominated|输入占/i);
     assert.match(d, /compact|缩小|smaller test input|精简/i);

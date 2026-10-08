@@ -170,7 +170,63 @@
     }
   ];
 
-  function buildTokenCapDetail(spend, budgets) {
+  // 205th log: the turn budget was raised (120) but the token cap was not
+  // — the session died at ~100 calls × ~20K tokens with every turn-family
+  // advisory silent about WHICH wall hits first. Pure projection so tests
+  // and the tick share one implementation.
+  function tokenWallProjection(spend, budgets) {
+    try {
+      const sp = spend || {};
+      const p = sp.promptTokens || 0;
+      const c = sp.completionTokens || 0;
+      const calls = sp.llmCalls || 0;
+      const turns = sp.turns || 0;
+      const cap = budgets && budgets.tokenCap || 0;
+      const maxTurns = budgets && budgets.maxTurns || 0;
+      if (calls < 5 || !cap || maxTurns <= turns) return null;
+      const avg = (p + c) / calls;
+      const tokensLeft = cap - (p + c);
+      const callsLeft = Math.floor(tokensLeft / Math.max(1, avg));
+      const turnsLeft = maxTurns - turns;
+      // Token wall hits first when it cannot fund the remaining turns
+      // (with one verify-cycle of margin — 3 calls).
+      if (callsLeft + 3 < turnsLeft) {
+        return { wallFirst: 'token', callsLeft: callsLeft, turnsLeft: turnsLeft, avgCallTokens: Math.round(avg) };
+      }
+      return null;
+    } catch (e) { return null; }
+  }
+
+  // 205th log: six consecutive verifies shipped 8/9 or 7/9 of the requested
+  // count — the near-miss loop (the live pattern ALTERNATED one- and
+  // two-short, so a strict within-one gate would reset on every other
+  // verify and never fire). The tracker counts shortfalls WITHIN TWO
+  // records; the note breaks the loop on the third consecutive (streak
+  // resets on green, on any other error class, on a 3+-record miss, and on
+  // a CERTIFIED shortfall — certification is an exit, not a loop).
+  function trackNearMissShortfall(prev, verifyResult) {
+    const st = (prev && typeof prev === 'object') ? prev : { count: 0, note: null };
+    const r = verifyResult || {};
+    const cs = (r.detectors && r.detectors.countShortfall) || null;
+    const isShortfall = !!(r.error && r.error.message && /COUNT_SHORTFALL/.test(String(r.error.message))) && !!cs;
+    if (!isShortfall) return { count: 0, note: null };
+    if (cs.exhaustionCertified === true) return { count: 0, note: null };
+    const requested = Number(cs.requested) || 0;
+    const delivered = Number(cs.extracted) || 0;
+    if (requested > 0 && delivered >= requested - 2 && delivered < requested) {
+      const count = (st.count || 0) + 1;
+      if (count >= 3) {
+        return {
+          count: 0,
+          note: 'NEAR-MISS LOOP (' + count + ' consecutive verifies within two records of the requested count — the page SUPPLY is the binding constraint, not your assembly). Stop the assembly tweak loop: (a) certify exhaustion — $collectUntil to the requested count with the run receipt, then ship the certified shortfall DISCLOSED; (b) renegotiate the count with the user via io.confirm (a count the page cannot supply is a contract question, not a selector question); (c) only if the identity census shows UNIQUE records you dropped in assembly, fix that — a third identical near-miss means neither (a) nor (b) happened.'
+        };
+      }
+      return { count: count, note: null };
+    }
+    return { count: 0, note: null };
+  }
+
+  function buildTokenCapDetail(spend, budgets, green) {
     try {
       const sp = spend || {};
       const p = sp.promptTokens || 0;
@@ -181,7 +237,11 @@
         ' ≥ cap ' + (budgets && budgets.tokenCap || 0).toLocaleString() +
         (sp.estimated ? ' (estimated)' : '') +
         '. This session is prompt-dominated (输入占 ' + (p + c > 0 ? Math.round(p * 100 / (p + c)) : 0) + '%; avg ~' + avg.toLocaleString() + ' tokens/call over ' + calls + ' calls)' +
-        '. Exits: (a) send another feedback to resume — compact first (smaller test input, reuse captured evidence, prefer probe.snippet over re-verify); (b) ship the last VERIFIED artifact — the review banner shows the version and one-click rollback; (c) raise budgets.tokenCap in the engine config if this site genuinely needs the runway.';
+        '. Exits: (a) send another feedback to resume — compact first (smaller test input, reuse captured evidence, prefer probe.snippet over re-verify); ' +
+        ((green && green.greenArtifactVersion)
+          ? '(b) ship the last VERIFIED artifact (v' + green.greenArtifactVersion + ') — the review banner shows the version and one-click rollback; '
+          : '(b) NO version was ever verified this session — shipping now ships UNVERIFIED; resume compacted (reuse captured evidence, one repair + one verify) or raise the cap first; ') +
+        '(c) raise budgets.tokenCap in the engine config if this site genuinely needs the runway.';
     } catch (e) {
       return 'token budget exhausted (detail unavailable: ' + (e && e.message) + ')';
     }
@@ -981,6 +1041,20 @@
         state.transcript.push({ kind: 'system', text: tokenDue.text(tokUsed, budgets.tokenCap) });
         emit('budget_advisory', { key: tokenDue.key, tokens: tokUsed, tokenCap: budgets.tokenCap });
       }
+      // 205th log: WHICH wall hits first — the turn budget was raised but
+      // the token cap was not, and no advisory said the token wall would
+      // land ~20 turns early.
+      if (state.budgetAdvisories.indexOf('token-wall-first') === -1) {
+        const proj205 = tokenWallProjection(state.spend, budgets);
+        if (proj205) {
+          state.budgetAdvisories.push('token-wall-first');
+          state.transcript.push({
+            kind: 'system',
+            text: 'TOKEN WALL BEFORE TURN WALL: at ~' + proj205.avgCallTokens + ' tokens/call the token cap funds only ~' + proj205.callsLeft + ' more call(s) while ' + proj205.turnsLeft + ' turn(s) remain — raising maxTurns does NOT buy runway here. Converge now (one repair + one verify), or raise budgets.tokenCap with the turn budget.'
+          });
+          emit('budget_advisory', { key: 'token-wall-first', tokens: tokUsed, tokenCap: budgets.tokenCap, callsLeft: proj205.callsLeft, turnsLeft: proj205.turnsLeft });
+        }
+      }
       if (!due) return;
       for (const adv of BUDGET_ADVISORIES) {
         if (state.spend.turns >= Math.floor(budgets.maxTurns * adv.pct) &&
@@ -1554,7 +1628,7 @@
             report = await stop('wallClock', 'time budget exhausted after ~' + Math.round((state.elapsedMs + netSegmentMs()) / 1000) + 's (parked ' + Math.round(parkedTotal / 1000) + 's excluded) [LLM/provider waits ' + Math.round(llmWaitTotal / 1000) + 's excluded] [system suspension credit ' + Math.round(suspendCreditTotal / 1000) + 's excluded] — raise the budget (wallClockMs) in the resume seed to continue' + verifyStopSuffix() + formatTimeBudgetSuffix());
             break;
           }
-          if (state.spend.promptTokens + state.spend.completionTokens >= budgets.tokenCap) { report = await stop('tokenCap', buildTokenCapDetail(state.spend, budgets)); break; }
+          if (state.spend.promptTokens + state.spend.completionTokens >= budgets.tokenCap) { report = await stop('tokenCap', buildTokenCapDetail(state.spend, budgets, { lastVerifyOk: state.lastVerifyOk, greenArtifactVersion: state.greenArtifactVersion })); break; }
           // Pacing ticks run BEFORE the bucket family so same-turn
           // coincidences keep the natural escalation order (45% early →
           // 65% latency → contract-delay → 50/75/90 buckets).
@@ -2013,6 +2087,11 @@
             state.lastVerifyEmptyFields = pe.length
               ? pe.slice(0, 6).map((f) => String(f.path || f.field) + ' ' + (f.emptyCount || 0) + '/' + (f.totalCount || 0) + ' empty')
               : null;
+            // 205th log: the one-record-short loop breaker.
+            state.nearMissShortfall = trackNearMissShortfall(state.nearMissShortfall, result);
+            if (state.nearMissShortfall && state.nearMissShortfall.note) {
+              state.transcript.push({ kind: 'system', text: state.nearMissShortfall.note });
+            }
             const cs = (result && result.detectors && result.detectors.countShortfall) ? result.detectors.countShortfall : null;
             state.lastVerifyCountShortfall = cs
               ? 'requested ' + cs.requested + ' via the test input, extracted ' + cs.extracted + ' into ' + JSON.stringify(cs.field) + (cs.severe ? ' (severe)' : '') +
@@ -2322,7 +2401,7 @@
     return Math.max(0, nowMs - startMs - Math.max(0, Number(llmWaitMs) || 0) - Math.max(0, Number(parkedMs) || 0) - Math.max(0, Number(suspendCreditMs) || 0) - Math.max(0, Number(environmentalMs) || 0));
   }
 
-  const api = { createResearchSession, computeEffectiveElapsed: computeEffectiveElapsed, makeInstructionStripper };
+  const api = { createResearchSession, computeEffectiveElapsed: computeEffectiveElapsed, makeInstructionStripper, tokenWallProjection, trackNearMissShortfall, buildTokenCapDetail };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.ResearchSessionLib = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));
