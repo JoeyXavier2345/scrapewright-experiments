@@ -1770,6 +1770,39 @@
         if (lastVerify) lastVerify.staleArtifact = true;
         return { updated: true, vocabRegistered: true, note: 'page vocabulary registered — it persists with the artifact, feeds the SEE_MORE_UNEXPANDED census with priority over the fallback list, and seeds the next same-site session' };
       }
+      // 204th log (user: "为何开出 3 个 tab"): the artifact authored an
+      // $openTab step to a better page variant because targetUrl was fixed
+      // at requirement time — a third target-site tab opened and the sub-tab
+      // died at step end (later steps never ran on the page it opened).
+      // SAME-ORIGIN amendment only: the model may redirect within the site
+      // it was built for, never elsewhere.
+      if (a.targetUrl != null) {
+        const svcTu = (typeof d.getDraftService === 'function') ? d.getDraftService() : null;
+        const cur = (svcTu && svcTu.targetUrl) || '';
+        let curOrigin = null;
+        try { curOrigin = cur ? new URL(cur).origin : null; } catch (eUrl) { curOrigin = null; }
+        let newOrigin = null;
+        let urlOk = false;
+        if (typeof a.targetUrl === 'string' && /^https?:\/\//i.test(a.targetUrl.trim())) {
+          try { newOrigin = new URL(a.targetUrl.trim()).origin; urlOk = true; } catch (eUrl) { urlOk = false; }
+        }
+        if (!urlOk) {
+          return { error: 'targetUrl must be an absolute http(s) URL (got ' + JSON.stringify(String(a.targetUrl).slice(0, 80)) + ')' };
+        }
+        if (curOrigin && newOrigin && curOrigin !== newOrigin) {
+          return { error: 'targetUrl amendment must stay on the SAME ORIGIN as the service target (' + curOrigin + ') — cross-origin redirects are out of scope for this service; re-negotiate with the user via io.confirm if a different site is genuinely required' };
+        }
+        const currentStepsTu = (typeof d.getSteps === 'function' ? (d.getSteps() || []) : []);
+        if (!currentStepsTu.length) {
+          return { error: 'no artifact yet — a targetUrl amendment needs an existing step graph; author it with service.update({steps,...}) first' };
+        }
+        d.applyArtifact({ steps: currentStepsTu, targetUrl: a.targetUrl.trim() });
+        if (lastVerify) lastVerify.staleArtifact = true;
+        return {
+          updated: true, targetUrlAmended: true,
+          note: 'targetUrl amended — every run (verify AND runtime) now opens the new URL directly: drop any $openTab step that was opening it per-run (its sub-tab is destroyed at step end, so later steps never ran on the page it opened; it also opened a redundant third tab beside the run tab and the research tab)'
+        };
+      }
       // Twenty-first log: a steps-less schema-only amendment — the model
       // landing the confirmed contract into an artifact authored without
       // schemas (turn 57 of that log, previously rejected with "steps
@@ -1912,6 +1945,29 @@
       // 199th log: $openTab fns are serialized by source — outer variables
       // are invisible in the sub-tab ("N is not defined" class, live twice).
       // Advisory-only, same contract as the un-awaited-$ lint above.
+      // 204th log: a step that $openTabs a URL on the service targetUrl's
+      // origin duplicates the run tab the orchestrator ALREADY opens —
+      // three target-site tabs on screen, and the sub-tab dies at step end
+      // so later steps never see the page it opened.
+      try {
+        const svcTuL = (typeof d.getDraftService === 'function') ? d.getDraftService() : null;
+        const svcOriginTu = (function () {
+          try { return new URL((svcTuL && svcTuL.targetUrl) || '').origin; } catch (e) { return null; }
+        })();
+        if (svcOriginTu) {
+          for (const s of steps) {
+            const src = String((s && s.script) || '');
+            if (src.indexOf('$openTab') === -1) continue;
+            const urlMatch = src.match(/\$openTab\(\s*['"`]([^'"`]+)['"`]/);
+            if (!urlMatch) continue;
+            let o = null;
+            try { o = new URL(urlMatch[1], svcOriginTu).origin; } catch (e) { o = null; }
+            if (o === svcOriginTu) {
+              staticLint.push('OPENTAB_DUPLICATES_TARGET: step "' + String((s && s.id) || '') + '" $openTabs a URL on the service targetUrl origin (' + svcOriginTu + ') — the orchestrator ALREADY opens the targetUrl tab for every run, so this step opens a redundant third tab, and its sub-tab is destroyed at step end (later steps never ran on the page it opened). If the page variant is better, amend the service URL once via service.update({targetUrl}) and DROP the open step; keep $openTab for detail pages only.');
+            }
+          }
+        }
+      } catch (eTu) { /* advisory lint must never block */ }
       if (typeof WU.detectOpenTabClosureRefs === 'function') {
         for (const h of (WU.detectOpenTabClosureRefs(steps) || [])) {
           staticLint.push('OPENTAB_CLOSURE_REF: step "' + String(h.stepId) + '": the $openTab body references outer variable(s) [' + h.names.join(', ') + '] — the body is serialized by source and re-created in the sub-tab, where outer variables do NOT exist ("X is not defined"). Re-derive the values INSIDE the body from __input__ (the step input IS injected into the sub-tab) or inline them as literals.');

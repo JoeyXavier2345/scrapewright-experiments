@@ -16,7 +16,12 @@
 // Regression for console.log 2026-07-26 RC5: $extract(_, 'outerHTML') returned
 // null because outerHTML is a DOM property, silently breaking the domHtml
 // field in extraction outputs.
-const DOM_PROPERTY_READS = new Set(['outerHTML', 'innerHTML']);
+// 204th log: textContent/innerText are DOM PROPERTIES, not attributes —
+// the live session read attr:'textContent' on the right container all
+// session and got null every time (getAttribute('textContent') does not
+// exist) while attr:'outerHTML' on the SAME selector returned 50K chars.
+// Text reads get the same 50K budget as element HTML, disclosed on cut.
+const DOM_PROPERTY_READS = new Set(['outerHTML', 'innerHTML', 'textContent', 'innerText']);
 
 // 机械-语义分离（spec 3.A，mirror of content-script.js inline ops）：match
 // 是 LLM 自写正则——基建只应用，不解释（谓词零知识）。命中即取整个
@@ -88,6 +93,17 @@ function capElementHtmlRead(value) {
   const cap = 50000;
   if (typeof value !== 'string' || value.length <= cap) return value;
   return value.slice(0, cap) + '<!--TRUNCATED: element HTML capped at ' + cap + ' of ' + value.length + ' chars-->';
+}
+function readTextProperty(el) {
+  // jsdom lacks innerText; browsers lack nothing — prefer innerText when
+  // present, else textContent (204th log).
+  var v = (el && el.innerText != null) ? el.innerText : (el ? el.textContent : null);
+  return (v == null) ? '' : v;
+}
+function capElementTextRead(value) {
+  const cap = 50000;
+  if (typeof value !== 'string' || value.length <= cap) return value;
+  return value.slice(0, cap) + ' [truncated: text capped at ' + cap + ' of ' + value.length + ' chars]';
 }
 
 const ARIA_REFERENCE_DEFAULT = 'aria-labelledby';
@@ -210,6 +226,7 @@ function readField(container, spec) {
     // Empty selector → the container itself.
     if (refAttr) return resolveAriaReference(container, refAttr).text;
     if (attr) {
+      if (attr === 'textContent' || attr === 'innerText') return capElementTextRead(readTextProperty(container));
       if (DOM_PROPERTY_READS.has(attr)) return capElementHtmlRead(container[attr]);
       return container.getAttribute(attr);
     }
@@ -219,6 +236,7 @@ function readField(container, spec) {
   if (!el) return undefined;
   if (refAttr) return resolveAriaReference(el, refAttr).text;
   if (attr) {
+    if (attr === 'textContent' || attr === 'innerText') return capElementTextRead(readTextProperty(el));
     if (DOM_PROPERTY_READS.has(attr)) return capElementHtmlRead(el[attr]);
     return el.getAttribute(attr);
   }

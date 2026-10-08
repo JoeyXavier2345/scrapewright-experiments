@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '202-family-miss';
+  const SW_BUILD_TAG = '204-textcontent-targeturl';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -46,7 +46,22 @@
     // DOM properties that look like attributes but aren't — getAttribute
     // returns null for these. Read from the element directly when `attr`
     // names one of them. Mirrors lib/list-extract-ops.js (RC5 fix).
-    const DOM_PROPERTY_READS = new Set(['outerHTML', 'innerHTML']);
+    // 204th log (inline mirror kept in sync): textContent/innerText are
+    // DOM PROPERTIES — the live session read attr:'textContent' on the
+    // right container all session and got null every time while
+    // attr:'outerHTML' on the SAME selector returned 50K chars.
+    const DOM_PROPERTY_READS = new Set(['outerHTML', 'innerHTML', 'textContent', 'innerText']);
+
+    function readTextProperty(el) {
+      var v = (el && el.innerText != null) ? el.innerText : (el ? el.textContent : null);
+      return (v == null) ? '' : v;
+    }
+    function capElementTextRead(value) {
+      const cap = 50000;
+      if (typeof value !== 'string' || value.length <= cap) return value;
+      return value.slice(0, cap) + ' [truncated: text capped at ' + cap + ' of ' + value.length + ' chars]';
+    }
+
 
     // 机械-语义分离（spec 3.A，inline 镜像 lib/list-extract-ops.js）：match
     // 是 LLM 自写正则——基建只应用，不解释（谓词零知识）。命中即取整个
@@ -123,6 +138,7 @@
       if (!sel) {
         if (refAttr) return resolveLabelledbyText(container, refAttr).text;
         if (attr) {
+          if (attr === 'textContent' || attr === 'innerText') return capElementTextRead(readTextProperty(container));
           if (DOM_PROPERTY_READS.has(attr)) return capElementHtmlRead(container[attr]);
           return container.getAttribute(attr);
         }
@@ -132,6 +148,7 @@
       if (!el) return undefined;
       if (refAttr) return resolveLabelledbyText(el, refAttr).text;
       if (attr) {
+        if (attr === 'textContent' || attr === 'innerText') return capElementTextRead(readTextProperty(el));
         if (DOM_PROPERTY_READS.has(attr)) return capElementHtmlRead(el[attr]);
         return el.getAttribute(attr);
       }
@@ -148,7 +165,8 @@
         if (refAttr) return [resolveLabelledbyText(container, refAttr).text];
         let val;
         if (attr) {
-          if (DOM_PROPERTY_READS.has(attr)) val = capElementHtmlRead(container[attr]);
+          if (attr === 'textContent' || attr === 'innerText') val = capElementTextRead(readTextProperty(container));
+          else if (DOM_PROPERTY_READS.has(attr)) val = capElementHtmlRead(container[attr]);
           else val = container.getAttribute(attr);
         } else {
           val = (container.textContent || '').trim();
@@ -602,7 +620,7 @@
             }
             v = r.text;
           } else if (attr) {
-            v = (attr === 'outerHTML' || attr === 'innerHTML') ? el[attr] : (el.getAttribute ? el.getAttribute(attr) : null);
+            v = (attr === 'outerHTML' || attr === 'innerHTML' || attr === 'textContent' || attr === 'innerText') ? el[attr] : (el.getAttribute ? el.getAttribute(attr) : null);
           } else {
             v = (el.textContent || '').trim();
           }
@@ -2147,7 +2165,7 @@
     // Regression for console.log 2026-07-26 RC5: $extract(sel, 'outerHTML') returned
     // null, silently breaking the domHtml field in extraction outputs.
     let result;
-    if (attr === 'outerHTML' || attr === 'innerHTML') {
+    if (attr === 'outerHTML' || attr === 'innerHTML' || attr === 'textContent' || attr === 'innerText') {
       result = capElementHtmlRead(el[attr]);
     } else if (attr) {
       result = el.getAttribute(attr);
