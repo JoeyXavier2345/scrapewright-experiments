@@ -1062,7 +1062,12 @@
             const v = rec ? rec[field] : undefined;
             if (typeof v !== 'string' || v.trim().length < 8) continue;
             valued += 1;
-            const tail = v.trim().match(/(?:…|\.{3})\s*([^\s…]{1,12})\s*$/);
+            // 202nd log: the affordance tail may be MULTI-WORD ("… See
+            // more") — the single-token class missed the English textbook
+            // case live (3/3 records ended "… See more", no proposal).
+            // Cap at 24 chars so prose still cannot masquerade.
+            const tail = v.trim().match(/(?:…|\.{3})\s*([^…\s][^…]{0,23}?)\s*$/);
+            if (tail) tail[1] = tail[1].replace(/\s+/g, ' ').trim();
             if (!tail) continue;
             const token = tail[1];
             if (/^[\d\s.,;:!?…\-–—]+$/.test(token)) continue;

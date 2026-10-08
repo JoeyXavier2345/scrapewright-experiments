@@ -194,6 +194,18 @@ describe('harvest: evidence → registration proposal (no model initiative neede
     assert.equal(r.vocabProposal, undefined);
   });
 
+  it('202nd log: MULTI-WORD affordance tails ("… See more") harvest too — the single-token regex missed the English textbook case', async () => {
+    const records = [
+      { content: 'Java OOP Complete Premium Handbook | Classes, Objects, Inheritance, Polymorphism & Interview Guide… See more' },
+      { content: 'Advanced Notes … See more' },
+      { content: 'Pro S… See more' }
+    ];
+    const t = createSessionTools(probeDeps(records));
+    const r = await t.tools['probe.extract']({ containerSel: '.card', fieldMap: { content: '.c' } });
+    assert.ok(r.vocabProposal, 'proposal attached for the multi-word tail (this exact receipt fired no proposal live)');
+    assert.equal(r.vocabProposal.token, 'See more');
+  });
+
   it('below-threshold repetition (1/3) attaches no proposal', async () => {
     const records = [{ content: 'one……全文' }, { content: 'two full' }, { content: 'three full' }];
     const t = createSessionTools(probeDeps(records));
