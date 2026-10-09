@@ -84,6 +84,10 @@ describe('B. supply-ceiling window — interleaved failures still count (207th l
     st = trackNearMissShortfall(st, miss(7, 4));
     assert.ok(!st.ceilingNote, 'once per tracker (ceilingFired latches; the engine keeps the tracker alive across the session)');
   });
+  it('wired: the engine pushes the ceiling note (source audit, wiring call site)', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
+    assert.ok(src.includes('if (state.nearMissShortfall && state.nearMissShortfall.ceilingNote)'), 'wiring call site');
+  });
 });
 
 describe('C. io.confirm warns when the failing COUNT is kept (207th log)', () => {

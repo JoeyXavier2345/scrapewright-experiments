@@ -83,9 +83,23 @@ describe('F2. identity-failure escalation to annotate.request after 2 consecutiv
     st = trackIdentityFailures(st, { ok: false, error: { message: 'COUNT_SHORTFALL_SUPPLY: x' }, detectors: {} });
     assert.equal(st.count, 0);
   });
-  it('fires once (latched), wired in the engine (source audit)', () => {
+  it('the note is one-shot — a green verify clears it; fresh incidents on a fresh tracker re-fire (211th-round latch fix)', () => {
+    let st = null;
+    st = trackIdentityFailures(st, idErr('DUPLICATE_ID_REQUIRED'));
+    st = trackIdentityFailures(st, idErr('CAPTURED_VALUE_UNBOUND'));
+    assert.ok(st.note, 'fired');
+    st = trackIdentityFailures(st, { ok: true, detectors: {} });
+    assert.equal(st.note, null, 'green consumes the one-shot note (was latched forever, re-pushed every verify)');
+    st = trackIdentityFailures(st, idErr('INVENTED_ID_FALLBACK'));
+    assert.equal(st.note, null, 'the fired latch holds — no repeat on the same tracker');
+    let fresh = null;
+    fresh = trackIdentityFailures(fresh, idErr('DUPLICATE_ID_REQUIRED'));
+    fresh = trackIdentityFailures(fresh, idErr('INVENTED_ID_FALLBACK'));
+    assert.ok(fresh.note, 'fresh incidents re-fire on a fresh tracker');
+  });
+  it('fires once (latched), wired in the engine (source audit, wiring call site)', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
-    assert.match(src, /trackIdentityFailures\(/);
+    assert.ok(src.includes('state.identityFailures = trackIdentityFailures(state.identityFailures, result)'), 'wiring call site');
   });
 });
 
@@ -151,5 +165,9 @@ describe('F4. WANDERING REDS — three consecutive verifies, three DISTINCT clas
     assert.ok(st.note, 'three distinct after the reset fires once');
     st = trackWanderingReds(st, red('F_U'));
     assert.ok(!st.note, 'latched — no repeat');
+  });
+  it('wired in the engine (source audit, wiring call site)', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
+    assert.ok(src.includes('state.wanderingReds = trackWanderingReds(state.wanderingReds, result)'), 'wiring call site');
   });
 });

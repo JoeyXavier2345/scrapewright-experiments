@@ -135,6 +135,53 @@ describe('158th A — session journal unit', () => {
     assert.ok(Number(/DEFAULT_MAX_LINES\s*=\s*(\d+)/.exec(src)[1]) >= 100000, '>= 100k lines');
     assert.ok(Number(/DEFAULT_MAX_CHARS\s*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024/.exec(src)[1]) >= 100, '>= 100MB chars (was 40MB)');
   });
+
+  it('211th round: __hydrate recomputes char totals — an over-cap preloaded backend trims on the NEXT append', async () => {
+    // Without recomputeTotals inside __hydrate, charTotal stays 0 after
+    // hydration and the char cap never fires until the buffer is rescanned.
+    const stored = [];
+    for (let i = 0; i < 10; i++) stored.push({ t: 1, kind: 'mirror', label: 'L' + i, text: 'x'.repeat(60) });
+    const backend = { load: async () => stored.slice(), save: async () => {} };
+    const j = createSessionJournal(backend, { maxLines: 100000, maxChars: 500 });
+    j.__hydrate(stored);
+    j.append('mirror', 'after', 'y');
+    const all = await j.all();
+    assert.ok(all.length < 11 || all.some((e) => /journal trimmed/i.test(String(e.label))),
+      'char-cap trim fired post-hydration (recomputeTotals in __hydrate), got ' + all.length + ' lines');
+  });
+});
+
+describe('211th round — flush-failure honesty + fresher-wins all()', () => {
+  const { createSessionJournal } = require('../lib/session-journal');
+
+  it('a rejecting backend: flush RESOLVES (never throws) and warns on the FIRST failure only', async () => {
+    const warns = [];
+    const origWarn = console.warn;
+    console.warn = function () { warns.push(Array.from(arguments)); };
+    try {
+      const backend = { load: async () => [], save: async () => { throw new Error('quota exceeded'); } };
+      const j = createSessionJournal(backend, { maxLines: 10, maxChars: 100000, flushDebounceMs: 0 });
+      j.append('mirror', 'a', 'x');
+      await j.flush();
+      await j.flush();
+      const flushWarns = warns.filter((w) => /\[session-journal\] flush failed/.test(String(w[0])));
+      assert.equal(flushWarns.length, 1, 'exactly one warn across two failures, got ' + flushWarns.length);
+      assert.match(String(flushWarns[0][1] || ''), /quota/, 'the error rides the warn');
+    } finally {
+      console.warn = origWarn;
+    }
+  });
+
+  it('all() keeps the FRESHER in-memory buffer when the store is shorter/stale', async () => {
+    const stored = [{ t: 1, kind: 'mirror', label: 'only-stale', text: 's' }];
+    const backend = { load: async () => stored.slice(), save: async () => {} };
+    const j = createSessionJournal(backend, { maxLines: 100, maxChars: 100000 });
+    j.append('mirror', 'l1', 'a');
+    j.append('mirror', 'l2', 'b');
+    j.append('mirror', 'l3', 'c');
+    const all = await j.all();
+    assert.equal(all.length, 3, 'in-memory (3 lines, fresher) wins over stored (1 line, stale)');
+  });
 });
 
 describe('158th B — mirrorLines journals every chunk it prints', () => {

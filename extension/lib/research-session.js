@@ -216,8 +216,10 @@
   function trackNearMissShortfall(prev, verifyResult) {
     const st = (prev && typeof prev === 'object') ? prev : { count: 0, note: null, window: [], ceilingFired: false };
     if (!Array.isArray(st.window)) st.window = [];
-    // one-shot message semantics: ceilingNote is consumed on delivery (the
-    // engine pushes it once); the ceilingFired latch prevents re-firing.
+    // one-shot message semantics: the note and ceilingNote are consumed on
+    // delivery (the engine pushes each once); the ceilingFired latch
+    // prevents re-firing the ceiling.
+    st.note = null;
     st.ceilingNote = null;
     // 207th log: the live pattern WANDERED (near-miss, big-miss, id-error,
     // near-miss, ...) — the consecutive streak never reached 3. A rolling
@@ -280,6 +282,7 @@
   // carries the id) is settled by evidence instead of more regex guessing.
   function trackIdentityFailures(prev, verifyResult) {
     const st = (prev && typeof prev === 'object') ? prev : { count: 0, note: null, fired: false };
+    st.note = null; // one-shot message semantics (207th-round lesson)
     const msg = String((verifyResult && verifyResult.error && verifyResult.error.message) || '');
     const isIdentity = /DUPLICATE_ID_REQUIRED|CAPTURED_VALUE_UNBOUND|INVENTED_ID_FALLBACK/.test(msg);
     if (!isIdentity) { st.count = 0; return st; }

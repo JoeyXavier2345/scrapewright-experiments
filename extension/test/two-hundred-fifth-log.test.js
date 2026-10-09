@@ -89,15 +89,30 @@ describe('B. trackNearMissShortfall — the one-record-short loop breaker (205th
     st = trackNearMissShortfall(st, miss(9, 7));
     assert.ok(st.note, 'the actual session pattern breaks on the third verify');
   });
+  it('the note is one-shot — a green verify clears it; fresh incidents re-fire (211th-round latch fix)', () => {
+    let st = null;
+    st = trackNearMissShortfall(st, miss(9, 8));
+    st = trackNearMissShortfall(st, miss(9, 8));
+    st = trackNearMissShortfall(st, miss(9, 8));
+    assert.ok(st.note, 'fired');
+    st = trackNearMissShortfall(st, { ok: true, detectors: {} });
+    assert.equal(st.note, null, 'green consumes the one-shot note (was latched forever, re-pushed every verify)');
+    st = trackNearMissShortfall(st, miss(9, 8));
+    st = trackNearMissShortfall(st, miss(9, 8));
+    st = trackNearMissShortfall(st, miss(9, 8));
+    assert.ok(st.note, 'three fresh incidents re-fire');
+  });
   it('a CERTIFIED shortfall is already shippable-disclosed — no note', () => {
     let st = trackNearMissShortfall(null, miss(9, 8, true));
     st = trackNearMissShortfall(st, miss(9, 8, true));
     st = trackNearMissShortfall(st, miss(9, 8, true));
     assert.equal(st.note, null, 'certified exhaustion is an exit, not a loop');
   });
-  it('wired: the verify post-processing consults the tracker (source audit)', () => {
+  it('wired: the verify post-processing consults the tracker (source audit, wiring call site)', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
-    assert.match(src, /trackNearMissShortfall\(/);
+    // The bare /trackNearMissShortfall\(/ regex matched the DEFINITION — a
+    // deleted wiring block left the suite green. Pin the CALL SITE.
+    assert.ok(src.includes('state.nearMissShortfall = trackNearMissShortfall(state.nearMissShortfall, result)'), 'wiring call site');
   });
 });
 

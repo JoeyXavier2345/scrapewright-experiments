@@ -86,10 +86,17 @@ for (const [label, getOps] of SOURCES) {
 
 describe('$extract paths read textContent as a property (204th log, source audit)', () => {
   const cs = fs.readFileSync(path.join(__dirname, '..', 'content-script.js'), 'utf8');
-  it('the domExtract attr read includes textContent/innerText', () => {
-    const i = cs.indexOf("attr === 'outerHTML' || attr === 'innerHTML'");
-    assert.ok(i > -1);
-    assert.match(cs.slice(i - 200, i + 400), /textContent/, 'the property branch covers textContent');
+  it('EVERY attr-read site includes textContent/innerText (both $extract paths, not just the first)', () => {
+    // indexOf() audited only the FIRST of the two sites — a regression in
+    // the second $extract path would pass unnoticed. Walk ALL occurrences.
+    const re = /attr === 'outerHTML' \|\| attr === 'innerHTML'/g;
+    let m;
+    let count = 0;
+    while ((m = re.exec(cs)) !== null) {
+      count += 1;
+      assert.match(cs.slice(m.index, m.index + 400), /textContent/, 'site ' + count + ' (offset ' + m.index + ') covers textContent');
+    }
+    assert.ok(count >= 2, 'both content-script attr-read sites audited, found ' + count);
   });
 });
 

@@ -33,6 +33,9 @@ const DEFAULT_MAX_LINES = 200000;
 const DEFAULT_MAX_CHARS = 150 * 1024 * 1024;
 const BIG_JOURNAL_FLUSH_DEBOUNCE_MS = 30000;
 const BIG_JOURNAL_THRESHOLD_CHARS = 20 * 1024 * 1024;
+// 211st-round review: flush failures were swallowed entirely — warn once
+// per module lifetime so a persistently broken backend is at least visible.
+let failedFlushCount = 0;
 
 function createSessionJournal(backend, opts) {
   const o = opts || {};
@@ -125,7 +128,13 @@ function createSessionJournal(backend, opts) {
 
   function flush() {
     if (lines === null || !backend) return Promise.resolve();
-    return backend.save(lines.slice()).catch(function () { /* best-effort persistence */ });
+    return backend.save(lines.slice()).catch(function (err) {
+      // best-effort persistence — the in-memory journal stays authoritative
+      failedFlushCount += 1;
+      if (failedFlushCount === 1) {
+        console.warn('[session-journal] flush failed — the in-memory journal is authoritative until a successful write', err);
+      }
+    });
   }
 
   return {
@@ -152,6 +161,10 @@ function createSessionJournal(backend, opts) {
         if (Array.isArray(stored) && stored.length >= lines.length) {
           lines = stored;
           recomputeTotals(lines);
+        } else if (Array.isArray(stored) && stored.length < lines.length && lines.length > 0) {
+          // fresher-wins: a shorter store is stale (e.g. after a failed
+          // flush) — keep the in-memory copy, disclose the mismatch.
+          console.warn('[session-journal] all(): stored journal (' + stored.length + ' line(s)) is shorter than the in-memory buffer (' + lines.length + ') — keeping the fresher in-memory copy');
         }
         return lines.slice();
       }).catch(function () { return lines.slice(); });

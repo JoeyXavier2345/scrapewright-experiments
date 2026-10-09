@@ -693,8 +693,6 @@
       let keptFailingCountNote = '';
       try {
         const stState = (ctx && ctx.session && typeof ctx.session.state === 'function') ? ctx.session.state() : null;
-        const shortfallActive = stState && typeof stState.countShortfall === 'string' && /COUNT-SHORTFALL/i.test(stState.countShortfall || '') === false
-          ? null : (stState ? stState.countShortfall : null);
         const csText = (stState && typeof stState.countShortfall === 'string') ? stState.countShortfall : '';
         const reqMatch = csText.match(/requested\s+(\d+)/i);
         const extMatch = csText.match(/extracted\s+(\d+)/i);

@@ -95,6 +95,10 @@ for (const [label, getOps] of [['lib', () => libOps], ['inline mirror', () => lo
         { textFilter: '~^See\\s+more$' });
       assert.deepEqual(clickedTexts, ['See more', 'See more']);
     });
+    it('an INVALID ~regex textFilter throws (no silent filter bypass)', () => {
+      setupDOM(HTML);
+      assert.throws(() => getOps().clickInListItems(document.querySelectorAll('.card'), 'div[role=button]', () => {}, 0, { textFilter: '~[unclosed' }), /textFilter regex invalid/);
+    });
   });
 }
 
@@ -112,6 +116,40 @@ describe('domClickInList wires textFilter (209th log, source audit)', () => {
     const i = src.indexOf('result = await domClick(data.selector');
     assert.ok(i > -1, 'click relay found');
     assert.match(src.slice(i, i + 260), /data\.args && data\.args\[1\]/, '$click forwards args[1] (the textFilter opts)');
+  });
+});
+
+describe('MATCH_INDEX_UNGUARDED lint (211th log)', () => {
+  const { createSessionTools } = require('../lib/session-tools');
+  const CTX = { session: { state: () => ({ session: { artifactVersions: [] } }) } };
+  function run(steps) {
+    const deps = {
+      rail: { executeDsl: async () => ({ result: { ok: true }, selectorDiagnostics: [] }), pageState: async () => ({ open: true, tabId: 1, url: 'https://example.com/search/posts' }), ensureLock: async () => {}, releaseLock: async () => {}, dispose: async () => {}, tabId: 1 },
+      runVerify: async () => ({ report: { ok: true, error: null, aborted: false, score: { score: 100, isData: true, breakdown: {} }, schemaOk: true, schemaMissing: [], detectors: {}, steps: [], finalResult: null, pages: '0', eventCount: 0, events: [] }, events: [], raw: {} }),
+      getDraftService: () => ({ targetUrl: 'https://example.com/s?q={{k}}', steps }),
+      applyArtifact: () => {},
+      getTestInput: () => ({}), getOutputSchema: () => ({ type: 'object' }), getSteps: () => steps,
+      ioConfirmBridge: { request: async () => ({ confirmed: true }) },
+      probeFactory: () => ({ snippet: async () => ({ result: 'ok' }) })
+    };
+    const t = createSessionTools(deps);
+    return (async () => {
+      await t.tools['io.confirm']({ inputSchema: { type: 'object', required: ['q'] }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } }, CTX);
+      return t.tools['service.update']({ steps }, CTX);
+    })();
+  }
+  it('direct .match()[N] indexing draws the lint with the guarded-shape teaching', async () => {
+    const steps = [{ id: 'extract', name: 'e', script: "const d = 'posted 2026-01-02'.match(/DATE/)[0]; return d;", onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }];
+    const out = await run(steps);
+    const lint = (out.staticLint || []).find((l) => /MATCH_INDEX_UNGUARDED/.test(String(l)));
+    assert.ok(lint, 'lint present: ' + JSON.stringify((out.staticLint || []).slice(0, 3)));
+    assert.match(lint, /guarded shape/i);
+    assert.match(lint, /m \? m\[1\]/);
+  });
+  it('the guarded shape (match into a const, index behind a ternary) draws NO lint', async () => {
+    const steps = [{ id: 'extract', name: 'e', script: "const x = 'axb'; const m = x.match(/x/); const v = m ? m[1] : ''; return v;", onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }];
+    const out = await run(steps);
+    assert.ok(!((out.staticLint || []).some((l) => /MATCH_INDEX_UNGUARDED/.test(String(l)))), 'no lint: ' + JSON.stringify(out.staticLint || []));
   });
 });
 
