@@ -5945,6 +5945,61 @@ function validateChain(steps) {
     }
   }
 
+  // 214th log: a cycle composed purely of onSuccess edges never reaches
+  // TERMINATE unless a step inside it FAILS — ready/data results always
+  // route onSuccess, and not-ready retries consume in-step iterations then
+  // exit via onFailure. The incident: extract.onSuccess=expand +
+  // expand.onSuccess/onFailure=extract, both steps unconditionally
+  // returning ready results ({posts} / {done:true}) — the verify
+  // ping-ponged 50 executions over 745s until the orchestrator global cap
+  // threw an anonymous STEP_ITERATION_EXCEEDED. A success-edge cycle is a
+  // legitimate loop ONLY when it DECLARES its exit: a poll step inside the
+  // cycle (maxIterations>1 — the sanctioned back-edge idiom) or an
+  // explicit not-ready/failure signal in a member script.
+  const exitSignalRe = /done:\s*false|ready:\s*false|generating:\s*true|loading:\s*true|failed:\s*true|failed\s*:\s*true|\berror\s*:/i;
+  const succColor = new Map();
+  const succStack = [];
+  let succCycle = null;
+  const dfsSucc = (id) => {
+    if (succCycle) return;
+    succColor.set(id, 1);
+    succStack.push(id);
+    const step = steps.find((s) => s.id === id);
+    if (step) {
+      const t = step.onSuccess;
+      if (t && t !== 'TERMINATE' && ids.has(t)) {
+        if (succColor.get(t) === 1) {
+          succCycle = succStack.slice(succStack.indexOf(t)).concat(t);
+        } else if (!succColor.has(t)) {
+          dfsSucc(t);
+        }
+      }
+    }
+    succStack.pop();
+    succColor.set(id, 2);
+  };
+  for (const s of steps) {
+    if (s && s.id && !succColor.has(s.id)) dfsSucc(s.id);
+    if (succCycle) break;
+  }
+  if (succCycle) {
+    const members = succCycle.slice(0, -1);
+    const declaresExit = members.some((mid) => {
+      const m = steps.find((s) => s.id === mid);
+      if (!m) return false;
+      if (m.maxIterations != null && m.maxIterations > 1) return true;
+      return exitSignalRe.test(String(m.script || ''));
+    });
+    if (!declaresExit) {
+      return {
+        valid: false,
+        error: `Step graph contains an onSuccess-only cycle with no declared exit: ${succCycle.join(' → ')}. ` +
+          'Ready/data results ALWAYS route onSuccess, so this cycle can never reach TERMINATE unless a step in it fails — it will spin every member (real DOM work each pass) until the global iteration cap kills the run as STEP_ITERATION_EXCEEDED. ' +
+          'Fix: (a) route the cycle exit edge to TERMINATE (a linear chain), or (b) keep the loop but declare its exit — a poll step inside the cycle with maxIterations>1 returning {done:false} until done, or an explicit failure branch (return {failed:true}).'
+      };
+    }
+  }
+
   return { valid: true };
 }
 

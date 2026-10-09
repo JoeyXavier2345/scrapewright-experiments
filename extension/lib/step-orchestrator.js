@@ -166,6 +166,11 @@ class StepOrchestrator {
       let lastStepResult = null;
       let globalIteration = 0;
       const stepResultsMap = {};
+      // 214th log: the traversal tail is the only falsifiable evidence when
+      // the global cap fires — a success-edge cycle (every member returning
+      // ready results) ping-ponged 50 executions / 745s and died as a BARE
+      // STEP_ITERATION_EXCEEDED with no step id and no path.
+      const traversalLog = [];
 
       // Auto-boost maxIterations for steps that are loop-back targets
       const stepsMap = new Map();
@@ -189,17 +194,31 @@ class StepOrchestrator {
 
       while (currentStepId !== 'TERMINATE' && currentStepId !== null && currentStepId !== undefined) {
         globalIteration++;
+        traversalLog.push(String(currentStepId));
+        if (traversalLog.length > 12) traversalLog.shift();
         debugLogger.log('info', 'step-orchestrator', 'Step iteration', { globalIteration, currentStepId });
 
         if (globalIteration > maxStepIterations) {
           debugLogger.log('error', 'step-orchestrator', 'Max step iterations exceeded', { globalIteration, maxStepIterations });
-          throw new Error('STEP_ITERATION_EXCEEDED');
+          const execCounts = {};
+          for (const k of Object.keys(stepIterationCounts)) execCounts[k] = stepIterationCounts[k];
+          const capErr = new Error('STEP_ITERATION_EXCEEDED: the step graph ran ' + (globalIteration - 1) +
+            ' step execution(s) without reaching TERMINATE — recent traversal ' + traversalLog.join(' → ') +
+            ' repeats; if this is a cycle of onSuccess edges it can never exit unless a step in it FAILS (ready/data results always route onSuccess; polling exits need maxIterations>1 with {done:false}). ' +
+            'Per-step executions: ' + (Object.keys(execCounts).map((k) => k + '×' + execCounts[k]).join(', ') || '(none)') +
+            '. Break the cycle: route its exit edge to TERMINATE, or declare the loop exit (poll step / failure branch).');
+          capErr.stepId = currentStepId;
+          capErr.globalIteration = globalIteration;
+          capErr.stepIterationCounts = execCounts;
+          throw capErr;
         }
 
         const step = stepsMap.get(currentStepId);
         if (!step) {
           debugLogger.log('error', 'step-orchestrator', 'Step not found', { currentStepId });
-          throw new Error('STEP_NOT_FOUND');
+          const nfErr = new Error('STEP_NOT_FOUND: no step with id "' + currentStepId + '" — an edge points at an id that is not in the graph');
+          nfErr.stepId = currentStepId;
+          throw nfErr;
         }
 
         if (!enteredStepIds.has(step.id)) {

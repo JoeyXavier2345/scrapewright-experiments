@@ -279,7 +279,9 @@ describe('StepOrchestrator', () => {
     const deps = makeMockDeps({ executeScript: async () => ({ done: false }) });
     await assert.rejects(
       async () => StepOrchestrator.execute(service, {}, deps),
-      (err) => err.message === 'STEP_ITERATION_EXCEEDED'
+      // 214th log: the cap error carries evidence (traversal tail, per-step
+      // counts, teaching) after the class token.
+      (err) => /^STEP_ITERATION_EXCEEDED/.test(err.message)
     );
   });
 
@@ -377,7 +379,7 @@ describe('StepOrchestrator', () => {
     const deps = makeMockDeps();
     await assert.rejects(
       async () => StepOrchestrator.execute(service, {}, deps),
-      (err) => err.message === 'STEP_NOT_FOUND'
+      (err) => /^STEP_NOT_FOUND/.test(err.message)
     );
   });
 

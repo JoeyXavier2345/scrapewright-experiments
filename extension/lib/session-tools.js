@@ -1313,9 +1313,29 @@
             }
             const refCost = Math.max(report.medianVerifyCostMs || 0, wallCostMs);
             if (refCost > 0 && remainingMs < 1.5 * refCost) {
-              const fits = Math.floor(remainingMs / refCost);
-              const econNote = 'VERIFY ECONOMICS: this verify cost ' + Math.round(wallCostMs / 1000) +
-                's; roughly ' + fits + ' more fit' + (fits === 1 ? '' : 's') + ' in the remaining wall budget — diagnose on the RESEARCH tab with probe.snippet before spending another verify; reserve the last slot for the final green confirmation.';
+              // 214th log: refCost is the WORST shape (max of median and
+              // this call). With a bimodal history (48s reds + one 745s
+              // full-run) the bare "roughly 0 more fit" made the model
+              // disclose "verify wall budget was exhausted" and surrender-
+              // finish while 633 billable seconds and ~13 median-cost
+              // verifies remained — name both numbers.
+              const fitsByRef = Math.floor(remainingMs / refCost);
+              const fitsByMedian = report.medianVerifyCostMs
+                ? Math.floor(remainingMs / report.medianVerifyCostMs) : null;
+              let econNote;
+              if (fitsByRef > 0) {
+                econNote = 'VERIFY ECONOMICS: this verify cost ' + Math.round(wallCostMs / 1000) +
+                  's; roughly ' + fitsByRef + ' more fit' + (fitsByRef === 1 ? '' : 's') + ' in the remaining wall budget';
+              } else if (fitsByMedian > 0) {
+                econNote = 'VERIFY ECONOMICS: this verify cost ' + Math.round(wallCostMs / 1000) +
+                  's (session median ' + Math.round(report.medianVerifyCostMs / 1000) + 's); a full-cost verify of THIS shape no longer fits in the remaining ' +
+                  Math.round(remainingMs / 1000) + 's — but ~' + fitsByMedian + ' median-cost verify' + (fitsByMedian === 1 ? '' : 's') +
+                  ' still fit, so the wall budget is NOT exhausted';
+              } else {
+                econNote = 'VERIFY ECONOMICS: this verify cost ' + Math.round(wallCostMs / 1000) +
+                  's; roughly 0 more fit in the remaining wall budget (' + Math.round(remainingMs / 1000) + 's remaining)';
+              }
+              econNote += ' — diagnose on the RESEARCH tab with probe.snippet before spending another verify; reserve the last slot for the final green confirmation.';
               report.note = (typeof report.note === 'string' && report.note) ? report.note + ' ' + econNote : econNote;
             }
           }
