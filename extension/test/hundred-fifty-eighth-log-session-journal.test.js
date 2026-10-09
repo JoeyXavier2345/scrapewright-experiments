@@ -216,6 +216,24 @@ describe('158th C — service worker debug journal', () => {
     const block = BG.slice(i, i + 800);
     assert.match(block, /sendResponse/, 'responds with the journal');
   });
+
+  // 211th review F9: 20k lines x 4000 chars can exceed the storage.session
+  // quota — the ring needs a byte budget with head-trim, and a flush failure
+  // must surface once instead of being swallowed.
+  it('the ring carries a byte budget with head-trim and warns on flush failure (source audit)', () => {
+    const i = BG.indexOf('SW_DEBUG_JOURNAL_MAX');
+    assert.ok(i > -1, 'ring code found');
+    const wrapAt = BG.indexOf('wrapDebugLoggerWithJournal', i);
+    const ring = BG.slice(i, BG.indexOf('})();', wrapAt));
+    assert.match(ring, /SW_DEBUG_JOURNAL_BYTE_BUDGET/, 'a byte-budget constant exists');
+    assert.match(ring, /8000000/, 'budget is 8MB (under the 10MB storage.session quota)');
+    assert.match(ring, /swDebugRingBytes/, 'an approximate running byte total is tracked');
+    assert.match(ring, /while \(swDebugRingBytes > SW_DEBUG_JOURNAL_BYTE_BUDGET/, 'a trim loop brings the ring back under budget');
+    assert.match(ring, /sw ring over byte budget/, 'the trim discloses how many lines it dropped');
+    const flush = BG.slice(BG.indexOf('function swDebugJournalFlush'), BG.indexOf('function swDebugJournalFlush') + 900);
+    assert.match(flush, /chrome\.runtime\.lastError/, 'a flush failure is checked');
+    assert.match(flush, /swDebugFlushWarned/, 'the warning fires once, not per flush');
+  });
 });
 
 describe('158th D — one-click merged export', () => {
