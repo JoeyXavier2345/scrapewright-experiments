@@ -200,11 +200,27 @@
               if (typeof env.result === 'string') out.bodyTextChars = env.result.length;
               else if (typeof env.result === 'number') out.bodyTextChars = env.result;
             }
+            // 215th log: the census blessed a RAW-SOURCE dump as hydrated —
+            // body text was 3.5M chars of unrendered payload
+            // ({"require":[["qplTimingsServerJS"... ) with ZERO rendered
+            // articles. Rendered pages never show markup tags or a JSON
+            // module head in their text; a huge/any body whose head does is
+            // a plain-text/degraded load (often rate-limiting under
+            // repeated heavy opens) — the tab is dead for DOM probing.
+            const headSample = (typeof env.result === 'string' ? env.result : '').slice(0, 400);
+            if (headSample) {
+              const rawSource = /<!DOCTYPE|<\/?(?:html|head|body|script|meta|link|title)\b/i.test(headSample) ||
+                (out.bodyTextChars > 100000 && /^\s*[[{]\s*["{[]/.test(headSample));
+              if (rawSource) {
+                out.warning = 'body text is RAW SOURCE (' + out.bodyTextChars + ' chars of markup/JSON payload, head: ' +
+                  JSON.stringify(headSample.slice(0, 80)) + ') — the page rendered as PLAIN TEXT, a degraded or refused load (often rate-limiting after repeated heavy opens); the DOM census is meaningless on this tab. Wait and re-open (treat it like the error-page case), or change the target.';
+              }
+            }
           } catch (e) { /* census is best-effort */ }
         }
         if (warning) out.warning = warning;
         else if (templateWarn) out.warning = templateWarn;
-        else if (typeof out.bodyTextChars === 'number' && out.bodyTextChars < 200) {
+        else if (typeof out.bodyTextChars === 'number' && out.bodyTextChars < 200 && !out.warning) {
           out.warning = 'body text is only ' + out.bodyTextChars + ' chars — the page is likely an UNHYDRATED SHELL (splash/loading markup; client JS has not rendered content yet). Call page.settle (or re-open and re-check) before probing and concluding the page is empty';
         }
         return out;

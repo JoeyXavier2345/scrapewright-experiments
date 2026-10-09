@@ -1311,8 +1311,15 @@
                 const prevPE = previewJson(lastPrevPE.get(sid));
                 if (!prevPE || prevPE.done !== true) continue;
                 const numsPE = Object.values(prevPE).filter((v) => typeof v === 'number');
-                if (!numsPE.length) continue;
-                const counterPE = Math.max.apply(null, numsPE);
+                // 215th log: a BARE {done:true} preview (no counter field)
+                // skipped the veto entirely — the incident collect exited
+                // done after ONE no-growth round delivering 2 of 6. When
+                // the preview carries no number, the run's delivered count
+                // is the counter: below the ask + uncertified + severe =
+                // the same one-round self-declared "done".
+                const counterPE = numsPE.length
+                  ? Math.max.apply(null, numsPE)
+                  : detectors.countShortfall.extracted;
                 if (counterPE >= reqPE) continue;
                 error = new Error(
                   'PREMATURE_EXHAUSTION: step "' + sid + '" exited done:true after ' + iters +
