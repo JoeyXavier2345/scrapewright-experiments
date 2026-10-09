@@ -95,6 +95,10 @@
         <div class="session-controls-buttons">
           <button id="btnSessionPause">Pause</button>
           <button id="btnSessionResume" class="hidden">Resume</button>
+          <!-- 212th log (user feature): mid-research intervention — pause the
+               run, type an observation about the page behavior, resume with it
+               injected as a USER FEEDBACK directive. -->
+          <button id="btnSessionIntervene" title="Pause the research, describe what you observe on the page, and steer the next turns with your observation.">Intervene</button>
           <button id="btnSessionAbort">Abort</button>
           <button id="btnDownloadSessionLogP4" class="btn-secondary" type="button" title="Exports the durable journal (page [session] mirror + LLM bodies + SW ring) — works even if the session already errored.">Download Session Log</button>
         </div>
@@ -234,6 +238,15 @@
       </div>
       <!-- Ninth-log L4: completed-session continuation — user feedback restarts
            the research engine from the persisted state with the fix request. -->
+      <div id="sessionIntervenePanel" class="exploration-panel hidden">
+        <h4>Intervene — steer the research with your observation</h4>
+        <p class="hint-label">The session is paused. Describe what you see on the page (behavior the harness cannot perceive: popovers that only mount for the first cards, wrong elements hovered, missing content). On send, the session resumes with your text injected as a directive the model must address.</p>
+        <textarea id="sessionInterveneText" rows="3" placeholder="e.g. Only the first two posts ever show a hovercard; the rest of the feed is skipped. The See more buttons on video posts never expand."></textarea>
+        <div class="sessionFeedbackActions">
+          <button id="btnSessionInterveneSend" class="btn-primary">Send &amp; Resume</button>
+          <button id="btnSessionInterveneCancel" class="btn-secondary">Cancel</button>
+        </div>
+      </div>
       <div id="sessionFeedbackPanel" class="hidden">
         <h4>Result not right? Continue the research session</h4>
         <!-- Harness 对标（2026-09-11 用户指示）：收场审查门——把最后 verify

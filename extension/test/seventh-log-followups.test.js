@@ -177,7 +177,7 @@ describe('F3: extractWithHover_done carries failure reasons (source audit)', () 
     // done event. Hundred-sixtieth round: the hoverCost receipt block
     // (~900 chars, data-driven batch sizing) pushed the tally past 5500 —
     // window is a scoping heuristic, bumped with the round noted.
-    const chunk = CS_SRC.slice(i - 7400, i + 700); // 210th round: the anchorUnionHint block widened the span
+    const chunk = CS_SRC.slice(i - 8800, i + 700); // 212th round: the anchorCoverage/anchorBreadth census widened the span span
     assert.ok(/failureReasons/.test(chunk),
       'failed hover reasons must be tallied onto the event');
     assert.ok(/observedPopoverCount/.test(chunk),

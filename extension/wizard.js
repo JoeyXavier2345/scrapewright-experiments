@@ -450,6 +450,35 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btnCustomTestRun').addEventListener('click', () => { runCustomTest(); });
   document.getElementById('btnCustomTestSave').addEventListener('click', () => { saveCustomTestInput(); });
   document.getElementById('btnSessionPause').addEventListener('click', () => { wizardSession && wizardSession.pause(); });
+  // 212th log (user feature): mid-research intervention. Pause the running
+  // session, show the observation panel; send routes the text through the
+  // established USER FEEDBACK pipeline (which mutates the persisted
+  // transcript and resumes — the same channel the end-of-run review uses).
+  document.getElementById('btnSessionIntervene').addEventListener('click', async () => {
+    try { if (wizardSession && typeof wizardSession.pause === 'function') await wizardSession.pause(); } catch (e) { /* already stopped */ }
+    const panel = document.getElementById('sessionIntervenePanel');
+    if (panel) panel.classList.remove('hidden');
+    const txt = document.getElementById('sessionInterveneText');
+    if (txt) txt.focus();
+  });
+  document.getElementById('btnSessionInterveneCancel').addEventListener('click', () => {
+    const panel = document.getElementById('sessionIntervenePanel');
+    if (panel) panel.classList.add('hidden');
+  });
+  document.getElementById('btnSessionInterveneSend').addEventListener('click', async () => {
+    const src = document.getElementById('sessionInterveneText');
+    const text = String((src && src.value) || '').trim();
+    if (!text) { showToast('Describe what you observe first.', 'warn', 3000); return; }
+    // Bridge into the feedback sender: it reads its own textarea, so mirror
+    // the text there, then let the established pipeline handle duplicate
+    // checks, transcript injection, and resume.
+    const fbEl = document.getElementById('sessionFeedbackText');
+    if (fbEl) fbEl.value = text;
+    const panel = document.getElementById('sessionIntervenePanel');
+    if (panel) panel.classList.add('hidden');
+    if (src) src.value = '';
+    await sendSessionFeedback();
+  });
   document.getElementById('btnSessionResume').addEventListener('click', async () => {
     const btn = document.getElementById('btnSessionResume');
     if (!wizardSession) { await resumeResearchSession(); return; }
@@ -2970,6 +2999,7 @@ function setSessionControls(mode) {
   if (mode === 'idle') { bar.classList.add('hidden'); return; }
   bar.classList.remove('hidden');
   document.getElementById('btnSessionPause').classList.toggle('hidden', mode !== 'running');
+  document.getElementById('btnSessionIntervene').classList.toggle('hidden', mode !== 'running');
   document.getElementById('btnSessionResume').classList.toggle('hidden', mode !== 'paused' && mode !== 'stopped');
   document.getElementById('btnSessionAbort').classList.toggle('hidden', mode !== 'running' && mode !== 'paused');
 }

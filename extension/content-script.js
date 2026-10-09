@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '210-census-ladder';
+  const SW_BUILD_TAG = '212-anchor-coverage-intervene';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -5029,6 +5029,25 @@
           });
           continue;
         }
+        // 212th log: video-player chrome — hovering an anchor inside a video
+        // caption auto-mounts the PLAYER (scrubber text like 0:00 / 0:10, no
+        // entity data). Live: three hashtag hovers captured 11K video markup
+        // each and the step shipped them as hoverInfo entries. A candidate
+        // that contains a <video> and carries <60 chars of stripped text is
+        // player chrome, not a hovercard.
+        try {
+          if (node.querySelector('video')) {
+            var vt212 = String(node.textContent || '').replace(/\s+/g, ' ').trim();
+            if (vt212.length < 60) {
+              rememberRejectedAdded(node);
+              if (rejectedSummary.length < 5) rejectedSummary.push({
+                tag: node.tagName,
+                reason: 'video_player_chrome'
+              });
+              continue;
+            }
+          }
+        } catch (e212v) { /* best-effort rejection */ }
         passingCandidates.push({
           node: node, posAbsolute: posAbsolute, posOverlay: posOverlay, z: nz, dist: ndist, area: narea,
           source: nsource
@@ -5630,6 +5649,15 @@
     var anchorsFound = 0;
     var hovercardsCaptured = 0;
     var hoverFailures = 0;
+    // 212th log: per-container anchor census — a record with hovercards:[]
+    // matched ZERO anchors (failed anchors still push entries with
+    // hovered:false, so an empty array really means the anchorSel caught
+    // nothing in that container). The user watched "only the first two
+    // cards" get popovers while the summary said anchorsFound 6-12 across
+    // 41 containers — the DOM-shape-subset blindness the total-zero
+    // FAMILY_MISS detector cannot see.
+    var anchoredContainers = 0;
+    var zeroAnchorContainers = 0;
     // Seventh-log survey (2026-09-01): captured/failed COUNTS alone could not
     // distinguish popover_timeout (selector mismatch — the observedPopover
     // evidence path) from no_hover_signal (anchor without a popover), so the
@@ -5640,6 +5668,7 @@
     var observedPopoverCount = 0;
     for (var i = 0; i < records.length; i++) {
       var cards = records[i].hovercards || [];
+      if (cards.length > 0) anchoredContainers += 1; else zeroAnchorContainers += 1;
       anchorsFound += cards.length;
       for (var j = 0; j < cards.length; j++) {
         if (cards[j].hovered && cards[j].htmlSnippet) {
@@ -5659,6 +5688,23 @@
       failureReasons: failureReasons,
       observedPopoverCount: observedPopoverCount
     };
+    // 212th log: coverage census — anchored AND zero-anchor containers mixed
+    // means the anchorSel catches only a DOM-shape subset of the population.
+    if (anchoredContainers > 0 && zeroAnchorContainers > 0) {
+      _diagnostics.hoverSummary.anchorCoverage = {
+        anchoredContainers: anchoredContainers,
+        zeroAnchorContainers: zeroAnchorContainers,
+        processedContainers: records.length,
+        note: 'the anchorSel matched anchors on only ' + anchoredContainers + ' of ' + records.length +
+          ' processed container(s) — it catches only a DOM-shape subset (the wrapping differs across cards). Anchor on a family present on EVERY card (see cardAnchors / the anchor census families), not on one wrapper shape.'
+      };
+    }
+    // 212th log: breadth hint — >4 anchors per anchored container averages
+    // to sweeping body content (hashtags, related links), not entity rows.
+    if (anchoredContainers > 0 && (anchorsFound / anchoredContainers) > 4) {
+      _diagnostics.hoverSummary.anchorBreadth = 'anchorSel averages ' +
+        (anchorsFound / anchoredContainers).toFixed(1) + ' anchors per anchored container — that includes body-content links (hashtags etc.), not just the entity rows. Scope the anchorSel to the header/timestamp block (h2 a, h3 a, the profile/group link row) so each card sweeps its entity rows only.';
+    }
     // 160th round: measured cost receipt — data-driven batch sizing.
     try {
       if (processed.length > 0 && typeof ops.hoverBatchCostHint === 'function') {
