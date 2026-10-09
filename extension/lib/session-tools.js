@@ -2127,15 +2127,21 @@
       // href shape (silently skipping cards) and literal 'undefined' ids
       // slipped through the fallback. $collectUntil(idAttr) does scroll +
       // identity-dedupe + certification in one harness call.
+      // 211th-review #17: the original gate keyed on site-specific href
+      // tokens (fbid/story_fbid families) — a universality violation that
+      // also left the identical bug invisible on every other site. The
+      // GENERIC shape: a .match() regex over extraction output + a
+      // seen-map/Set + a skip-on-falsy-id continue — the pattern that
+      // decides WHICH CARDS ARE RECORDS via an enumerated value family.
       try {
         for (const s of steps) {
           const src = String((s && s.script) || '');
-          if (src.indexOf('$extractWithHover') === -1 && src.indexOf('$extractList') === -1) continue;
-          const hasRegex = /\.match\s*\(\s*\/[^/]*fbid|story_fbid|\[?\&\]fbid=/.test(src) || /story_fbid/.test(src);
-          const hasSeenMap = /seen\s*\[\s*\w+\s*\]\s*=\s*1/.test(src) || /new Set\(\)/.test(src);
-          const hasSkip = /if\s*\(\s*!\s*\w+\s*(pid|id)?\s*\|\|\s*/.test(src) || /continue;\s*\/\/?\s*$|pid\s*\)\s*continue/.test(src) && /continue/.test(src);
-          if (hasRegex && hasSeenMap) {
-            staticLint.push('HANDROLLED_ID_DEDUPE: step "' + String((s && s.id) || '') + '" hand-rolls an id-regex + seen-map dedupe over extraction output — a regex family you did not enumerate will SILENTLY SKIP cards (live: 15 containers → 3 records; /reel/ and pfbid shapes fell outside the enumerated families) and a failed match can leak a literal "undefined" id (live: DUPLICATE_ID on "undefined"). Prefer $collectUntil(containerSel, {targetCount, idAttr}) — the harness does scroll + identity-dedupe + exhaustion certification in ONE call; keep the regex only to NORMALIZE an already-extracted id, never to decide which cards are records.');
+          if (src.indexOf('$extractWithHover') === -1 && src.indexOf('$extractList') === -1 && src.indexOf('$extractListMulti') === -1) continue;
+          const hasRegex = /\.match\s*\(\s*\//.test(src);
+          const hasSeenMap = /\w+\s*\[\s*\w+\s*\]\s*=\s*1\b/.test(src) || /\.add\s*\(\s*\w+\s*\)/.test(src);
+          const hasSkip = /if\s*\(\s*!\s*\w+\s*(\(\w+\))?\s*(\|\||&&)/.test(src);
+          if (hasRegex && hasSeenMap && hasSkip) {
+            staticLint.push('HANDROLLED_ID_DEDUPE: step "' + String((s && s.id) || '') + '" hand-rolls a value-regex + seen-map dedupe with a skip-on-no-id continue over extraction output — a value family you did not enumerate will SILENTLY SKIP cards (live incident: 15 containers became 3 records because the href shapes outside the enumerated families were dropped) and a failed match can leak a literal "undefined" id (live: DUPLICATE_ID on "undefined"). Prefer $collectUntil(containerSel, {targetCount, idAttr}) — the harness does scroll + identity-dedupe + exhaustion certification in ONE call; keep the regex only to NORMALIZE an already-extracted id, never to decide which cards are records.');
             break;
           }
         }

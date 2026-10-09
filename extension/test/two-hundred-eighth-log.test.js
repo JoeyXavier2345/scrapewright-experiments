@@ -171,3 +171,33 @@ describe('F4. WANDERING REDS — three consecutive verifies, three DISTINCT clas
     assert.ok(src.includes('state.wanderingReds = trackWanderingReds(state.wanderingReds, result)'), 'wiring call site');
   });
 });
+
+describe('211-review #17: HANDROLLED_ID_DEDUPE is site-generic (no fbid tokens in the gate)', () => {
+  const { createSessionTools } = require('../lib/session-tools');
+  const CTX = { session: { state: () => ({ session: { artifactVersions: [] } }) } };
+  it('a NON-FB id regex + seen-map + skip fires the lint (generic shape, not href tokens)', async () => {
+    const script = "const seen = {}; const idOf = h => { const m = (h||'').match(/\\/items\\/(\\w+)/); return m ? m[1] : ''; }; const rs = await $extractList('div.card', FM); for (const r of rs) { const id = idOf(r.u); if (!id || seen[id]) continue; seen[id] = 1; out.push(r); }";
+    const steps = [{ id: 'x', name: 'x', script, onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }];
+    const deps = {
+      rail: { executeDsl: async () => ({ result: { ok: true }, selectorDiagnostics: [] }), pageState: async () => ({ open: true, tabId: 1, url: 'https://example.com/list' }), ensureLock: async () => {}, releaseLock: async () => {}, dispose: async () => {}, tabId: 1 },
+      runVerify: async () => ({ report: { ok: true, error: null, aborted: false, score: { score: 100, isData: true, breakdown: {} }, schemaOk: true, schemaMissing: [], detectors: {}, steps: [], finalResult: null, pages: '0', eventCount: 0, events: [] }, events: [], raw: {} }),
+      getDraftService: () => ({ targetUrl: 'https://example.com/list', steps }),
+      applyArtifact: () => {},
+      getTestInput: () => ({}), getOutputSchema: () => ({ type: 'object' }), getSteps: () => steps,
+      ioConfirmBridge: { request: async () => ({ confirmed: true }) },
+      probeFactory: () => ({ snippet: async () => ({ result: 'ok' }) })
+    };
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: { type: 'object', required: ['q'] }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } }, CTX);
+    const out = await t.tools['service.update']({ steps }, CTX);
+    assert.ok((out.staticLint || []).some((l) => /HANDROLLED_ID_DEDUPE/.test(String(l))), 'generic /items/ regex fires — no site token required');
+  });
+  it('source gate carries no fbid/story_fbid tokens (universality)', () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'session-tools.js'), 'utf8');
+    const i = src.indexOf('HANDROLLED_ID_DEDUPE:');
+    const gate = src.slice(i - 900, i);
+    assert.doesNotMatch(gate, /fbid|story_fbid|pfbid/, 'the detection regex is site-generic');
+  });
+});
