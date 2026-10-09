@@ -2312,8 +2312,15 @@
             // Fifty-eighth log: two census entries for the SAME field
             // (queryBlob + opaqueToken kinds) printed the field twice in the
             // finish disclosure — dedupe, keep first-seen order.
-            state.lastVerifyJunkFields = jfList.length
-              ? Array.from(new Set(jfList.slice(0, 8).map((f) => String(f.field || f.path)).filter(Boolean))).slice(0, 6)
+            // 216th log: repeated-token fields (the brand-token ×44 green
+            // ship) join the same finish lane — a junk-shaped REQUIRED
+            // field must ride the shipped disclosure even when the verify
+            // ran before the veto existed or the field is optional.
+            const rtfList216 = (result && result.detectors && Array.isArray(result.detectors.repeatedTokenFields))
+              ? result.detectors.repeatedTokenFields.map((f) => ({ field: String(f.path || f.field) }))
+              : [];
+            state.lastVerifyJunkFields = (jfList.length || rtfList216.length)
+              ? Array.from(new Set(jfList.slice(0, 8).concat(rtfList216).map((f) => String(f.field || f.path)).filter(Boolean))).slice(0, 6)
               : null;
             // 139th log: label-prefixed counts + duplicate ids must ride the
             // same disclosure ladder — the incident's green finish named the

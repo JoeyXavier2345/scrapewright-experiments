@@ -69,6 +69,8 @@
       semanticPredicatePasses: w.semanticPredicatePasses,
       countPoolTextPasses: w.countPoolTextPasses,
       detectIdenticalFieldValues: w.detectIdenticalFieldValues,
+      detectRepeatedTokenFields: w.detectRepeatedTokenFields,
+      detectIdentityMirror: w.detectIdentityMirror,
       detectDuplicateEntities: w.detectDuplicateEntities,
       detectOversizedFields: w.detectOversizedFields,
       detectCountShortfall: w.detectCountShortfall,
@@ -771,7 +773,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, shellHovercards: null, capturedValueUnbound: null, inventedIdFallbacks: null, siblingCountContrast: null, seeMoreUnexpanded: null, hovercardUnparsed: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null, resultStrayKeys: null, hardcodedNestedRoles: null, hoverEntityCoverage: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, shellHovercards: null, capturedValueUnbound: null, inventedIdFallbacks: null, siblingCountContrast: null, seeMoreUnexpanded: null, hovercardUnparsed: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null, resultStrayKeys: null, hardcodedNestedRoles: null, hoverEntityCoverage: null, repeatedTokenFields: null, identityMirror: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -1787,6 +1789,39 @@
           // surface the census + copied-from sibling, teach, never block.
           const hm = WU.detectHtmlFieldsWithoutTags(finalData) || [];
           detectors.htmlNoMarkup = hm.length ? hm : null;
+        }
+        // 216th log: required content shipped one brand token ×44 per
+        // record through a GREEN verify — no detector owned repeated-token
+        // junk (junkValues hunts control labels/query fragments;
+        // identicalField requires exact equality). Veto when the field is
+        // required, same promotion pattern as
+        // JUNK_VALUES_REQUIRED/IDENTICAL_FIELD_REQUIRED.
+        if (typeof WU.detectRepeatedTokenFields === 'function') {
+          const rtf = WU.detectRepeatedTokenFields(finalData, outputSchema) || [];
+          if (rtf.length) {
+            detectors.repeatedTokenFields = rtf;
+            for (const rt of rtf) {
+              if (error) break;
+              const reqF = (typeof WU.schemaItemRequiredForPath === 'function')
+                ? WU.schemaItemRequiredForPath(outputSchema, rt.path) : null;
+              const base = rt.field;
+              const isReq = Array.isArray(reqF) && reqF.indexOf(base) !== -1;
+              if (isReq) {
+                error = new Error(
+                  'REPEATED_TOKEN_FIELD: ' + rt.path + ' is the token "' + rt.token + '" repeated 15+ times in ' + rt.records + '/' + rt.totalRecords +
+                  ' record(s) but the contract lists it as REQUIRED — a container-level brand/link-label string aggregated by a too-broad binding, not record content. Bind to the record text node (the longest text block inside the record container), never a wrapper whose textContent sweeps every child link label, or renegotiate via io.confirm.'
+                );
+              }
+            }
+          }
+        }
+        // 216th log: postId mirrored the author page url (identical to
+        // hoverCards[0].url) — entity-scoped identity. Report-only: a
+        // post-scoped permalink can legitimately appear as its own hover
+        // target, so the mirror is advisory with the scoping teaching.
+        if (typeof WU.detectIdentityMirror === 'function') {
+          const idm = WU.detectIdentityMirror(finalData, outputSchema) || [];
+          if (idm.length) detectors.identityMirror = idm;
         }
         if (typeof WU.detectOversizedFields === 'function') {
           // Report-only (forty-first log): htmlSnippet fields read whole-card
