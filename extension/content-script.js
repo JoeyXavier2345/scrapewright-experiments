@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '212-anchor-coverage-intervene';
+  const SW_BUILD_TAG = '213-idattr-census';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -3625,15 +3625,22 @@
       const seen = {};
       let unique = 0;
       const ids = [];
+      // 213th log: idAttr:'id' on containers with NO id attribute — every
+      // record falls back to element identity, which counts virtualized
+      // REMOUNT duplicates as unique and can never dedupe by record. Census
+      // the fallback so the receipt discloses the absent identity attr.
+      let idAttrPresent = 0;
+      let idAttrAbsent = 0;
       for (const el of items) {
         let key = null;
         if (idAttr) {
           try { key = el.getAttribute(idAttr); } catch (e) { key = null; }
+          if (key != null && key !== '') idAttrPresent += 1; else idAttrAbsent += 1;
         }
         if (key == null || key === '') key = '@dom' + (el.__scrapewrightCollectKey || (el.__scrapewrightCollectKey = 'k' + Math.random().toString(36).slice(2, 10)));
         if (!seen[key]) { seen[key] = 1; unique += 1; ids.push(String(key).slice(0, 40)); }
       }
-      return { total: items.length, unique: unique, sampleIds: ids.slice(0, 3) };
+      return { total: items.length, unique: unique, sampleIds: ids.slice(0, 3), idAttrPresent: idAttrPresent, idAttrAbsent: idAttrAbsent };
     }
     const trace = [];
     let prevUnique = -1;
@@ -3722,8 +3729,17 @@
       targetCount: target,
       rounds: rounds,
       trace: trace,
-      sampleIds: snap.sampleIds
+      sampleIds: snap.sampleIds,
+      idAttrCensus: idAttr ? {
+        present: snap.idAttrPresent,
+        absent: snap.idAttrAbsent,
+        note: (snap.idAttrAbsent > 0 && snap.idAttrPresent === 0)
+          ? 'idAttr "' + idAttr + '" is ABSENT on every collected container — records were counted by ELEMENT identity (a stable per-element key), which counts virtualized REMOUNT duplicates as unique and can never dedupe by record. Supply a real per-record identity attr (the permalink/id href, a data token) so unique counts mean records.'
+          : (snap.idAttrAbsent > 0 ? 'idAttr "' + idAttr + '" is absent on ' + snap.idAttrAbsent + ' of ' + (snap.idAttrPresent + snap.idAttrAbsent) + ' containers — mixed identity: those records fall back to element identity and remount duplicates count as unique.' : undefined)
+      } : undefined
     };
+    if (out.idAttrCensus && out.idAttrCensus.note === undefined) delete out.idAttrCensus.note;
+    if (out.idAttrCensus && !out.idAttrCensus.note && out.idAttrCensus.present > 0 && out.idAttrCensus.absent === 0) out.idAttrCensus = undefined;
     if (out_deadline) out.outerDeadline = out_deadline;
     if (certifiedExhaustion) {
       out.exhaustion = {

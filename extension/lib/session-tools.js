@@ -2077,6 +2077,21 @@
       // 199th log: $openTab fns are serialized by source — outer variables
       // are invisible in the sub-tab ("N is not defined" class, live twice).
       // Advisory-only, same contract as the un-awaited-$ lint above.
+      // 213th log: the v1 preflight died SANDBOX_DEADLINE — the assemble
+      // step looped `await $timestamp(sel,{index:i})` PER RECORD (each call
+      // is a full hover dance, 5-10s; 10 records = the whole step budget).
+      // Batch instead: the $extractWithHover sweep already captures popover
+      // text; or read the ts anchors in one pass.
+      try {
+        for (const s of steps) {
+          const src = String((s && s.script) || '');
+          if (src.indexOf('$timestamp') === -1) continue;
+          if (/\b(for|while)\b[\s\S]{0,400}\$timestamp\s*\(/.test(src)) {
+            staticLint.push('PER_RECORD_TIMESTAMP: step "' + String((s && s.id) || '') + '" awaits $timestamp inside a loop — each call runs its own hover sweep (5-10s per record; a 10-record loop burns the entire step budget, live: v1 preflight SANDBOX_DEADLINE). Batch instead: bind a read:hoverPopover field on the $extractWithHover call (its sweep captures popover text in the same pass), or collect the ts-anchor values in one extract and map them in the assembly.');
+            break;
+          }
+        }
+      } catch (e213t) { /* advisory lint must never block */ }
       // 211th log: the v4 crash was `.match(DATE)[0]` — a failed match
       // returns null and direct indexing throws "Cannot read properties of
       // null (reading '0')", burning a whole verify on a JS null-guard bug.
