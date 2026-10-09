@@ -3643,9 +3643,10 @@ async function startResearchSession(seedOverride) {
     knowledge: { units: units, index: KnowledgeBase.buildIndex(units) },
     persistence: wizardPersistence,
     // RC53: the Settings-page maxOutputTokens knob is authoritative; falls
-    // back to 16384 when blank/invalid. maxTurns: the phase-1 knob (G5).
+    // back to 32768 when blank/invalid (206th round: mainstream output
+    // default; was 16384). maxTurns: the phase-1 knob (G5).
     budgets: {
-      maxTokensPerCall: (config.config.maxOutputTokens && +config.config.maxOutputTokens) || 16384,
+      maxTokensPerCall: (config.config.maxOutputTokens && +config.config.maxOutputTokens) || 32768,
       maxTurns: getSessionMaxTurns()
     },
     seed: seed,

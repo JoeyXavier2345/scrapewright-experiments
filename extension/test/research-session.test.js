@@ -278,7 +278,7 @@ describe('engine happy path', () => {
     });
     await session.run();
     assert.ok(calls.length >= 1);
-    assert.ok(calls.every(c => c.maxTokens === 8192), 'default per-call cap must be explicit');
+    assert.ok(calls.every(c => c.maxTokens === 32768), 'default per-call cap must be explicit (206th round: mainstream 32K)');
     const calls2 = [];
     const s2 = createResearchSession({
       requirement: 'r',

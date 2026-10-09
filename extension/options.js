@@ -331,7 +331,7 @@ async function loadLlmConfig() {
   // timeoutMs is stored in ms; the UI is in seconds. Blank → default (300).
   const timeoutSeconds = config.timeoutMs ? Math.round(config.timeoutMs / 1000) : '';
   document.getElementById('llmTimeout').value = timeoutSeconds;
-  // maxOutputTokens is stored as a plain token count. Blank → default (16384).
+  // maxOutputTokens is stored as a plain token count. Blank → default (32768).
   document.getElementById('llmMaxTokens').value = config.maxOutputTokens || '';
 }
 

@@ -135,12 +135,12 @@ describe('RC55: empty content + finish_reason=length is non-retryable', () => {
   });
 
   it('reports the default fallback when no config is set', async () => {
-    // 4ddaf08 raised DEFAULT_MAX_OUTPUT_TOKENS 8192 → 16384; this test still
-    // asserted the old 8192 and failed on main. Assert the raised default.
+    // 206th round raised DEFAULT_MAX_OUTPUT_TOKENS 16384 → 32768 (mainstream);
+    // assert the CURRENT default so drift fails here first.
     const client = makeClient();
     await assert.rejects(
       () => client.chat([{ role: 'user', content: 'hi' }], { maxRetries: 0 }),
-      (err) => err.message.includes('16384')
+      (err) => err.message.includes('32768')
     );
   });
 });

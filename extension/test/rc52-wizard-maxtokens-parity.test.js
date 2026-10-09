@@ -31,7 +31,7 @@ describe('RC52/RC53: wizard LLM budget parity', () => {
     assert.ok(!/maxTokens:\s*\d+/.test(body), 'adapter never hardcodes a budget');
   });
   it('the session budget takes the user maxOutputTokens knob, never a hardcoded cap', () => {
-    assert.match(SRC, /maxTokensPerCall:\s*\(config\.config\.maxOutputTokens[^)]*\)\s*\|\|\s*16384/);
+    assert.match(SRC, /maxTokensPerCall:\s*\(config\.config\.maxOutputTokens[^)]*\)\s*\|\|\s*32768/);
     assert.ok(!/maxTokens:\s*(4096|8192)\b/.test(fnBody('makeLlmAdapter')), 'no hardcoded budget in the adapter');
   });
   it('no other direct client.chat call sites in wizard.js bypass the adapter (generation helpers excepted — they inherit the config knob via llm-client)', () => {

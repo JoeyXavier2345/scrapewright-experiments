@@ -111,11 +111,11 @@ describe('RC53: llm-client maxOutputTokens priority chain', () => {
       'options.maxTokens must win over config.maxOutputTokens (per-call escape hatch)');
   });
 
-  it('defaults to 16384 when both config and per-call override are absent', async () => {
+  it('defaults to the mainstream 32768 when both config and per-call override are absent (206th round)', async () => {
     const client = makeClient();
     await client.chat([{ role: 'user', content: 'hi' }], { maxRetries: 0 });
-    assert.equal(capturedBodies[0].max_tokens, 16384,
-      'the built-in fallback must preserve the experimentally selected 16384-token budget');
+    assert.equal(capturedBodies[0].max_tokens, 32768,
+      'the built-in fallback must preserve the mainstream default (206th round: 16384 -> 32768)');
   });
 
   it('ignores invalid config.maxOutputTokens (falls back at use site)', async () => {
@@ -128,7 +128,7 @@ describe('RC53: llm-client maxOutputTokens priority chain', () => {
         'invalid maxOutputTokens must normalize to undefined (timeoutMs pattern)');
     }
     await zero.chat([{ role: 'user', content: 'hi' }], { maxRetries: 0 });
-    assert.equal(capturedBodies[0].max_tokens, 16384);
+    assert.equal(capturedBodies[0].max_tokens, 32768, 'falls back to the 206th-round mainstream default');
   });
 
   it('accepts numeric-string config.maxOutputTokens (Number coercion, timeoutMs parity)', async () => {

@@ -4,7 +4,12 @@
 // killing the session. Callers can override via options.maxRetries.
 const DEFAULT_MAX_RETRIES = 10;
 const DEFAULT_TIMEOUT_MS = 300_000;
-const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
+// 206th round (user: mainstream default): 32K — Claude 4.x defaults 32K/max 64K output,
+// GPT-5-class 16-32K, GLM-4.6+/Kimi 32K+. The old 16K sat below every current
+// frontier default; too-small output caps truncated long single replies
+// (54th-log protocol death, 125th-round chunk protocol workaround) and
+// thinking models burn completion budget on <think> before the tool JSON.
+const DEFAULT_MAX_OUTPUT_TOKENS = 32_768;
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 // Thirty-fourth log: Zhipu reports a PERMANENT billing condition via 429 with
@@ -181,7 +186,7 @@ class LLMClient {
     // to the provider+model pair (e.g. reasoning models can spend the whole
     // budget on non-visible tokens — RC52: output_tokens 4096, text_tokens 0),
     // so it is a Settings-page config knob, not a per-call-site guess. Use
-    // site chain: options.maxTokens ?? this.maxOutputTokens ?? 16384.
+    // site chain: options.maxTokens ?? this.maxOutputTokens ?? 32768.
     // 116th round: optional per-config request throttle (ms) — see chat().
     const thr = Number(config.throttleMs);
     this.throttleMs = Number.isFinite(thr) && thr >= 0 ? thr : 0;

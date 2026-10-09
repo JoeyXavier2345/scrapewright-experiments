@@ -819,7 +819,7 @@ describe('Anthropic Messages protocol (auto-prefer + fallback + agent identity)'
     assert.match(seen[0].headers['user-agent'] || '', /^claude-cli\/.+ \(external, cli\)$/, 'Claude Code client signature');
     assert.equal(seen[0].body.system, 'be brief', 'leading system message extracted top-level');
     assert.deepEqual(seen[0].body.messages.map((m) => m.role), ['user', 'assistant', 'user']);
-    assert.equal(seen[0].body.max_tokens, 16384, 'max_tokens preserved (default chain)');
+    assert.equal(seen[0].body.max_tokens, 32768, 'max_tokens preserved (default chain; 206th round raised the mainstream default from 16384)');
     assert.ok(!('response_format' in seen[0].body), 'no OpenAI response_format on the Messages path');
   });
 

@@ -40,7 +40,7 @@ describe('wizard research-session integration (source audit)', () => {
   });
 
   it('session budget takes the user maxOutputTokens knob', () => {
-    assert.ok(/maxTokensPerCall:\s*\(config\.config\.maxOutputTokens[^)]*\)\s*\|\|\s*16384/.test(SRC), 'budgets.maxTokensPerCall = config knob || 16384');
+    assert.ok(/maxTokensPerCall:\s*\(config\.config\.maxOutputTokens[^)]*\)\s*\|\|\s*32768/.test(SRC), 'budgets.maxTokensPerCall = config knob || 16384');
   });
 
   it('maxTurns is user-configurable (sixth-log G5: default raised to 60)', () => {
