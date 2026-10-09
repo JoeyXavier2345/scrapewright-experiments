@@ -341,7 +341,7 @@ async function saveLlmConfig() {
     ? rawTimeout
     : 300;
   // Completion budget (RC53). Blank or out-of-range → undefined, so
-  // llm-client falls back to its 16384 default at the use site. Range floor
+  // llm-client falls back to its 32768 default at the use site. Range floor
   // 1024: a smaller budget reintroduces the finish_reason:length truncation
   // class (RC52).
   const rawMaxTokens = parseInt(document.getElementById('llmMaxTokens').value, 10);
