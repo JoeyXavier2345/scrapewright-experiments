@@ -29,14 +29,26 @@ const SW_DEBUG_JOURNAL_KEY = 'swDebugJournal';
 // than the wizard journal (no LLM bodies) but the export merge deserves
 // the same whole-session coverage.
 const SW_DEBUG_JOURNAL_MAX = 20000;
+// 211th review F9: 20k lines x 4000 chars can exceed the storage.session
+// quota (10MB class) — track an approximate running byte total (label +
+// text lengths) and trim from the head when it passes the budget.
+const SW_DEBUG_JOURNAL_BYTE_BUDGET = 8000000;
 let swDebugRing = null;
+let swDebugRingBytes = 0;
 let swDebugFlushTimer = null;
+let swDebugFlushWarned = false;
+function swDebugLineBytes(l) {
+  return ((l && typeof l.label === 'string') ? l.label.length : 0) +
+    ((l && typeof l.text === 'string') ? l.text.length : 0);
+}
 function swDebugJournalLoad() {
   if (swDebugRing !== null) return Promise.resolve();
   return new Promise(function (resolve) {
     try {
       chrome.storage.session.get([SW_DEBUG_JOURNAL_KEY], function (res) {
         swDebugRing = Array.isArray(res && res[SW_DEBUG_JOURNAL_KEY]) ? res[SW_DEBUG_JOURNAL_KEY] : [];
+        swDebugRingBytes = 0;
+        for (const l of swDebugRing) swDebugRingBytes += swDebugLineBytes(l);
         resolve();
       });
     } catch (e) { swDebugRing = []; resolve(); }
@@ -48,7 +60,14 @@ function swDebugJournalFlush() {
   try {
     const bag = {};
     bag[SW_DEBUG_JOURNAL_KEY] = swDebugRing.slice();
-    chrome.storage.session.set(bag, function () { /* best-effort; lastError swallowed */ });
+    chrome.storage.session.set(bag, function () {
+      // 211th review F9: a quota-failing flush was silently swallowed —
+      // surface it once so the export merge knows the ring is incomplete.
+      if (chrome.runtime.lastError && !swDebugFlushWarned) {
+        swDebugFlushWarned = true;
+        debugLogger.log('warn', 'sw-journal', 'sw ring flush failed', { error: String((chrome.runtime.lastError && chrome.runtime.lastError.message) || chrome.runtime.lastError) });
+      }
+    });
   } catch (e) { /* best-effort */ }
 }
 (function wrapDebugLoggerWithJournal() {
@@ -60,7 +79,21 @@ function swDebugJournalFlush() {
       const line = { t: Date.now(), kind: 'sw', label: '[' + component + '] ' + message, text: String(suffix).slice(0, 4000) };
       swDebugJournalLoad().then(function () {
         swDebugRing.push(line);
-        while (swDebugRing.length > SW_DEBUG_JOURNAL_MAX) swDebugRing.shift();
+        swDebugRingBytes += swDebugLineBytes(line);
+        while (swDebugRing.length > SW_DEBUG_JOURNAL_MAX) {
+          const dropped = swDebugRing.shift();
+          swDebugRingBytes -= swDebugLineBytes(dropped);
+        }
+        if (swDebugRingBytes > SW_DEBUG_JOURNAL_BYTE_BUDGET) {
+          let trimmed = 0;
+          while (swDebugRingBytes > SW_DEBUG_JOURNAL_BYTE_BUDGET && swDebugRing.length > 1) {
+            const dropped = swDebugRing.shift();
+            swDebugRingBytes -= swDebugLineBytes(dropped);
+            trimmed += 1;
+          }
+          // origLog, not debugLogger.log — the trim must not re-enter the ring.
+          origLog('warn', 'sw-journal', 'sw ring over byte budget — trimmed ' + trimmed + ' oldest line(s)', { budget: SW_DEBUG_JOURNAL_BYTE_BUDGET, approxBytes: swDebugRingBytes });
+        }
         if (swDebugFlushTimer === null) {
           swDebugFlushTimer = setTimeout(swDebugJournalFlush, 3000);
         }

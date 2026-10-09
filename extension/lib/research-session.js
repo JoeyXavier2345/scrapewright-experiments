@@ -336,6 +336,14 @@
     if (!st.firedKeys || typeof st.firedKeys !== 'object') st.firedKeys = {};
     st.note = null; // one-shot
     const det = (verifyResult && verifyResult.detectors) || {};
+    // 211th review F7: an infra-failed verify (relay/tab death) carries the
+    // all-null detector SKELETON — resetting the ladder on it let one
+    // infrastructure hiccup between two census-bearing verifies dissolve
+    // the repetition evidence. No census data + an error = neutral: neither
+    // increment nor reset. A green verify (no error, empty detectors) is a
+    // real shape and still resets below.
+    const hadCensusData = Object.keys(det).some(function (k) { return det[k] != null; });
+    if (!hadCensusData && verifyResult && verifyResult.error) return st;
     // LOCATOR censuses name an element on the page the model keeps failing
     // to find — user marking settles them in one round.
     const LOCATOR_KEYS = {

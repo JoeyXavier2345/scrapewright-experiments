@@ -119,6 +119,125 @@ describe('domClickInList wires textFilter (209th log, source audit)', () => {
   });
 });
 
+// 211th review F3/F5 — domClick is not module-loadable; slice the function
+// out of the source (the anchor-census.test.js pattern) with its environment
+// deps stubbed onto the JSDOM document.
+describe('domClick textFilter — behavioral slice (211th review F3 + F5)', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const csSrc = fs.readFileSync(path.join(__dirname, '..', 'content-script.js'), 'utf8');
+  function sliceFn(name) {
+    const start = csSrc.indexOf('function ' + name + '(');
+    assert.ok(start !== -1, 'function ' + name + ' exists in content-script.js');
+    let i = csSrc.indexOf('{', start);
+    let depth = 0;
+    for (; i < csSrc.length; i++) {
+      if (csSrc[i] === '{') depth += 1;
+      else if (csSrc[i] === '}') { depth -= 1; if (depth === 0) return csSrc.slice(start, i + 1); }
+    }
+    throw new Error('unbalanced braces for ' + name);
+  }
+  function loadDomClick() {
+    return new Function('domQuerySelector', 'querySelectorDeep', 'querySelectorAllDeep', 'sendDebugLog', 'classStr',
+      'return (async ' + sliceFn('domClick') + ');')(
+      async () => {},
+      (sel) => { const el = document.querySelector(sel); return el ? { element: el } : null; },
+      (sel) => Array.from(document.querySelectorAll(sel)),
+      () => {},
+      (el) => String((el && el.className) || '')
+    );
+  }
+  function setupClickDom() {
+    setupDOM(`<div>
+      <div class="btn" role="button">Like</div>
+      <div class="btn" role="button">See more</div>
+    </div>`);
+    const clicks = [];
+    for (const b of document.querySelectorAll('.btn')) b.click = () => { clicks.push(b.textContent.trim()); };
+    return clicks;
+  }
+
+  it('a match is clicked (regression: the scan still picks the carrying element)', async () => {
+    const clicks = setupClickDom();
+    const domClick = loadDomClick();
+    const r = await domClick('div[role=button]', 10, { textFilter: 'See more' });
+    assert.equal(r, true);
+    assert.deepEqual(clicks, ['See more']);
+  });
+  it('NO match carries the filter → THROWS (never blind-clicks the first match)', async () => {
+    const clicks = setupClickDom();
+    const domClick = loadDomClick();
+    await assert.rejects(() => domClick('div[role=button]', 10, { textFilter: 'Not present' }),
+      (e) => /TEXT_FILTER_NO_MATCH/.test(e.message) && /div\[role=button\]/.test(e.message) && /Not present/.test(e.message));
+    assert.deepEqual(clicks, [], 'nothing was clicked');
+  });
+  it('an INVALID ~regex throws the shared error shape (no silent filter bypass)', async () => {
+    setupClickDom();
+    const domClick = loadDomClick();
+    await assert.rejects(() => domClick('div[role=button]', 10, { textFilter: '~[unclosed' }), /textFilter regex invalid/);
+  });
+  it('F5: a 60K-char text matches via the HEAD window and via the TAIL window, but a middle-only token is dropped', async () => {
+    const headHtml = '<div class="big" role="button">HEADTOKEN' + 'x'.repeat(57000) + '</div>';
+    const tailHtml = '<div class="big" role="button">' + 'x'.repeat(57000) + 'TAILTOKEN</div>';
+    const midHtml = '<div class="big" role="button">' + 'x'.repeat(28000) + 'MIDDLETOKEN' + 'x'.repeat(28000) + '</div>';
+    setupDOM(headHtml);
+    let clicks = 0;
+    document.querySelector('.big').click = () => { clicks += 1; };
+    const domClick = loadDomClick();
+    await domClick('.big', 10, { textFilter: 'HEADTOKEN' });
+    assert.equal(clicks, 1, 'head-window hit matches');
+    setupDOM(tailHtml);
+    clicks = 0;
+    document.querySelector('.big').click = () => { clicks += 1; };
+    await domClick('.big', 10, { textFilter: 'TAILTOKEN' });
+    assert.equal(clicks, 1, 'tail-window hit matches');
+    setupDOM(midHtml);
+    clicks = 0;
+    document.querySelector('.big').click = () => { clicks += 1; };
+    await assert.rejects(() => domClick('.big', 10, { textFilter: 'MIDDLETOKEN' }), /TEXT_FILTER_NO_MATCH/,
+      'middle-only is the documented bounded-guard tradeoff (mirrors match: predicates)');
+    assert.equal(clicks, 0);
+  });
+});
+
+// 211th review F5 — the textFilter text scan ran on UNCAPPED textContent in
+// both clickInListItems mirrors; the match: predicates have run head+tail
+// bounded since the 103rd round.
+describe('clickInListItems textFilter head+tail guard — 60K texts (211th review F5)', () => {
+  const BIG = 'x'.repeat(57000);
+  function bigCard(token, at) {
+    const text = at === 'head' ? token + BIG
+      : at === 'tail' ? BIG + token
+      : 'x'.repeat(28000) + token + 'x'.repeat(28000);
+    return '<div class="card"><div class="btn" role="button">' + text + '</div></div>';
+  }
+  for (const [label, getOps] of [['lib', () => libOps], ['inline mirror', () => loadInline({ document: global.document, window: global.window })]]) {
+    it(`${label}: head and tail window hits still match`, () => {
+      setupDOM(bigCard('HEADTOKEN', 'head') + bigCard('TAILTOKEN', 'tail'));
+      const clickedTexts = [];
+      const r = getOps().clickInListItems(
+        document.querySelectorAll('.card'),
+        'div[role=button]',
+        (el) => { clickedTexts.push(String(el.textContent).slice(0, 100000).length); },
+        0,
+        { textFilter: 'TOKEN' });
+      assert.equal(r.clicked, 2, 'both head/tail-window hits match');
+      assert.equal(r.errors.length, 0);
+    });
+    it(`${label}: a middle-only token is dropped (bounded guard, documented tradeoff)`, () => {
+      setupDOM(bigCard('MIDDLETOKEN', 'mid'));
+      const r = getOps().clickInListItems(
+        document.querySelectorAll('.card'),
+        'div[role=button]',
+        () => {},
+        0,
+        { textFilter: 'MIDDLETOKEN' });
+      assert.equal(r.clicked, 0, 'the dropped middle cannot match');
+      assert.equal(r.errors.length, 1, 'the miss is reported, not silently clicked');
+    });
+  }
+});
+
 describe('MATCH_INDEX_UNGUARDED lint (211th log)', () => {
   const { createSessionTools } = require('../lib/session-tools');
   const CTX = { session: { state: () => ({ session: { artifactVersions: [] } }) } };

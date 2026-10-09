@@ -372,9 +372,13 @@ function clickInListItems(containers, subSel, clickFn, delayMs, opts) {
     tfSub = tfRaw;
   }
   const textMatches = (el) => {
+    // 211th review F5: run the text test on the bounded head+tail of long
+    // textContent (the match: predicate contract since the 103rd round) —
+    // an uncapped scan over a 50K-char read hangs the step budget.
     const t = String((el && el.textContent) || '').trim();
-    if (tfSub != null) return t.indexOf(tfSub) !== -1;
-    if (tfRe) return tfRe.test(t);
+    const bounded = t.length > MATCH_GUARD_LIMIT ? t.slice(0, MATCH_GUARD_LIMIT) + t.slice(-MATCH_GUARD_LIMIT) : t;
+    if (tfSub != null) return bounded.indexOf(tfSub) !== -1;
+    if (tfRe) return tfRe.test(bounded);
     return true;
   };
   let clicked = 0;

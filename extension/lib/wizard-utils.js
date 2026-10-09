@@ -2660,7 +2660,10 @@ function detectHoverFamilyMiss(events) {
       if (!d || d.api !== 'extractWithHover') continue;
       const hs = d.hoverSummary || {};
       if ((hs.anchorsFound || 0) <= 0) continue;
-      if ((hs.hovercardsCaptured || 0) > 0) continue;
+      // 211th review F8: accumulate EVERY call with anchors (a mixed step —
+      // one call captured 0, a sibling call captured on the same family —
+      // is a partial-capture step, not a family miss); the fire condition
+      // below keys on the step-TOTAL hovercardsCaptured.
       if (!perStep.has(stepId)) {
         perStep.set(stepId, {
           stepId: stepId, calls: 0, anchorsFound: 0, hovercardsCaptured: 0,

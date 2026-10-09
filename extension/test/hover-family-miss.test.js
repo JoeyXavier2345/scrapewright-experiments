@@ -72,6 +72,34 @@ describe('B. detectHoverFamilyMiss — anchors found, popovers never mounted (20
   it('partial captures do not fire (some popovers mounted — a different problem class)', () => {
     assert.equal(WU.detectHoverFamilyMiss(ev({ hoverSummary: { anchorsFound: 5, hovercardsCaptured: 2, processedContainers: 8 } })), null);
   });
+  // 211th review F8: aggregation is per STEP TOTAL — a mixed step (one call
+  // captured 0, a sibling call captured 4 on the same family) is a partial-
+  // capture step, not a family miss.
+  it('a MIXED step (one zero-capture call + one capturing call) does NOT fire', () => {
+    const events = [{
+      type: 'STEP_ITERATION', stepId: 's3',
+      selectorDiagnostics: [
+        { api: 'extractWithHover', anchorSel: "a[href*='/reel/']", hoverSummary: { anchorsFound: 5, hovercardsCaptured: 0, processedContainers: 4 }, anchorCensus: { families: { a: 29 }, hrefSamples: [] } },
+        { api: 'extractWithHover', anchorSel: "a[href*='/reel/']", hoverSummary: { anchorsFound: 5, hovercardsCaptured: 4, processedContainers: 4 } }
+      ]
+    }];
+    const r = WU.detectHoverFamilyMiss(events);
+    assert.equal(r, null, 'the step total (4 captured) is not a family miss');
+  });
+  it('total-zero ACROSS calls still fires, and the census rides from any call', () => {
+    const events = [{
+      type: 'STEP_ITERATION', stepId: 's3',
+      selectorDiagnostics: [
+        { api: 'extractWithHover', anchorSel: 'h3 a', hoverSummary: { anchorsFound: 5, hovercardsCaptured: 0, processedContainers: 4 } },
+        { api: 'extractWithHover', anchorSel: 'h3 a', hoverSummary: { anchorsFound: 3, hovercardsCaptured: 0, processedContainers: 4 }, anchorCensus: { families: { a: 29 }, hrefSamples: ['https://example.com/p/1'] } }
+      ]
+    }];
+    const r = WU.detectHoverFamilyMiss(events);
+    assert.ok(r, 'total zero across both calls fires');
+    assert.equal(r.anchorsFound, 8, 'anchors accumulate across calls');
+    assert.equal(r.hovercardsCaptured, 0);
+    assert.ok(r.anchorCensus, 'the census from the second call is kept');
+  });
   it('zero anchors is BLIND territory, not family-miss', () => {
     assert.equal(WU.detectHoverFamilyMiss(ev({ hoverSummary: { anchorsFound: 0, hovercardsCaptured: 0, processedContainers: 8 } })), null);
   });

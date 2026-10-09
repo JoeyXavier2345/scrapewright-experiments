@@ -34,10 +34,15 @@ describe('1. census-repetition escalation (210th log)', () => {
     assert.match(st.note, /textFilter/);
     assert.match(st.note, /posts\.content|field/i);
   });
-  it('a verify without the census resets; note fires once per census key (latched)', () => {
+  it('a verify whose census set really lacks the key resets; note fires once per census key (latched)', () => {
+    // 211th review F7: the old interleave fixture (error + EMPTY detectors)
+    // is now the NEUTRAL infra shape — the reset needs a real verify shape.
+    // A red verify carrying OTHER live censuses is that shape: SEE_MORE was
+    // genuinely absent from it.
+    const other = { ok: false, error: { message: 'X: x' }, detectors: { labelPrefixedCounts: [{ field: 'likeCount', sample: 'Like: 37' }] } };
     let st = null;
     st = trackCensusRepetition(st, v(true));
-    st = trackCensusRepetition(st, v(false));
+    st = trackCensusRepetition(st, other);
     st = trackCensusRepetition(st, v(true));
     assert.ok(!st.note, 'interleaved absence resets');
     st = trackCensusRepetition(st, v(true));
@@ -68,9 +73,25 @@ describe('1. census-repetition escalation (210th log)', () => {
     st = trackCensusRepetition(st, e);
     assert.ok(!st.note, 'countShortfall is the 205/207 ladder, not this one');
   });
-  it('wired beside the identity tracker (source audit)', () => {
+  it('an infra-error verify (error + all-null detector skeleton) is NEUTRAL — counts survive it (211th review F7)', () => {
+    const census = v(true);
+    const infra = { ok: false, error: { message: 'RELAY_FAILED: tab gone' }, detectors: { seeMoreUnexpanded: null, countShortfall: null } };
+    let st = null;
+    st = trackCensusRepetition(st, census);
+    st = trackCensusRepetition(st, infra);
+    st = trackCensusRepetition(st, census);
+    assert.ok(st.note, 'the second census escalates — the infra error between them no longer resets the ladder');
+  });
+  it('a GREEN verify still resets the ladder (no error, empty detectors)', () => {
+    let st = null;
+    st = trackCensusRepetition(st, v(true));
+    st = trackCensusRepetition(st, { ok: true, detectors: {} });
+    st = trackCensusRepetition(st, v(true));
+    assert.ok(!st.note, 'green is a real verify shape — the reset stands');
+  });
+  it('wired beside the identity tracker (source audit, wiring call site)', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
-    assert.match(src, /trackCensusRepetition\(/);
+    assert.ok(src.includes('state.censusRepetition = trackCensusRepetition(state.censusRepetition, result)'), 'wiring call site');
   });
 });
 
@@ -149,6 +170,57 @@ describe('3. vocabProposal rides probe.snippet too (210th log)', () => {
   it('no repeated tails → no proposal', async () => {
     const recs = { out: [{ content: 'one full text' }, { content: 'another full text' }] };
     const t = createSessionTools(probeDeps(recs));
+    const r = await t.tools['probe.snippet']({ code: 'return 1;' });
+    assert.equal(r.vocabProposal, undefined);
+  });
+
+  // 211th review F6: probe.snippet caps >4K results to head 2000 + tail 2000
+  // BEFORE this harvest runs — the JSON.parse walk saw a permanently
+  // truncated document (parse fails → silent null), so every proposal on a
+  // big dry-run result was lost. Truncated receipts get a string-LITERAL
+  // scan over the two windows instead.
+  // The receipt is hand-built (the real cap cut position is luck-dependent —
+  // some capped strings stay accidentally parseable), with a self-check
+  // that the OLD parse path deterministically fails on it.
+  function cappedReceipt(records, padRecords) {
+    const full = JSON.stringify({ out: records.concat(padRecords || []) }, null, 1);
+    return full.slice(0, 2000) + '…[+' + (full.length - 4000) + ' chars]…' + full.slice(-2000);
+  }
+  const SEE_MORE_3 = [
+    { content: 'Java OOP Complete Premium Handbook… See more' },
+    { content: 'Advanced Notes … See more' },
+    { content: 'Pro tips… See more' }
+  ];
+  const PADS = (() => { const p = []; for (let i = 0; i < 30; i++) p.push({ pad: 'z'.repeat(200) }); return p; })();
+  function truncatedDeps(capped) {
+    return {
+      rail: { executeDsl: async () => ({ result: 'ok', selectorDiagnostics: [] }), pageState: async () => ({ open: true, tabId: 1 }), ensureLock: async () => {}, releaseLock: async () => {}, dispose: async () => {}, tabId: 1 },
+      runVerify: async () => ({ report: { ok: true, error: null, aborted: false, score: { score: 100, isData: true, breakdown: {} }, schemaOk: true, schemaMissing: [], detectors: {}, steps: [], finalResult: null, pages: '0', eventCount: 0, events: [] }, events: [], raw: {} }),
+      getDraftService: () => null,
+      applyArtifact: () => {},
+      getTestInput: () => ({}),
+      getOutputSchema: () => ({ type: 'object' }),
+      getSteps: () => [],
+      ioConfirmBridge: { request: async () => ({ confirmed: true }) },
+      probeFactory: () => ({ snippet: async () => ({ result: capped, truncated: true }) })
+    };
+  }
+  it('a TRUNCATED (>4K) snippet result with tails in the head/tail windows still attaches vocabProposal', async () => {
+    const capped = cappedReceipt(SEE_MORE_3, PADS);
+    assert.ok(capped.length > 4000, 'fixture exceeds the 4K cap');
+    assert.throws(() => JSON.parse(capped), 'fixture self-check: the OLD JSON.parse path deterministically fails here');
+    assert.ok((capped.slice(0, 2000).match(/See more/g) || []).length === 3, 'the three tails sit in the head window');
+    const t = createSessionTools(truncatedDeps(capped));
+    const r = await t.tools['probe.snippet']({ code: 'return 1;' });
+    assert.ok(r.vocabProposal, 'proposal fires on the capped receipt (was: silent null)');
+    assert.equal(r.vocabProposal.token, 'See more');
+  });
+  it('a TRUNCATED result with NO tails attaches nothing (literal scan is not trigger-happy)', async () => {
+    const plain = [];
+    for (let i = 0; i < 30; i++) plain.push({ content: 'full text record number ' + i + ' plain prose' });
+    const capped = cappedReceipt(plain, PADS);
+    assert.ok(capped.length > 4000, 'fixture exceeds the 4K cap');
+    const t = createSessionTools(truncatedDeps(capped));
     const r = await t.tools['probe.snippet']({ code: 'return 1;' });
     assert.equal(r.vocabProposal, undefined);
   });

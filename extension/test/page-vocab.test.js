@@ -144,6 +144,27 @@ describe('pageVocab persistence (service artifact)', () => {
     assert.match(fn, /pageVocab/, 'the persisted vocabulary reaches wizardState');
   });
 
+  // 211th review F2: registration was dead in production — applySessionArtifact
+  // set wizardState.pageVocab, but neither getDraftService nor the deploy
+  // payload carried it, so the vocabulary never reached a persisted service.
+  it('getDraftService carries pageVocab (211th review F2, source audit)', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
+    const i = src.indexOf('getDraftService: () => ({');
+    assert.ok(i > -1, 'getDraftService literal found');
+    const body = src.slice(i, src.indexOf('})', i) + 2);
+    assert.match(body, /pageVocab/, 'the draft service exposes the registered vocabulary');
+  });
+
+  it('the deploy payload persists pageVocab (211th review F2, source audit)', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
+    const saveAt = src.indexOf('registry.save(service)');
+    assert.ok(saveAt > -1, 'deploy save site found');
+    const i = src.lastIndexOf('const registry = new ServiceRegistry();', saveAt);
+    assert.ok(i > -1, 'deploy registry construction found');
+    const body = src.slice(i, saveAt);
+    assert.match(body, /pageVocab/, 'the ServiceRegistry.save payload carries the vocabulary');
+  });
+
   it('same-site seed surfaces a prior service pageVocab to the next session (source audit)', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
     const i = src.indexOf('seedLedgerFromSameSite(registry');

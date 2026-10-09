@@ -144,6 +144,37 @@ describe('live-rail dead-tab retry (199th log)', () => {
     assert.match(r.error, /open budget/i, r.error);
     assert.equal(calls.createTab.length, 1, 'no second attempt past the cap, got ' + JSON.stringify(calls.createTab));
   });
+
+  // 211th review F10: the cap only gates the RETRY DECISION — attempt 2
+  // itself still rides a full waitForTabLoad budget, so when the remaining
+  // open budget is under one load budget (120s) the receipt must say so.
+  it('F10: attempt 2 started with <120s of open budget remaining discloses it on the receipt', async () => {
+    let clock = 1000000;
+    const { rail } = makeRail({
+      pingOkTabs: new Set([12]),
+      errorPageTabs: new Set([11]),
+      nowFn: () => clock,
+      loadHook: (tabId) => { if (tabId === 11) clock += 50000; }
+    });
+    const r = await rail.pageOpen({ url: 'https://example.com/search' });
+    assert.equal(r.ready, true, 'attempt 2 succeeds: ' + JSON.stringify(r));
+    assert.ok(r.tabRetryNote, 'retry disclosed');
+    assert.match(String(r.tabRetryNote), /100s of open budget remaining/, 'names the remaining budget: ' + r.tabRetryNote);
+    assert.match(String(r.tabRetryNote), /slow load may exceed it/, 'teaches the risk');
+  });
+
+  it('F10: attempt 2 with ample remaining budget carries no budget warning', async () => {
+    let clock = 1000000;
+    const { rail } = makeRail({
+      pingOkTabs: new Set([12]),
+      errorPageTabs: new Set([11]),
+      nowFn: () => clock,
+      loadHook: (tabId) => { if (tabId === 11) clock += 20000; }
+    });
+    const r = await rail.pageOpen({ url: 'https://example.com/search' });
+    assert.equal(r.ready, true);
+    assert.doesNotMatch(String(r.tabRetryNote || ''), /open budget remaining/, 'no warning when the budget is ample: ' + r.tabRetryNote);
+  });
 });
 
 // 199th re-review F1/F4: the top-level probeTabHealth helper and the rail's

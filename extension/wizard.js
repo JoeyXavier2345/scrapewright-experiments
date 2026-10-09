@@ -2135,6 +2135,9 @@ async function confirmDeploy() {
     requirements: wizardState.requirements || null,
     targetUrl: wizardState.targetUrl,
     steps: wizardState.steps,
+    // 211th review F2: persist the registered page vocabulary — the censuses
+    // consult it with priority and the next same-site session seeds from it.
+    pageVocab: wizardState.pageVocab || undefined,
     inputSchema: wizardState.inputSchema,
     outputSchema: wizardState.outputSchema,
     sampleInput: wizardState.sampleInput,
@@ -2438,6 +2441,15 @@ function applySessionArtifact(a) {
   // 201st-round follow-up: LLM-registered page vocabulary rides the artifact
   // (harvested from research evidence; censuses consult it with priority).
   if (a.pageVocab && typeof a.pageVocab === 'object') wizardState.pageVocab = a.pageVocab;
+  // 211th review F1: the 204th-round targetUrl amendment never landed in
+  // production — session-tools applied the artifact, but this function had
+  // no targetUrl branch, so wizardState.targetUrl (and every run URL) stayed
+  // fixed while the receipt claimed success.
+  if (typeof a.targetUrl === 'string' && a.targetUrl.trim()) {
+    wizardState.targetUrl = a.targetUrl.trim();
+    const tuEl = document.getElementById('targetUrl'); // best-effort UI sync
+    if (tuEl) tuEl.value = wizardState.targetUrl;
+  }
   renderStepList();
 }
 
@@ -3479,6 +3491,9 @@ async function startResearchSession(seedOverride) {
     getDraftService: () => ({
       targetUrl: wizardState.targetUrl,
       steps: wizardState.steps,
+      // 211th review F2: the registered vocabulary must ride the draft (the
+      // artifact carried it, but nothing exposed it downstream).
+      pageVocab: wizardState.pageVocab || undefined,
       config: { timeoutMs: hoverAwareTimeoutMs(wizardState.steps, DEPLOY_TIMEOUT_MS), maxRetries: 0, autoCloseTab: true, maxStepIterations: 50, tabLoadTimeoutMs: 120000 }
     }),
     applyArtifact: applySessionArtifact,

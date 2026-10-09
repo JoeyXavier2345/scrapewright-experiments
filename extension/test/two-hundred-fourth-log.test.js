@@ -132,6 +132,41 @@ describe('service.update targetUrl amendment + $openTab duplication lint (204th 
     assert.equal(withUrl[0].targetUrl, 'https://example.com/search/posts?q={{keyword}}');
   });
 
+  // 211th review F4: {steps, targetUrl} in ONE update used to hit the
+  // targetUrl branch and return early — the steps were silently discarded
+  // (the receipt blessed an artifact that never landed).
+  it('steps + targetUrl in ONE update → BOTH land in a single applyArtifact payload', async () => {
+    const newSteps = [{ id: 's1', name: 'one', script: 'return 1', onSuccess: 's2', onFailure: 'TERMINATE' }, { id: 's2', name: 'two', script: 'return 2', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }];
+    const { deps, applied } = makeDeps({ getSteps: () => STEPS });
+    const t = createSessionTools(deps);
+    await confirm(t);
+    const out = await t.tools['service.update']({ steps: newSteps, targetUrl: 'https://example.com/search/posts?q={{keyword}}' }, CTX);
+    assert.equal(out.updated, true, 'got: ' + JSON.stringify(out));
+    const withUrl = applied.filter((a) => a.targetUrl);
+    assert.equal(withUrl.length, 1, 'exactly one URL-bearing apply: ' + JSON.stringify(applied.map((a) => Object.keys(a))));
+    assert.equal(withUrl[0].targetUrl, 'https://example.com/search/posts?q={{keyword}}');
+    assert.equal(withUrl[0].steps.length, 2, 'the NEW steps ride the same payload');
+    assert.equal(withUrl[0].steps[1].id, 's2');
+    assert.match(String(out.note || ''), /targetUrl amended with this update/, 'receipt discloses the bundled amendment');
+  });
+
+  it('cross-origin targetUrl is rejected even when bundled with steps (validation always runs)', async () => {
+    const { deps } = makeDeps({ getSteps: () => STEPS });
+    const t = createSessionTools(deps);
+    await confirm(t);
+    const out = await t.tools['service.update']({ steps: STEPS, targetUrl: 'https://other-site.example.com/search' }, CTX);
+    assert.match(out.error, /same origin/i);
+  });
+
+  it('wizard applySessionArtifact applies targetUrl amendments (211th review F1, source audit)', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
+    const fn = src.slice(src.indexOf('function applySessionArtifact'));
+    const body = fn.slice(0, fn.indexOf('\n}') + 2);
+    assert.match(body, /a\.targetUrl === 'string'/, 'a targetUrl branch exists');
+    assert.match(body, /wizardState\.targetUrl = /, 'it writes wizardState.targetUrl');
+    assert.match(body, /getElementById\('targetUrl'\)/, 'the UI input is synced (best-effort)');
+  });
+
   it('cross-origin targetUrl is REJECTED (redirection guard)', async () => {
     const { deps } = makeDeps();
     const t = createSessionTools(deps);

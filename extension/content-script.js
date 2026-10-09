@@ -577,9 +577,13 @@
         tfSub = tfRaw;
       }
       const textMatches = function (el) {
+        // 211th review F5 (inline mirror kept in sync): bounded head+tail of
+        // long textContent — the match: predicate contract; the middle is
+        // dropped so backtracking regexes never see 50K-char reads.
         const t = String((el && el.textContent) || '').trim();
-        if (tfSub != null) return t.indexOf(tfSub) !== -1;
-        if (tfRe) return tfRe.test(t);
+        const bounded = t.length > MATCH_GUARD_LIMIT ? t.slice(0, MATCH_GUARD_LIMIT) + t.slice(-MATCH_GUARD_LIMIT) : t;
+        if (tfSub != null) return bounded.indexOf(tfSub) !== -1;
+        if (tfRe) return tfRe.test(bounded);
         return true;
       };
       let clicked = 0;
@@ -2142,19 +2146,32 @@
     let el = found.element;
     // 209th log: {textFilter} scans ALL matches for one whose textContent
     // carries the filter — plain string = substring, leading ~ = regex.
+    // 211th review F3: when NO match carries the filter, THROW — the first
+    // match must never absorb a blind click (the live artifact clicked a
+    // Like button 40 loop iterations this way). An invalid ~regex fails
+    // fast with the same error shape clickInListItems uses.
+    // 211th review F5: the text test runs on the bounded head+tail of long
+    // textContent (the match: predicate contract) — the middle is dropped
+    // to keep backtracking regexes off 50K-char reads.
     const tfRaw209 = (opts && typeof opts.textFilter === 'string') ? opts.textFilter.trim() : '';
     if (tfRaw209) {
       let tfRe209 = null;
       if (tfRaw209[0] === '~' && tfRaw209.length > 1) {
-        tfRe209 = new RegExp(tfRaw209.slice(1));
+        try { tfRe209 = new RegExp(tfRaw209.slice(1)); } catch (e209re) { throw new Error('textFilter regex invalid (' + tfRaw209.slice(1) + '): ' + (e209re && e209re.message)); }
       }
       const matches209 = querySelectorAllDeep(sel);
+      let picked209 = null;
       if (matches209 && matches209.length) {
         for (let mi = 0; mi < matches209.length; mi++) {
           const t = String((matches209[mi] && matches209[mi].textContent) || '').trim();
-          if (tfRe209 ? tfRe209.test(t) : t.indexOf(tfRaw209) !== -1) { el = matches209[mi]; break; }
+          const bounded209 = t.length > 2000 ? t.slice(0, 2000) + t.slice(-2000) : t;
+          if (tfRe209 ? tfRe209.test(bounded209) : bounded209.indexOf(tfRaw209) !== -1) { picked209 = matches209[mi]; break; }
         }
       }
+      if (!picked209) {
+        throw new Error('TEXT_FILTER_NO_MATCH: ' + sel + ' matched elements but none carries textFilter "' + tfRaw209 + '" — refine the filter (case-sensitive substring; ~regex cannot take flags) or widen the selector, do not blind-click');
+      }
+      el = picked209;
     }
     sendDebugLog('info', 'content-script', 'domClick clicking element', { selector: sel, tagName: el.tagName, id: el.id, className: classStr(el).slice(0, 100) });
     el.click();

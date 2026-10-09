@@ -158,11 +158,19 @@
             };
           }
           if (attempt === 1) {
-            if (now() - openedAt > 150000) {
+            const spent = now() - openedAt;
+            if (spent > 150000) {
               return { error: 'page.open failed: first attempt consumed the open budget (' +
-                Math.round((now() - openedAt) / 1000) + 's) without a responding tab — not retrying; wait before re-opening or change the target.' };
+                Math.round(spent / 1000) + 's) without a responding tab — not retrying; wait before re-opening or change the target.' };
             }
             retryNote = 'first fresh tab never answered — retried with a second fresh tab';
+            // 211th review F10: the cap above only gates the RETRY decision —
+            // attempt 2 itself rides a full waitForTabLoad budget, so a slow
+            // second load can outrun the remaining open budget. Disclose it.
+            const remaining = 150000 - spent;
+            if (remaining < 120000) {
+              retryNote += '; attempt 2 started with ' + Math.round(remaining / 1000) + 's of open budget remaining — a slow load may exceed it';
+            }
             continue;
           }
           // Both fresh tabs dead: diagnose WHY before failing (health was

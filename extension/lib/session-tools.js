@@ -1060,31 +1060,51 @@
       try {
         const raw = (r && typeof r.result === 'string') ? r.result : null;
         if (!raw || raw.length < 24) return null;
-        let parsed = null;
-        try {
-          parsed = JSON.parse(raw);
-          // probe.snippet stringifies non-string returns — a snippet whose
-          // code itself returned a JSON string lands double-encoded.
-          if (typeof parsed === 'string') parsed = JSON.parse(parsed);
-        } catch (e) { return null; }
         const tails = new Map();
         let ellipsisValued = 0;
-        (function walk(v, depth) {
-          if (depth > 6 || v == null) return;
-          if (typeof v === 'string') {
-            const t = v.trim();
-            if (t.length < 8) return;
-            const m = t.match(/(?:…|\.{3})\s*([^…\s][^…]{0,23}?)\s*$/);
-            if (!m) return;
+        // 211th review F6: probe.snippet caps >4K results to head 2000 +
+        // tail 2000 BEFORE this harvest runs — the JSON.parse walk saw a
+        // permanently truncated document (parse fails → silent null), so
+        // every proposal on a big dry-run result was lost. Truncated
+        // receipts scan the two visible windows for string LITERALS carrying
+        // ellipsis tails directly (no parse; the marker is unquoted, so it
+        // never counts as a literal).
+        if (r.truncated === true) {
+          const litRe = /"(?:[^"\\]|\\.){8,4000}"/g;
+          let lm;
+          while ((lm = litRe.exec(raw)) !== null) {
+            const m = lm[0].slice(1, -1).match(/(?:…|\.{3})\s*([^…\s][^…]{0,23}?)\s*$/);
+            if (!m) continue;
             ellipsisValued += 1;
             const tok = m[1].replace(/\s+/g, ' ').trim();
-            if (!tok || /^[\d\s.,;:!?…-]+$/.test(tok)) return;
+            if (!tok || /^[\d\s.,;:!?…-]+$/.test(tok)) continue;
             tails.set(tok, (tails.get(tok) || 0) + 1);
-            return;
           }
-          if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }
-          if (typeof v === 'object') { for (const k of Object.keys(v)) walk(v[k], depth + 1); }
-        })(parsed, 0);
+        } else {
+          let parsed = null;
+          try {
+            parsed = JSON.parse(raw);
+            // probe.snippet stringifies non-string returns — a snippet whose
+            // code itself returned a JSON string lands double-encoded.
+            if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+          } catch (e) { return null; }
+          (function walk(v, depth) {
+            if (depth > 6 || v == null) return;
+            if (typeof v === 'string') {
+              const t = v.trim();
+              if (t.length < 8) return;
+              const m = t.match(/(?:…|\.{3})\s*([^…\s][^…]{0,23}?)\s*$/);
+              if (!m) return;
+              ellipsisValued += 1;
+              const tok = m[1].replace(/\s+/g, ' ').trim();
+              if (!tok || /^[\d\s.,;:!?…-]+$/.test(tok)) return;
+              tails.set(tok, (tails.get(tok) || 0) + 1);
+              return;
+            }
+            if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }
+            if (typeof v === 'object') { for (const k of Object.keys(v)) walk(v[k], depth + 1); }
+          })(parsed, 0);
+        }
         for (const [token, n] of tails) {
           if (n >= 3 && n / Math.max(1, ellipsisValued) >= 0.6) {
             return {
@@ -1877,6 +1897,12 @@
       // died at step end (later steps never ran on the page it opened).
       // SAME-ORIGIN amendment only: the model may redirect within the site
       // it was built for, never elsewhere.
+      // 211th review F4: URL validation fires on EVERY update carrying a
+      // targetUrl (cross-origin is rejected even when bundled with steps);
+      // the steps-less EARLY RETURN fires only when no steps ride the call —
+      // a bundled {steps, targetUrl} used to land here and return, silently
+      // discarding the steps.
+      let targetUrlAmendedNote = null;
       if (a.targetUrl != null) {
         const svcTu = (typeof d.getDraftService === 'function') ? d.getDraftService() : null;
         const cur = (svcTu && svcTu.targetUrl) || '';
@@ -1893,16 +1919,21 @@
         if (curOrigin && newOrigin && curOrigin !== newOrigin) {
           return { error: 'targetUrl amendment must stay on the SAME ORIGIN as the service target (' + curOrigin + ') — cross-origin redirects are out of scope for this service; re-negotiate with the user via io.confirm if a different site is genuinely required' };
         }
-        const currentStepsTu = (typeof d.getSteps === 'function' ? (d.getSteps() || []) : []);
-        if (!currentStepsTu.length) {
-          return { error: 'no artifact yet — a targetUrl amendment needs an existing step graph; author it with service.update({steps,...}) first' };
+        if (!steps.length) {
+          const currentStepsTu = (typeof d.getSteps === 'function' ? (d.getSteps() || []) : []);
+          if (!currentStepsTu.length) {
+            return { error: 'no artifact yet — a targetUrl amendment needs an existing step graph; author it with service.update({steps,...}) first' };
+          }
+          d.applyArtifact({ steps: currentStepsTu, targetUrl: a.targetUrl.trim() });
+          if (lastVerify) lastVerify.staleArtifact = true;
+          return {
+            updated: true, targetUrlAmended: true,
+            note: 'targetUrl amended — every run (verify AND runtime) now opens the new URL directly: drop any $openTab step that was opening it per-run (its sub-tab is destroyed at step end, so later steps never ran on the page it opened; it also opened a redundant third tab beside the run tab and the research tab)'
+          };
         }
-        d.applyArtifact({ steps: currentStepsTu, targetUrl: a.targetUrl.trim() });
-        if (lastVerify) lastVerify.staleArtifact = true;
-        return {
-          updated: true, targetUrlAmended: true,
-          note: 'targetUrl amended — every run (verify AND runtime) now opens the new URL directly: drop any $openTab step that was opening it per-run (its sub-tab is destroyed at step end, so later steps never ran on the page it opened; it also opened a redundant third tab beside the run tab and the research tab)'
-        };
+        // Bundled with steps: the main path applies the merged artifact,
+        // which carries targetUrl through — disclose the amendment there.
+        targetUrlAmendedNote = 'targetUrl amended with this update — every run (verify AND runtime) now opens the new URL directly; drop any $openTab step that was opening it per-run (its sub-tab is destroyed at step end)';
       }
       // Twenty-first log: a steps-less schema-only amendment — the model
       // landing the confirmed contract into an artifact authored without
@@ -2268,13 +2299,14 @@
         }
         d.applyArtifact(merged);
         if (lastVerify) lastVerify.staleArtifact = true;
-        if (attached || attachedTestInput || parseCheckNote || chunkDedupeNote) {
+        if (attached || attachedTestInput || parseCheckNote || chunkDedupeNote || targetUrlAmendedNote) {
           const st = ctx && ctx.session ? ctx.session.state() : null;
           const version = (st && st.session && Array.isArray(st.session.artifactVersions))
             ? st.session.artifactVersions.length + 1
             : 1;
           const parts = [];
           if (chunkDedupeNote) parts.push(chunkDedupeNote);
+          if (targetUrlAmendedNote) parts.push(targetUrlAmendedNote);
           if (attached) parts.push('the confirmed I/O contract was attached (your update omitted schemas) — verify.run now scores against it');
           if (attachedTestInput) parts.push('the confirmed test request values were attached (your update omitted testInput) — verify.run WITHOUT an override now runs them');
           if (parseCheckNote) parts.push(parseCheckNote);
@@ -2295,7 +2327,7 @@
       const version = (st && st.session && Array.isArray(st.session.artifactVersions))
         ? st.session.artifactVersions.length + 1
         : 1;
-      const receiptNotes = [chunkDedupeNote, parseCheckNote].filter(Boolean).join('; ');
+      const receiptNotes = [chunkDedupeNote, parseCheckNote, targetUrlAmendedNote].filter(Boolean).join('; ');
       return Object.assign({ updated: true, version: version }, receiptNotes ? { note: receiptNotes } : {}, staticLint.length ? { staticLint: staticLint } : {}, endgameWarning(ctx));
     }
 
