@@ -321,16 +321,51 @@
   // (2 consecutive verifies carrying the same tag) is a stuck locator:
   // escalate to the USER channels instead of a 6th rewrite.
   function trackCensusRepetition(prev, verifyResult) {
-    const st = (prev && typeof prev === 'object') ? prev : { count: 0, note: null, fired: false };
+    // 210th-log follow-up (user: "所有的报告级失败都会触发吧?"): SEE_MORE was
+    // one instance — the ladder now covers EVERY report-only census. The
+    // NOTE is class-aware: element-LOCATING censuses lead with
+    // annotate.request (user marking is the ground truth); assembly/quality
+    // censuses lead with their own exit and offer the user channels as the
+    // fallback. Veto/error-class failures are excluded — they have their
+    // own ladders (205 near-miss, 207 ceiling, 208 identity, 208b wandering).
+    const st = (prev && typeof prev === 'object') ? prev : { counts: {}, firedKeys: {}, note: null };
+    if (!st.counts || typeof st.counts !== 'object') st.counts = {};
+    if (!st.firedKeys || typeof st.firedKeys !== 'object') st.firedKeys = {};
     st.note = null; // one-shot
     const det = (verifyResult && verifyResult.detectors) || {};
-    const see = det.seeMoreUnexpanded || null;
-    if (!see) { st.count = 0; return st; }
-    if (st.fired) { st.count += 1; return st; }
-    st.count += 1;
-    if (st.count >= 2) {
-      st.fired = true;
-      st.note = 'STUCK AFFORDANCE LOCATOR: seeMoreUnexpanded hit "' + String(see.field || 'content') + '" on ' + st.count + ' consecutive verifies — selector rewrites are not finding the control. Escalate instead of a next rewrite: (a) annotate.request — ask the user to MARK the See-more control on one card (the marked element gives the exact selector); (b) user.observe — ask what the expansion control looks like; (c) the mechanical exit: $clickInList(containerSel, \'div[role=button]\', {textFilter:\'See more\'}) — click by TEXT (CSS classes are shared by every button; the 209th-round live incident clicked a Like button 40 times).';
+    // LOCATOR censuses name an element on the page the model keeps failing
+    // to find — user marking settles them in one round.
+    const LOCATOR_KEYS = {
+      seeMoreUnexpanded: { field: (d) => d.field || 'content', exit: '$clickInList(containerSel, \'div[role=button]\', {textFilter}) clicks by TEXT (209th: CSS classes are shared by every button; a Like got clicked 40 times)' },
+      hovercardUnparsed: { field: (d) => d.field || 'hovercards', exit: 'populate the declared fields from hovercards[].skeletonSnippet, or renegotiate via io.confirm' },
+      siblingCountContrast: { field: (d) => 'count fields', exit: 'probe the aria-label/labelledby routes the census names' },
+      timeSourceUnexercised: { field: function () { return 'postTime'; }, exit: 'bind read:hoverPopover or call $timestamp — the tooltip route the contract named' },
+      unusedCaptures: { field: function () { return 'captured popovers'; }, exit: 'bind a read:hoverPopover field to the captured text' }
+    };
+    // ASSEMBLY/QUALITY censuses are model-side fixes; the user channels are
+    // the fallback, not the lead.
+    const QUALITY_KEYS = ['labelPrefixedCounts', 'mediaHygiene', 'junkShapeRecords', 'htmlNoMarkup', 'implausibleTimeFields', 'positionLikeIds', 'hardcodedNestedRoles', 'hoverEntityCoverage', 'resultStrayKeys', 'scrollCountFrozen'];
+    const present = new Set(Object.keys(det));
+    for (const k of Object.keys(st.counts)) {
+      if (!present.has(k) || det[k] == null) delete st.counts[k]; // absence resets (absent key = real verify shape)
+    }
+    for (const k of Object.keys(det)) {
+      const v = det[k];
+      if (v == null) continue;
+      const isLocator = Object.prototype.hasOwnProperty.call(LOCATOR_KEYS, k);
+      const isQuality = QUALITY_KEYS.indexOf(k) !== -1;
+      if (!isLocator && !isQuality) continue; // veto/error class — own ladders
+      st.counts[k] = (st.counts[k] || 0) + 1;
+      if (st.counts[k] >= 2 && !st.firedKeys[k]) {
+        st.firedKeys[k] = true;
+        if (isLocator) {
+          const meta = LOCATOR_KEYS[k];
+          st.note = 'STUCK LOCATOR CENSUS: ' + k + ' hit "' + meta.field(v) + '" on ' + st.counts[k] + ' consecutive verifies — rewrites are not converging. Escalate instead of another rewrite: (a) annotate.request — ask the user to MARK the element on one card (the marked element gives the exact selector/binding); (b) user.observe — ask what the control looks like; (c) the mechanical exit: ' + meta.exit + '.';
+        } else {
+          st.note = 'STUCK QUALITY CENSUS: ' + k + ' has fired on ' + st.counts[k] + ' consecutive verifies — this is not moving. (a) fix from the census evidence (the entry names the records/fields and the parse/probe exit); (b) renegotiate via io.confirm if the page genuinely lacks it; (c) user.observe if page state is the open question. A next identical rewrite is the one move that cannot help.';
+        }
+        return st;
+      }
     }
     return st;
   }

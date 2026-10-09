@@ -34,7 +34,7 @@ describe('1. census-repetition escalation (210th log)', () => {
     assert.match(st.note, /textFilter/);
     assert.match(st.note, /posts\.content|field/i);
   });
-  it('a verify without the census resets; note fires once (latched)', () => {
+  it('a verify without the census resets; note fires once per census key (latched)', () => {
     let st = null;
     st = trackCensusRepetition(st, v(true));
     st = trackCensusRepetition(st, v(false));
@@ -43,7 +43,30 @@ describe('1. census-repetition escalation (210th log)', () => {
     st = trackCensusRepetition(st, v(true));
     assert.ok(st.note);
     st = trackCensusRepetition(st, v(true));
-    assert.ok(!st.note, 'latched');
+    assert.ok(!st.note, 'latched per key — no repeat for the same census');
+    // a DIFFERENT census key can still escalate later
+    const h = { ok: false, error: { message: 'X: x' }, detectors: { hovercardUnparsed: { field: 'posts.hovercards', unparsedCount: 3, total: 3 } } };
+    st = trackCensusRepetition(st, h);
+    st = trackCensusRepetition(st, h);
+    assert.ok(st.note, 'a second census key gets its own one-shot note');
+    assert.match(st.note, /hovercardUnparsed/);
+    assert.match(st.note, /annotate\.request/, 'locator-class leads with the user channel');
+  });
+  it('quality-class censuses fire with their own exits (user channels as fallback, not lead)', () => {
+    const q = { ok: false, error: { message: 'X: x' }, detectors: { labelPrefixedCounts: [{ field: 'likeCount', sample: 'Like: 37' }] } };
+    let st = null;
+    st = trackCensusRepetition(st, q);
+    st = trackCensusRepetition(st, q);
+    assert.ok(st.note);
+    assert.match(st.note, /labelPrefixedCounts/);
+    assert.doesNotMatch(st.note, /STUCK LOCATOR/, 'quality class is not locator-class');
+  });
+  it('veto/error-class detectors never count (own ladders)', () => {
+    const e = { ok: false, error: { message: 'COUNT_SHORTFALL: x' }, detectors: { countShortfall: { requested: 7, extracted: 3 } } };
+    let st = null;
+    st = trackCensusRepetition(st, e);
+    st = trackCensusRepetition(st, e);
+    assert.ok(!st.note, 'countShortfall is the 205/207 ladder, not this one');
   });
   it('wired beside the identity tracker (source audit)', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
