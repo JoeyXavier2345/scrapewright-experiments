@@ -71,7 +71,7 @@
     const send = (action, selector, args) => sendDomRequest(execId, deadlineAt, action, selector, args);
     return {
       '$': (sel) => send('querySelector', sel, []),
-      '$click': (sel, timeoutMs) => send('click', sel, timeoutMs !== undefined ? [timeoutMs] : []),
+      '$click': (sel, timeoutMs, opts) => send('click', sel, [timeoutMs !== undefined ? timeoutMs : undefined, opts || undefined]),
       '$type': (sel, text, timeoutMs) => send('type', sel, [text, timeoutMs]),
       '$extract': (sel, attr, timeoutMs) => send('extract', sel, [attr, timeoutMs]),
       '$wait': (sel, ms) => send('wait', sel, [ms]),

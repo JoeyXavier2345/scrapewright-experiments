@@ -1990,6 +1990,22 @@
       // 199th log: $openTab fns are serialized by source — outer variables
       // are invisible in the sub-tab ("N is not defined" class, live twice).
       // Advisory-only, same contract as the un-awaited-$ lint above.
+      // 209th log: $collectUntil({idAttr:'aria-posinset'}) — a POSITIONAL
+      // attribute as the identity key. Remount duplicates share positions
+      // and distinct records can collide after shifts (live: 10 containers,
+      // 4 distinct in the output). Positional attrs are not ids.
+      try {
+        const POS_RE = /^(aria-)?(posinset|index|position|tabindex|offset|order|rowindex)$/i;
+        for (const s of steps) {
+          const src = String((s && s.script) || '');
+          if (src.indexOf('idAttr') === -1) continue;
+          const m209 = src.match(/idAttr\s*:\s*['"]([^'"]+)['"]/);
+          if (m209 && POS_RE.test(m209[1].trim())) {
+            staticLint.push('POSITIONAL_IDENTITY: step "' + String((s && s.id) || '') + '" passes $collectUntil idAttr="' + m209[1] + '" — a POSITIONAL attribute, not a per-record identity. Virtualized remounts share positions (duplicates survive) and shifted records collide (distinct collapse; live: 10 containers → 4 distinct). Use a per-record identity attr — the permalink/id href (idAttr:"href") or a data-* token unique to the record.');
+            break;
+          }
+        }
+      } catch (e209c) { /* advisory lint must never block */ }
       // 208th log: the harvest hand-rolled a pidOf href-regex + seen-map +
       // skip-on-no-id loop over $extractWithHover output — 15 containers
       // became 3 records because the regex family did not enumerate every

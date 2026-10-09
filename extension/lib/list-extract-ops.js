@@ -357,15 +357,47 @@ function extractListMultiRecords(containers, fieldMap, opts) {
   return records;
 }
 
-function clickInListItems(containers, subSel, clickFn, delayMs) {
+function clickInListItems(containers, subSel, clickFn, delayMs, opts) {
   const delay = Math.max(0, Math.min(5000, typeof delayMs === 'number' ? delayMs : 500));
+  // 209th log: CSS cannot target "the button whose TEXT is See more" — the
+  // live artifact clicked the FIRST .xzsf02u button (a Like) 40 loop
+  // iterations while the SEE_MORE census fired on every verify. textFilter
+  // selects the match by content: a plain string is a substring test, a
+  // leading ~ makes the rest a regex.
+  const tfRaw = (opts && typeof opts.textFilter === 'string') ? opts.textFilter.trim() : '';
+  let tfSub = null, tfRe = null;
+  if (tfRaw && tfRaw[0] === '~' && tfRaw.length > 1) {
+    try { tfRe = new RegExp(tfRaw.slice(1)); } catch (e) { throw new Error('textFilter regex invalid (' + tfRaw.slice(1) + '): ' + (e && e.message)); }
+  } else if (tfRaw) {
+    tfSub = tfRaw;
+  }
+  const textMatches = (el) => {
+    const t = String((el && el.textContent) || '').trim();
+    if (tfSub != null) return t.indexOf(tfSub) !== -1;
+    if (tfRe) return tfRe.test(t);
+    return true;
+  };
   let clicked = 0;
   const errors = [];
   containers.forEach((container, index) => {
     try {
-      const el = container.querySelector(subSel);
+      let el = container.querySelector(subSel);
       if (!el) {
         errors.push({ index, reason: 'subSel not found' });
+        return;
+      }
+      if (!textMatches(el)) {
+        // first match failed the text test — scan the rest of the matches
+        let rest = null;
+        try { rest = container.querySelectorAll(subSel); } catch (e1) { rest = null; }
+        if (rest) {
+          for (let ri = 0; ri < rest.length; ri++) {
+            if (textMatches(rest[ri])) { el = rest[ri]; break; }
+          }
+        }
+      }
+      if (!textMatches(el)) {
+        errors.push({ index, reason: 'subSel matched but no match carries textFilter "' + tfRaw + '"' });
         return;
       }
       clickFn(el);

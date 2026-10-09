@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '204-textcontent-targeturl';
+  const SW_BUILD_TAG = '209-textfilter-click';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -562,24 +562,55 @@
       })();
     }
 
-    function clickInListItems(containers, subSel, clickFn, delayMs) {
+    function clickInListItems(containers, subSel, clickFn, delayMs, opts) {
+      // 209th log (inline mirror kept in sync): CSS cannot target the button
+      // whose TEXT is See more — the live artifact clicked the FIRST
+      // .xzsf02u button (a Like) 40 loop iterations while the SEE_MORE
+      // census fired on every verify. textFilter selects the match by
+      // content: plain string = substring, leading ~ = regex.
       const delay = Math.max(0, Math.min(5000, typeof delayMs === 'number' ? delayMs : 500));
+      const tfRaw = (opts && typeof opts.textFilter === 'string') ? opts.textFilter.trim() : '';
+      let tfSub = null, tfRe = null;
+      if (tfRaw && tfRaw[0] === '~' && tfRaw.length > 1) {
+        try { tfRe = new RegExp(tfRaw.slice(1)); } catch (e) { throw new Error('textFilter regex invalid (' + tfRaw.slice(1) + '): ' + (e && e.message)); }
+      } else if (tfRaw) {
+        tfSub = tfRaw;
+      }
+      const textMatches = function (el) {
+        const t = String((el && el.textContent) || '').trim();
+        if (tfSub != null) return t.indexOf(tfSub) !== -1;
+        if (tfRe) return tfRe.test(t);
+        return true;
+      };
       let clicked = 0;
       const errors = [];
-      containers.forEach((container, index) => {
+      containers.forEach(function (container, index) {
         try {
-          const el = container.querySelector(subSel);
+          let el = container.querySelector(subSel);
           if (!el) {
-            errors.push({ index, reason: 'subSel not found' });
+            errors.push({ index: index, reason: 'subSel not found' });
+            return;
+          }
+          if (!textMatches(el)) {
+            let rest = null;
+            try { rest = container.querySelectorAll(subSel); } catch (e1) { rest = null; }
+            if (rest) {
+              for (let ri = 0; ri < rest.length; ri++) {
+                if (textMatches(rest[ri])) { el = rest[ri]; break; }
+              }
+            }
+          }
+          if (!textMatches(el)) {
+            errors.push({ index: index, reason: 'subSel matched but no match carries textFilter "' + tfRaw + '"' });
             return;
           }
           clickFn(el);
           clicked++;
         } catch (err) {
-          errors.push({ index, reason: err.message || String(err) });
+          errors.push({ index: index, reason: err.message || String(err) });
         }
       });
-      return { clicked, errors, delayMs: delay };
+      return { clicked: clicked, errors: errors, delayMs: delay };
     }
 
     // ⚠️ DRIFT GUARD: mirrors computeExtractListDiagnostics in
@@ -1763,7 +1794,10 @@
         }
         case 'click': {
           const __t0 = Date.now();
-          result = await domClick(data.selector, data.args && data.args[0]);
+          // 209th log: args[1] = {textFilter} — click the match whose TEXT
+          // carries the filter (CSS cannot target button text; the live
+          // see-more step clicked the first Like button for 40 iterations).
+          result = await domClick(data.selector, data.args && data.args[0], data.args && data.args[1]);
           recordDomActivity('$click', data.selector, result ? 1 : 0, Date.now() - __t0);
           break;
         }
@@ -2098,14 +2132,30 @@
     };
   }
 
-  async function domClick(sel, timeoutMs) {
+  async function domClick(sel, timeoutMs, opts) {
     // B3: extraction fail-fasts at 5s because a missing element there means
     // a wrong selector; clicks/types have the same failure shape — default
     // them to 10s (not the 30s read-primitive budget) unless overridden.
     await domQuerySelector(sel, (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : 10000);
     const found = querySelectorDeep(sel);
     if (!found) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
-    const el = found.element;
+    let el = found.element;
+    // 209th log: {textFilter} scans ALL matches for one whose textContent
+    // carries the filter — plain string = substring, leading ~ = regex.
+    const tfRaw209 = (opts && typeof opts.textFilter === 'string') ? opts.textFilter.trim() : '';
+    if (tfRaw209) {
+      let tfRe209 = null;
+      if (tfRaw209[0] === '~' && tfRaw209.length > 1) {
+        tfRe209 = new RegExp(tfRaw209.slice(1));
+      }
+      const matches209 = querySelectorAllDeep(sel);
+      if (matches209 && matches209.length) {
+        for (let mi = 0; mi < matches209.length; mi++) {
+          const t = String((matches209[mi] && matches209[mi].textContent) || '').trim();
+          if (tfRe209 ? tfRe209.test(t) : t.indexOf(tfRaw209) !== -1) { el = matches209[mi]; break; }
+        }
+      }
+    }
     sendDebugLog('info', 'content-script', 'domClick clicking element', { selector: sel, tagName: el.tagName, id: el.id, className: classStr(el).slice(0, 100) });
     el.click();
     return true;
@@ -3412,7 +3462,8 @@
         containers,
         subSel,
         (el) => { el.click(); },
-        delayMs
+        delayMs,
+        opts || {}
       );
       // The pure helper is synchronous; per-click spacing is approximated by a single
       // post-batch sleep. For long lists requiring strict per-click timing, split across
