@@ -1037,10 +1037,68 @@
             try { r.vocabProposal = prop; } catch (_) { /* best-effort steering */ }
           }
         }
+        // 210th log: the model dry-runs almost exclusively via probe.snippet
+        // (arbitrary JSON) — the 201st harvest never saw those receipts
+        // (live: vocabProposal fired 0 times all session). Recursively scan
+        // the snippet result's strings for the same repeated ellipsis-tail
+        // evidence; threshold is stricter (>=3 same-tail values) because
+        // arbitrary JSON carries more incidental strings than records.
+        if (name === 'probe.snippet') {
+          const prop210 = harvestVocabFromSnippet(r);
+          if (prop210 && r && typeof r === 'object' && !Array.isArray(r)) {
+            try { r.vocabProposal = prop210; } catch (_) { /* best-effort steering */ }
+          }
+        }
         // 89th-round D5: a page.open invalidates the captured skeleton.
         if (name === 'page.open' && containerHtmlMeta) containerHtmlMeta.staleBy = 'page.open';
         return r;
       };
+    }
+
+    // 210th log: snippet-result variant of the affordance harvest — walk
+    // every string in the (arbitrary) result JSON, apply the same tail
+    // evidence, and require >=3 same-tail values among ellipsis-tailed ones.
+    function harvestVocabFromSnippet(r) {
+      try {
+        const raw = (r && typeof r.result === 'string') ? r.result : null;
+        if (!raw || raw.length < 24) return null;
+        let parsed = null;
+        try {
+          parsed = JSON.parse(raw);
+          // probe.snippet stringifies non-string returns — a snippet whose
+          // code itself returned a JSON string lands double-encoded.
+          if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+        } catch (e) { return null; }
+        const tails = new Map();
+        let ellipsisValued = 0;
+        (function walk(v, depth) {
+          if (depth > 6 || v == null) return;
+          if (typeof v === 'string') {
+            const t = v.trim();
+            if (t.length < 8) return;
+            const m = t.match(/(?:…|\.{3})\s*([^…\s][^…]{0,23}?)\s*$/);
+            if (!m) return;
+            ellipsisValued += 1;
+            const tok = m[1].replace(/\s+/g, ' ').trim();
+            if (!tok || /^[\d\s.,;:!?…-]+$/.test(tok)) return;
+            tails.set(tok, (tails.get(tok) || 0) + 1);
+            return;
+          }
+          if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }
+          if (typeof v === 'object') { for (const k of Object.keys(v)) walk(v[k], depth + 1); }
+        })(parsed, 0);
+        for (const [token, n] of tails) {
+          if (n >= 3 && n / Math.max(1, ellipsisValued) >= 0.6) {
+            return {
+              field: '(snippet result strings)',
+              token: token,
+              records: n,
+              note: 'the snippet result carries ' + n + ' strings ending with "…' + token + '" — likely this page\'s collapsed-text affordance. If it IS one: (1) register it — service.update({pageVocab:{truncationAffordances:[\'' + token + '\']}}); (2) expand BEFORE extracting — $clickInList(containerSel, \'div[role=button]\', {textFilter:\'' + token + '\'}) clicks the control BY TEXT (209th round: CSS classes are shared by every button). If the tails are legitimate prose, ignore this note.'
+            };
+          }
+        }
+      } catch (e) { /* steering must never break the probe */ }
+      return null;
     }
 
     // 201st-round follow-up: pageVocab shape validation. Tight caps keep a
@@ -1990,6 +2048,20 @@
       // 199th log: $openTab fns are serialized by source — outer variables
       // are invisible in the sub-tab ("N is not defined" class, live twice).
       // Advisory-only, same contract as the un-awaited-$ lint above.
+      // 210th log (user: "会不会出现组装错位?"): two $extractWithHover
+      // sweeps in one step merged by index is the exact alignment bug the
+      // primitive exists to kill (RC45: per-card hover alignment). One
+      // comma-UNION anchorSel sweeps every row of each card in ONE pass.
+      try {
+        for (const s of steps) {
+          const src = String((s && s.script) || '');
+          const n210 = src.split('$extractWithHover').length - 1;
+          if (n210 >= 2) {
+            staticLint.push('TWO_SWEEP_MERGE: step "' + String((s && s.id) || '') + '" runs ' + n210 + ' $extractWithHover sweeps and merges them — aligning two per-row/per-family sweeps by array index is the exact misalignment bug the primitive exists to prevent (per-card hover alignment). Use ONE call with a comma-UNION anchorSel (anchorSel:\'h3 a, a:has(span[aria-labelledby])\') so every row of each card is swept in the same per-container pass; split calls only for genuinely different pages.');
+            break;
+          }
+        }
+      } catch (e210) { /* advisory lint must never block */ }
       // 209th log: $collectUntil({idAttr:'aria-posinset'}) — a POSITIONAL
       // attribute as the identity key. Remount duplicates share positions
       // and distinct records can collide after shifts (live: 10 containers,

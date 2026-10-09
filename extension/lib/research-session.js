@@ -315,6 +315,26 @@
     return st;
   }
 
+  // 210th log (user: "See more 定位不到为何不请求用户标注?"): the census
+  // fired on FIVE consecutive verifies with no ladder — report-only
+  // censuses never touched the 208th identity escalation. A repeat census
+  // (2 consecutive verifies carrying the same tag) is a stuck locator:
+  // escalate to the USER channels instead of a 6th rewrite.
+  function trackCensusRepetition(prev, verifyResult) {
+    const st = (prev && typeof prev === 'object') ? prev : { count: 0, note: null, fired: false };
+    st.note = null; // one-shot
+    const det = (verifyResult && verifyResult.detectors) || {};
+    const see = det.seeMoreUnexpanded || null;
+    if (!see) { st.count = 0; return st; }
+    if (st.fired) { st.count += 1; return st; }
+    st.count += 1;
+    if (st.count >= 2) {
+      st.fired = true;
+      st.note = 'STUCK AFFORDANCE LOCATOR: seeMoreUnexpanded hit "' + String(see.field || 'content') + '" on ' + st.count + ' consecutive verifies — selector rewrites are not finding the control. Escalate instead of a next rewrite: (a) annotate.request — ask the user to MARK the See-more control on one card (the marked element gives the exact selector); (b) user.observe — ask what the expansion control looks like; (c) the mechanical exit: $clickInList(containerSel, \'div[role=button]\', {textFilter:\'See more\'}) — click by TEXT (CSS classes are shared by every button; the 209th-round live incident clicked a Like button 40 times).';
+    }
+    return st;
+  }
+
   function buildTokenCapDetail(spend, budgets, green) {
     try {
       const sp = spend || {};
@@ -2182,6 +2202,10 @@
               ? pe.slice(0, 6).map((f) => String(f.path || f.field) + ' ' + (f.emptyCount || 0) + '/' + (f.totalCount || 0) + ' empty')
               : null;
             // 205th log: the one-record-short loop breaker.
+            state.censusRepetition = trackCensusRepetition(state.censusRepetition, result);
+            if (state.censusRepetition && state.censusRepetition.note) {
+              state.transcript.push({ kind: 'system', text: state.censusRepetition.note });
+            }
             state.wanderingReds = trackWanderingReds(state.wanderingReds, result);
             if (state.wanderingReds && state.wanderingReds.note) {
               state.transcript.push({ kind: 'system', text: state.wanderingReds.note });
@@ -2506,7 +2530,7 @@
     return Math.max(0, nowMs - startMs - Math.max(0, Number(llmWaitMs) || 0) - Math.max(0, Number(parkedMs) || 0) - Math.max(0, Number(suspendCreditMs) || 0) - Math.max(0, Number(environmentalMs) || 0));
   }
 
-  const api = { createResearchSession, computeEffectiveElapsed: computeEffectiveElapsed, makeInstructionStripper, tokenWallProjection, trackNearMissShortfall, trackIdentityFailures, trackWanderingReds, buildTokenCapDetail };
+  const api = { createResearchSession, computeEffectiveElapsed: computeEffectiveElapsed, makeInstructionStripper, tokenWallProjection, trackNearMissShortfall, trackIdentityFailures, trackWanderingReds, trackCensusRepetition, buildTokenCapDetail };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.ResearchSessionLib = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));

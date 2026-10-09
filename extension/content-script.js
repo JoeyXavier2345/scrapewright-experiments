@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '209-textfilter-click';
+  const SW_BUILD_TAG = '210-census-ladder';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -5682,6 +5682,16 @@
         _diagnostics.anchorCensus = computeAnchorCensus(_blindContainers, hoverConfig.anchorSel);
       }
     }
+    // 210th log: a comma-LESS anchorSel sweeps only ONE anchor family —
+    // the live model split rows into separate per-family calls (visual:
+    // row-by-row sweeps across cards). The union hint rides the summary so
+    // the next anchorSel decision sees the one-call alternative.
+    try {
+      if (hoverConfig && typeof hoverConfig.anchorSel === 'string' &&
+          hoverConfig.anchorSel.indexOf(',') === -1 && anchorsFound > 0) {
+        _diagnostics.hoverSummary.anchorUnionHint = 'single-family anchorSel (' + hoverConfig.anchorSel + ') — a comma-UNION sweeps every row of each card in ONE per-container pass; splitting families across calls sweeps row-by-row and multiplies passes.';
+      }
+    } catch (e210h) { /* hint is best-effort */ }
     // Sixty-second log: a gate failure in the tally is not one anchor's bad
     // luck — the Enhanced Mode opt-out disables EVERY dispatch in the session
     // deterministically. Name it at the aggregate so a verify-time reader of
