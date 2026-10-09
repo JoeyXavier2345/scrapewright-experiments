@@ -1298,6 +1298,27 @@
         }
         }
       } catch (_) { /* the stagnation census must never break the verify result */ }
+      // 208th log (user: "冷热tab的数据串了?"): worse than mixing — the
+      // research evidence often comes from a DIFFERENT page VARIANT than the
+      // service targetUrl (live: researched /search/posts with 17 distinct,
+      // the service ran /search/top with 5-7 unique on fresh tabs). A count
+      // shortfall on the verify tab with a variant-divergent research tab
+      // names it and points at the 204th amendment exit.
+      try {
+        if (report && report.error && typeof report.error.message === 'string' &&
+            /COUNT_SHORTFALL/.test(report.error.message) && d.rail && typeof d.rail.pageState === 'function') {
+          const st208 = await d.rail.pageState();
+          const railUrl = (st208 && st208.open && typeof st208.url === 'string') ? st208.url : null;
+          const target208 = (service && service.targetUrl) || '';
+          if (railUrl && target208) {
+            const pathOf = (u) => { try { return new URL(u).pathname; } catch (e) { return null; } };
+            const rp = pathOf(railUrl), tp = pathOf(target208);
+            if (rp && tp && rp !== tp) {
+              report.error.message += ' RESEARCH/TARGET DIVERGENCE: your research evidence came from ' + rp + ' (the rail tab) while the service runs ' + tp + ' — different page VARIANTS can supply different record populations, and your count expectations were built on the researched one. Either amend the service URL to the researched page (service.update({targetUrl}) — same-origin, the 204th-round exit), or re-ground the count on the service page before renegotiating.';
+            }
+          }
+        }
+      } catch (e208) { /* divergence note is best-effort */ }
       probesSinceLastVerify = 0;
       return report;
     }
@@ -1969,6 +1990,25 @@
       // 199th log: $openTab fns are serialized by source — outer variables
       // are invisible in the sub-tab ("N is not defined" class, live twice).
       // Advisory-only, same contract as the un-awaited-$ lint above.
+      // 208th log: the harvest hand-rolled a pidOf href-regex + seen-map +
+      // skip-on-no-id loop over $extractWithHover output — 15 containers
+      // became 3 records because the regex family did not enumerate every
+      // href shape (silently skipping cards) and literal 'undefined' ids
+      // slipped through the fallback. $collectUntil(idAttr) does scroll +
+      // identity-dedupe + certification in one harness call.
+      try {
+        for (const s of steps) {
+          const src = String((s && s.script) || '');
+          if (src.indexOf('$extractWithHover') === -1 && src.indexOf('$extractList') === -1) continue;
+          const hasRegex = /\.match\s*\(\s*\/[^/]*fbid|story_fbid|\[?\&\]fbid=/.test(src) || /story_fbid/.test(src);
+          const hasSeenMap = /seen\s*\[\s*\w+\s*\]\s*=\s*1/.test(src) || /new Set\(\)/.test(src);
+          const hasSkip = /if\s*\(\s*!\s*\w+\s*(pid|id)?\s*\|\|\s*/.test(src) || /continue;\s*\/\/?\s*$|pid\s*\)\s*continue/.test(src) && /continue/.test(src);
+          if (hasRegex && hasSeenMap) {
+            staticLint.push('HANDROLLED_ID_DEDUPE: step "' + String((s && s.id) || '') + '" hand-rolls an id-regex + seen-map dedupe over extraction output — a regex family you did not enumerate will SILENTLY SKIP cards (live: 15 containers → 3 records; /reel/ and pfbid shapes fell outside the enumerated families) and a failed match can leak a literal "undefined" id (live: DUPLICATE_ID on "undefined"). Prefer $collectUntil(containerSel, {targetCount, idAttr}) — the harness does scroll + identity-dedupe + exhaustion certification in ONE call; keep the regex only to NORMALIZE an already-extracted id, never to decide which cards are records.');
+            break;
+          }
+        }
+      } catch (e208b) { /* advisory lint must never block */ }
       // 204th log: a step that $openTabs a URL on the service targetUrl's
       // origin duplicates the run tab the orchestrator ALREADY opens —
       // three target-site tabs on screen, and the sub-tab dies at step end

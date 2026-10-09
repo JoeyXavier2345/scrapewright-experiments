@@ -270,6 +270,28 @@
     return st;
   }
 
+  // 208th log (user: "为何不弹窗请求用户的标注协助?"): annotate.request was
+  // called ZERO times across an 8-verify session whose failures were ALL
+  // identity/post-determination class — the FIELD_ASSIST escalation only
+  // triggers on per-field failures. Two consecutive identity-class verify
+  // failures (DUPLICATE_ID / CAPTURED_VALUE_UNBOUND / INVENTED_ID) escalate
+  // to the annotation channel: the user marks 1-2 post cards and the
+  // determination question (which containers are posts, which element
+  // carries the id) is settled by evidence instead of more regex guessing.
+  function trackIdentityFailures(prev, verifyResult) {
+    const st = (prev && typeof prev === 'object') ? prev : { count: 0, note: null, fired: false };
+    const msg = String((verifyResult && verifyResult.error && verifyResult.error.message) || '');
+    const isIdentity = /DUPLICATE_ID_REQUIRED|CAPTURED_VALUE_UNBOUND|INVENTED_ID_FALLBACK/.test(msg);
+    if (!isIdentity) { st.count = 0; return st; }
+    if (st.fired) { st.count += 1; return st; }
+    st.count += 1;
+    if (st.count >= 2) {
+      st.fired = true;
+      st.note = 'IDENTITY DETERMINATION STUCK (' + st.count + ' consecutive identity-class verify failures — regex guessing is not converging). Escalate to the USER: annotate.request asking them to MARK 1-2 post cards (proves the container family and the id-bearing element), or user.observe asking what distinguishes a post card from a recommendation card on this page. Two minutes of user marking beats another round of href-family enumeration (this class burned the whole session live).';
+    }
+    return st;
+  }
+
   function buildTokenCapDetail(spend, budgets, green) {
     try {
       const sp = spend || {};
@@ -2137,6 +2159,10 @@
               ? pe.slice(0, 6).map((f) => String(f.path || f.field) + ' ' + (f.emptyCount || 0) + '/' + (f.totalCount || 0) + ' empty')
               : null;
             // 205th log: the one-record-short loop breaker.
+            state.identityFailures = trackIdentityFailures(state.identityFailures, result);
+            if (state.identityFailures && state.identityFailures.note) {
+              state.transcript.push({ kind: 'system', text: state.identityFailures.note });
+            }
             state.nearMissShortfall = trackNearMissShortfall(state.nearMissShortfall, result);
             if (state.nearMissShortfall && state.nearMissShortfall.note) {
               state.transcript.push({ kind: 'system', text: state.nearMissShortfall.note });
@@ -2453,7 +2479,7 @@
     return Math.max(0, nowMs - startMs - Math.max(0, Number(llmWaitMs) || 0) - Math.max(0, Number(parkedMs) || 0) - Math.max(0, Number(suspendCreditMs) || 0) - Math.max(0, Number(environmentalMs) || 0));
   }
 
-  const api = { createResearchSession, computeEffectiveElapsed: computeEffectiveElapsed, makeInstructionStripper, tokenWallProjection, trackNearMissShortfall, buildTokenCapDetail };
+  const api = { createResearchSession, computeEffectiveElapsed: computeEffectiveElapsed, makeInstructionStripper, tokenWallProjection, trackNearMissShortfall, trackIdentityFailures, buildTokenCapDetail };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.ResearchSessionLib = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));
