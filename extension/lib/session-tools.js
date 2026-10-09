@@ -2048,6 +2048,20 @@
       // 199th log: $openTab fns are serialized by source — outer variables
       // are invisible in the sub-tab ("N is not defined" class, live twice).
       // Advisory-only, same contract as the un-awaited-$ lint above.
+      // 211th log: the v4 crash was `.match(DATE)[0]` — a failed match
+      // returns null and direct indexing throws "Cannot read properties of
+      // null (reading '0')", burning a whole verify on a JS null-guard bug.
+      // The guarded shape `const m = x.match(re); if (m) ... m[1]` is fine —
+      // only DIRECT indexing is flagged.
+      try {
+        for (const s of steps) {
+          const src = String((s && s.script) || '');
+          const hits211 = src.match(/\.match\s*\([^)]*\)\s*\[\d+\]/g);
+          if (hits211) {
+            staticLint.push('MATCH_INDEX_UNGUARDED: step "' + String((s && s.id) || '') + '" directly indexes a .match() result (' + hits211.slice(0, 2).join(', ').slice(0, 120) + ') — a failed match returns null and the index read throws at runtime, killing the whole step (live: v4 died "reading 0" on .match(DATE)[0]). Use the guarded shape: const m = x.match(RE); const v = m ? m[1] : \'\';');
+          }
+        }
+      } catch (e211m) { /* advisory lint must never block */ }
       // 210th log (user: "会不会出现组装错位?"): two $extractWithHover
       // sweeps in one step merged by index is the exact alignment bug the
       // primitive exists to kill (RC45: per-card hover alignment). One
