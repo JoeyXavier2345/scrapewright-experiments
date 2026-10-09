@@ -184,7 +184,16 @@
       const cap = budgets && budgets.tokenCap || 0;
       const maxTurns = budgets && budgets.maxTurns || 0;
       if (calls < 5 || !cap || maxTurns <= turns) return null;
-      const avg = (p + c) / calls;
+      let avg = (p + c) / calls;
+      // 207th log: prompts GROW through a session (5K -> 20K live) — the
+      // lifetime avg is early-session optimism. Use the RECENT marginal
+      // cost when the caller records it, whichever is larger (conservative
+      // wall estimate).
+      if (Array.isArray(sp.recentCallTokens) && sp.recentCallTokens.length >= 3) {
+        const rec = sp.recentCallTokens.slice(-5);
+        const recAvg = rec.reduce((a, b) => a + b, 0) / rec.length;
+        if (recAvg > avg) avg = recAvg;
+      }
       const tokensLeft = cap - (p + c);
       const callsLeft = Math.floor(tokensLeft / Math.max(1, avg));
       const turnsLeft = maxTurns - turns;
@@ -205,25 +214,60 @@
   // resets on green, on any other error class, on a 3+-record miss, and on
   // a CERTIFIED shortfall — certification is an exit, not a loop).
   function trackNearMissShortfall(prev, verifyResult) {
-    const st = (prev && typeof prev === 'object') ? prev : { count: 0, note: null };
+    const st = (prev && typeof prev === 'object') ? prev : { count: 0, note: null, window: [], ceilingFired: false };
+    if (!Array.isArray(st.window)) st.window = [];
+    // one-shot message semantics: ceilingNote is consumed on delivery (the
+    // engine pushes it once); the ceilingFired latch prevents re-firing.
+    st.ceilingNote = null;
+    // 207th log: the live pattern WANDERED (near-miss, big-miss, id-error,
+    // near-miss, ...) — the consecutive streak never reached 3. A rolling
+    // window of the last 5 verify outcomes carries the signal across the
+    // interleaving: >=3 shortfalls below-request in the window means the
+    // SUPPLY is the ceiling regardless of order.
+    st.window.push(verifyResult);
+    if (st.window.length > 5) st.window.shift();
+    const shortfallsInWindow = [];
+    for (const w of st.window) {
+      const wcs = (w && w.detectors && w.detectors.countShortfall) || null;
+      const wShort = !!(w && w.error && w.error.message && /COUNT_SHORTFALL/.test(String(w.error.message))) && wcs;
+      if (wShort && Number(wcs.requested) > 0 && Number(wcs.extracted) < Number(wcs.requested)) {
+        shortfallsInWindow.push({ requested: Number(wcs.requested), extracted: Number(wcs.extracted), certified: wcs.exhaustionCertified === true });
+      }
+    }
+    if (!st.ceilingFired && shortfallsInWindow.length >= 3) {
+      const uncert = shortfallsInWindow.filter((x) => !x.certified);
+      if (uncert.length >= 3) {
+        st.ceilingFired = true;
+        const allNear = uncert.every((x) => x.extracted >= x.requested - 2);
+        if (allNear) {
+          st.note = 'NEAR-MISS LOOP (' + uncert.length + ' of the last ' + st.window.length + ' verifies within two records of the requested count — the page SUPPLY is the binding constraint, not your assembly). Stop the assembly tweak loop: (a) certify exhaustion — $collectUntil to the requested count with the run receipt, then ship the certified shortfall DISCLOSED; (b) renegotiate the count with the user via io.confirm (a count the page cannot supply is a contract question, not a selector question); (c) only if the identity census shows UNIQUE records you dropped in assembly, fix that.';
+        } else {
+          st.ceilingNote = 'SUPPLY CEILING: ' + uncert.length + ' of the last ' + st.window.length + ' verifies shipped below the requested count (delivered ' +
+            uncert.map((x) => x.extracted + ' of ' + x.requested).join(', ') +
+            ') — the page SUPPLY on fresh tabs is the ceiling, and interleaved other errors do not change that. Exits: (a) renegotiate the COUNT via io.confirm — propose a testInput count at/below the observed supply (the panel test values are user-editable; the 132nd disclosure will name the lowering); (b) $collectUntil-certify the ceiling on a verify run and ship the certified shortfall DISCLOSED; (c) only if the identity census shows unique records your assembly dropped, fix the assembly. Another same-count contract does not move the wall.';
+        }
+        return st;
+      }
+    }
     const r = verifyResult || {};
     const cs = (r.detectors && r.detectors.countShortfall) || null;
     const isShortfall = !!(r.error && r.error.message && /COUNT_SHORTFALL/.test(String(r.error.message))) && !!cs;
-    if (!isShortfall) return { count: 0, note: null };
-    if (cs.exhaustionCertified === true) return { count: 0, note: null };
+    if (!isShortfall) { st.count = 0; return st; }
+    if (cs.exhaustionCertified === true) { st.count = 0; return st; }
     const requested = Number(cs.requested) || 0;
     const delivered = Number(cs.extracted) || 0;
     if (requested > 0 && delivered >= requested - 2 && delivered < requested) {
       const count = (st.count || 0) + 1;
       if (count >= 3) {
-        return {
-          count: 0,
-          note: 'NEAR-MISS LOOP (' + count + ' consecutive verifies within two records of the requested count — the page SUPPLY is the binding constraint, not your assembly). Stop the assembly tweak loop: (a) certify exhaustion — $collectUntil to the requested count with the run receipt, then ship the certified shortfall DISCLOSED; (b) renegotiate the count with the user via io.confirm (a count the page cannot supply is a contract question, not a selector question); (c) only if the identity census shows UNIQUE records you dropped in assembly, fix that — a third identical near-miss means neither (a) nor (b) happened.'
-        };
+        st.count = 0;
+        st.note = 'NEAR-MISS LOOP (' + count + ' consecutive verifies within two records of the requested count — the page SUPPLY is the binding constraint, not your assembly). Stop the assembly tweak loop: (a) certify exhaustion — $collectUntil to the requested count with the run receipt, then ship the certified shortfall DISCLOSED; (b) renegotiate the count with the user via io.confirm (a count the page cannot supply is a contract question, not a selector question); (c) only if the identity census shows UNIQUE records you dropped in assembly, fix that — a third identical near-miss means neither (a) nor (b) happened.';
+        return st;
       }
-      return { count: count, note: null };
+      st.count = count;
+      return st;
     }
-    return { count: 0, note: null };
+    st.count = 0;
+    return st;
   }
 
   function buildTokenCapDetail(spend, budgets, green) {
@@ -1404,6 +1448,11 @@
       if (u && typeof u.prompt_tokens === 'number') {
         state.spend.promptTokens += u.prompt_tokens;
         state.spend.completionTokens += typeof u.completion_tokens === 'number' ? u.completion_tokens : 0;
+        // 207th log: the marginal cost ring feeds the token-wall projection
+        // (lifetime avg underestimates late-session prompts by 4x).
+        state.spend.recentCallTokens = state.spend.recentCallTokens || [];
+        state.spend.recentCallTokens.push(u.prompt_tokens + (typeof u.completion_tokens === 'number' ? u.completion_tokens : 0));
+        if (state.spend.recentCallTokens.length > 5) state.spend.recentCallTokens.shift();
       } else {
         let chars = 0;
         for (const m of messages) chars += String((m && m.content) || '').length;
@@ -2091,6 +2140,9 @@
             state.nearMissShortfall = trackNearMissShortfall(state.nearMissShortfall, result);
             if (state.nearMissShortfall && state.nearMissShortfall.note) {
               state.transcript.push({ kind: 'system', text: state.nearMissShortfall.note });
+            }
+            if (state.nearMissShortfall && state.nearMissShortfall.ceilingNote) {
+              state.transcript.push({ kind: 'system', text: state.nearMissShortfall.ceilingNote });
             }
             const cs = (result && result.detectors && result.detectors.countShortfall) ? result.detectors.countShortfall : null;
             state.lastVerifyCountShortfall = cs

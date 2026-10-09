@@ -685,6 +685,28 @@
       const downgradeNote = testInputDowngrades.length
         ? ' LOWERING ' + testInputDowngrades.join(', ') + ' against the previously confirmed values — the run will be verified against the smaller ask; prefer fixing the extraction to deliver the original count.'
         : '';
+      // 207th log: the model took the renegotiation exit and burned a
+      // 30-minute user park re-proposing the contract with the SAME failing
+      // count (it dropped fields instead — the count was the binding
+      // constraint). Warn in the PANEL and the receipt when the session is
+      // failing count-short and this proposal keeps the failing count.
+      let keptFailingCountNote = '';
+      try {
+        const stState = (ctx && ctx.session && typeof ctx.session.state === 'function') ? ctx.session.state() : null;
+        const shortfallActive = stState && typeof stState.countShortfall === 'string' && /COUNT-SHORTFALL/i.test(stState.countShortfall || '') === false
+          ? null : (stState ? stState.countShortfall : null);
+        const csText = (stState && typeof stState.countShortfall === 'string') ? stState.countShortfall : '';
+        const reqMatch = csText.match(/requested\s+(\d+)/i);
+        const extMatch = csText.match(/extracted\s+(\d+)/i);
+        if (reqMatch && extMatch && proposedTestInput) {
+          const failingReq = Number(reqMatch[1]);
+          const kept = Object.keys(proposedTestInput).find((k) => Number(proposedTestInput[k]) === failingReq);
+          if (kept) {
+            keptFailingCountNote = ' COUNT IS THE BINDING CONSTRAINT: the last verify failed short (' + extMatch[1] + ' of ' + failingReq + ') and this proposal KEEPS ' + kept + '=' + failingReq +
+              ' — unless the page provably supplies ' + failingReq + ' on a fresh tab, verify will keep failing. Either $collectUntil-certify the supply ceiling and ship the shortfall disclosed, or propose ' + kept + ' at/below the observed supply (the test values in this panel are editable — lower them directly if the ceiling is real).';
+          }
+        }
+      } catch (e207) { /* best-effort steering, never blocks confirmation */ }
       try {
         // Thirty-first log: a renegotiation must show the user WHAT changes
         // against the confirmed contract (a field leaving items.required is
@@ -694,6 +716,7 @@
           ? contractDiffLines(priorSchemas.outputSchema, a.outputSchema)
           : [];
         if (testInputDowngrades.length) diffLines.push('TEST INPUT DOWNGRADE — ' + testInputDowngrades.join(', ') + ' (was confirmed higher; the service will be tested against the smaller ask)');
+        if (keptFailingCountNote) diffLines.push('KEPT FAILING COUNT — ' + keptFailingCountNote.trim());
         // 139th log: the confirmed contract declared the synthetic bookkeeping
         // field `index` as REQUIRED — rule 10 forbids declaring it at all (a
         // populated synthetic field masks empty-data signals), and prompt-only
@@ -722,7 +745,7 @@
           // the wizard-side second-layer prefill substitutes its stored
           // values ONLY when this is false.
           testInputProvided: modelTI != null,
-          note: (typeof a.note === 'string' ? a.note : '') + downgradeNote,
+          note: (typeof a.note === 'string' ? a.note : '') + downgradeNote + keptFailingCountNote,
           testInputDowngrades: testInputDowngrades,
           diffLines: diffLines
         });
@@ -773,6 +796,7 @@
             + (confirmedTestInput ? '; test request parameters confirmed: ' + JSON.stringify(confirmedTestInput) : '')
             + (attachedNow ? '; amended contract applied to the current artifact — verify.run scores against it now' : '')
             + (attachedTI ? '; confirmed test values applied to the current artifact' : '')
+            + (keptFailingCountNote ? keptFailingCountNote : '')
             + (resyncNote ? '; ' + resyncNote : '')
             // 165th round: the framework understanding of the requirement,
             // made visible — every predicate-bearing field and the semantic
