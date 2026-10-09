@@ -98,14 +98,95 @@ describe('3. Intervention button (212th log, source audit)', () => {
   it('the panel has a textarea and submit routes to the USER FEEDBACK sender', () => {
     assert.match(html, /id="sessionIntervenePanel"/, 'panel present');
     assert.match(html, /id="sessionInterveneText"/, 'textarea present');
-    const i = js.indexOf('sessionInterveneText');
+    const i = js.indexOf("getElementById('btnSessionInterveneSend').addEventListener");
     assert.ok(i > -1);
-    const region = js.slice(i, i + 1200);
+    const region = js.slice(i, i + 2600);
     assert.match(region, /sendSessionFeedback/, 'submit reuses the USER FEEDBACK pipeline');
   });
   it('setSessionMode shows it only while running (audit)', () => {
     const i = js.indexOf("getElementById('btnSessionIntervene').classList.toggle");
     assert.ok(i > -1, 'mode toggle present');
     assert.match(js.slice(i, i + 120), /mode !== 'running'/);
+  });
+  // 215th-round live report: clicking Intervene during research showed
+  // NOTHING — the panel was instantiated inside #phase5 (Review & Deploy,
+  // hidden during research) while the button lives in #phase4. Unhiding a
+  // child of a hidden ancestor is a no-op. The panel must live in phase4.
+  it('the panel lives in phase4 (the research stage), not phase5', () => {
+    const p4 = html.indexOf('id="phase4"');
+    const p5 = html.indexOf('id="phase5"');
+    const panel = html.indexOf('id="sessionIntervenePanel"');
+    assert.ok(p4 > -1 && p5 > -1 && panel > -1, 'phase4/phase5/panel all present');
+    assert.ok(panel > p4 && panel < p5, 'the panel is inside the phase4 block — inside phase5 the running-session click unhides nothing');
+  });
+
+  // 215th-round follow-ups (the send/cancel sequencing the dead panel hid):
+  // the engine consumes pauseFlag only at a TURN BOUNDARY — a mid-dispatch
+  // pause leaves status 'running' for minutes (a verify can run 12+), the
+  // fresh engine startResearchSession launches REFUSES while running (its
+  // double-start guard), so Send bridged immediately persisted the
+  // directive into a session no engine picked up. And Cancel left the
+  // pending pause armed — the session parked at the boundary with nobody
+  // to resume it.
+  it('Send waits for the engine to leave running before bridging (audit)', () => {
+    const i = js.indexOf("getElementById('btnSessionInterveneSend').addEventListener");
+    assert.ok(i > -1);
+    const region = js.slice(i, i + 2200);
+    assert.match(region, /status\(\)|status === 'running'|state\(\)\.session\.status/, 'reads the engine status');
+    assert.match(region, /setTimeout/, 'polls instead of bridging blind');
+    assert.match(region, /sendSessionFeedback/, 'bridges once the pause landed');
+  });
+  it('Cancel retracts a pending pause or resumes an already-paused engine (audit)', () => {
+    const i = js.indexOf("getElementById('btnSessionInterveneCancel').addEventListener");
+    assert.ok(i > -1);
+    const region = js.slice(i, i + 900);
+    assert.match(region, /unpause/, 'retracts the pending pause flag');
+    assert.match(region, /\.run\(\)/, 'resumes an already-paused engine');
+  });
+});
+
+describe('4. engine unpause — a pending pause is retractable (215th round)', () => {
+  const { createResearchSession } = require('../lib/research-session');
+  function reply(content, extra) {
+    return Object.assign({ content, finish_reason: 'stop', usage: { prompt_tokens: 100, completion_tokens: 10 } }, extra || {});
+  }
+  function envelope(tool, args) {
+    return JSON.stringify(Object.assign({ think: 't', tool, args: args || {} }));
+  }
+  function finishEnvelope(summary) { return JSON.stringify({ think: 'done', finish: { summary: summary || 'done' } }); }
+  function gatedEngine(releaseRef) {
+    let i = 0;
+    return createResearchSession({
+      requirement: 'collect posts',
+      llm: async () => {
+        const r = [reply(envelope('probe.count', { sel: 'x' })), reply(finishEnvelope('unpaused and finished'))][Math.min(i++, 1)];
+        return r;
+      },
+      tools: { 'probe.count': async () => {
+        return await new Promise((resolve) => { releaseRef.fn = () => resolve({ count: 1 }); });
+      } }
+    });
+  }
+  it('pause() then unpause() while a dispatch is in flight: the loop never pauses', async () => {
+    const releaseRef = {};
+    const session = gatedEngine(releaseRef);
+    const runP = session.run();
+    await new Promise((r) => setTimeout(r, 30)); // probe.count dispatch in flight
+    session.pause();
+    assert.equal(typeof session.unpause, 'function', 'unpause exists on the engine API');
+    session.unpause();
+    releaseRef.fn();
+    const report = await runP;
+    assert.equal(report.stopped.reason, 'completed', 'unpause retracted the pending pause');
+  });
+  it('pause() without unpause still parks the loop (regression pin)', async () => {
+    const releaseRef = {};
+    const session = gatedEngine(releaseRef);
+    const runP = session.run();
+    await new Promise((r) => setTimeout(r, 30));
+    session.pause();
+    releaseRef.fn();
+    const report = await runP;
+    assert.equal(report.stopped.reason, 'paused');
   });
 });

@@ -2505,6 +2505,11 @@
       cancelUserBridges('user aborted session');
     }
     function pause() { pauseFlag = true; }
+    // 215th round (intervene flow): the flag is consumed only at a turn
+    // boundary, so a pause armed mid-dispatch must be retractable — Cancel
+    // on the intervention panel would otherwise park the session at the
+    // boundary with nobody left to resume it.
+    function unpause() { pauseFlag = false; }
 
     // Seventieth log F3: exposed for direct unit tests of the accumulation
     // and the suffix formatting (driving the full engine loop is costly).
@@ -2518,6 +2523,7 @@
       timings: timingApi,
       abort: abort,
       pause: pause,
+      unpause: unpause,
       parkBegin: parkBegin,
       parkEnd: parkEnd,
       // 183rd round: the tool layer stamps verify reports with the CURRENT

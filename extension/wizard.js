@@ -461,14 +461,52 @@ document.addEventListener('DOMContentLoaded', async () => {
     const txt = document.getElementById('sessionInterveneText');
     if (txt) txt.focus();
   });
-  document.getElementById('btnSessionInterveneCancel').addEventListener('click', () => {
+  document.getElementById('btnSessionInterveneCancel').addEventListener('click', async () => {
     const panel = document.getElementById('sessionIntervenePanel');
     if (panel) panel.classList.add('hidden');
+    // 215th round: the pause armed by Intervene must not outlive the
+    // cancellation — retract it before the turn boundary consumes it, and
+    // resume outright if the boundary already parked the loop.
+    if (!wizardSession) return;
+    try {
+      const st = wizardSession.state().session.status;
+      if (st === 'running') {
+        if (typeof wizardSession.unpause === 'function') wizardSession.unpause();
+      } else if (st === 'paused') {
+        setSessionControls('running');
+        const report = await wizardSession.run();
+        if (report && report.stopped && sessionStopPresentsOutcome(report.stopped.reason, wizardSession.state().session)) await presentSessionCompletion();
+      }
+    } catch (e) { /* the session may have stopped on its own mid-click */ }
   });
   document.getElementById('btnSessionInterveneSend').addEventListener('click', async () => {
     const src = document.getElementById('sessionInterveneText');
     const text = String((src && src.value) || '').trim();
     if (!text) { showToast('Describe what you observe first.', 'warn', 3000); return; }
+    // 215th round: the engine consumes the pause only at a TURN BOUNDARY —
+    // a mid-dispatch pause (a verify can run 12+ minutes) leaves status
+    // 'running', and the fresh engine sendSessionFeedback launches REFUSES
+    // to start while one is running (double-start guard): bridging before
+    // the pause lands persists the directive into a session no engine
+    // picks up. Wait for the pause to land, visibly.
+    const btn = document.getElementById('btnSessionInterveneSend');
+    if (wizardSession && wizardSession.state().session.status === 'running') {
+      const t0 = Date.now();
+      btn.disabled = true;
+      try {
+        while (wizardSession.state().session.status === 'running') {
+          if (Date.now() - t0 > 20 * 60 * 1000) {
+            showToast('The current turn is still running after 20 minutes — abort the session, or cancel and try Send again later.', 'error', 8000);
+            return;
+          }
+          btn.textContent = 'Waiting for the current turn… ' + Math.round((Date.now() - t0) / 1000) + 's';
+          await new Promise((r) => setTimeout(r, 500));
+        }
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Send & Resume';
+      }
+    }
     // Bridge into the feedback sender: it reads its own textarea, so mirror
     // the text there, then let the established pipeline handle duplicate
     // checks, transcript injection, and resume.

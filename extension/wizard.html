@@ -104,6 +104,20 @@
         </div>
         <span id="sessionSpend" class="hint-label"></span>
       </div>
+      <!-- 212th log (user feature): mid-research intervention panel. Must
+           live in phase4 NEXT TO ITS BUTTON — the first cut instantiated it
+           inside #phase5 (Review & Deploy), which is hidden during research,
+           so unhiding the panel was a visual no-op and the click looked
+           dead (215th-round live report). -->
+      <div id="sessionIntervenePanel" class="exploration-panel hidden">
+        <h4>Intervene — steer the research with your observation</h4>
+        <p class="hint-label">The session is pausing (takes effect when the current turn finishes). Describe what you see on the page (behavior the harness cannot perceive: popovers that only mount for the first cards, wrong elements hovered, missing content). On send, the session resumes with your text injected as a directive the model must address.</p>
+        <textarea id="sessionInterveneText" rows="3" placeholder="e.g. Only the first two posts ever show a hovercard; the rest of the feed is skipped. The See more buttons on video posts never expand."></textarea>
+        <div class="sessionFeedbackActions">
+          <button id="btnSessionInterveneSend" class="btn-primary">Send &amp; Resume</button>
+          <button id="btnSessionInterveneCancel" class="btn-secondary">Cancel</button>
+        </div>
+      </div>
       <div id="annotationRequestPanel" class="exploration-panel hidden">
         <h3>The AI needs your help</h3>
         <p id="annotationRequestWhy"></p>
@@ -238,15 +252,6 @@
       </div>
       <!-- Ninth-log L4: completed-session continuation — user feedback restarts
            the research engine from the persisted state with the fix request. -->
-      <div id="sessionIntervenePanel" class="exploration-panel hidden">
-        <h4>Intervene — steer the research with your observation</h4>
-        <p class="hint-label">The session is paused. Describe what you see on the page (behavior the harness cannot perceive: popovers that only mount for the first cards, wrong elements hovered, missing content). On send, the session resumes with your text injected as a directive the model must address.</p>
-        <textarea id="sessionInterveneText" rows="3" placeholder="e.g. Only the first two posts ever show a hovercard; the rest of the feed is skipped. The See more buttons on video posts never expand."></textarea>
-        <div class="sessionFeedbackActions">
-          <button id="btnSessionInterveneSend" class="btn-primary">Send &amp; Resume</button>
-          <button id="btnSessionInterveneCancel" class="btn-secondary">Cancel</button>
-        </div>
-      </div>
       <div id="sessionFeedbackPanel" class="hidden">
         <h4>Result not right? Continue the research session</h4>
         <!-- Harness 对标（2026-09-11 用户指示）：收场审查门——把最后 verify
