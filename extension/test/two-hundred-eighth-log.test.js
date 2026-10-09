@@ -115,3 +115,41 @@ describe('F3. hand-rolled id-regex dedupe loop draws the $collectUntil lint (208
     assert.match(lint, /silently skip/i);
   });
 });
+
+describe('F4. WANDERING REDS — three consecutive verifies, three DISTINCT classes (208th follow-up)', () => {
+  const { trackWanderingReds } = require('../lib/research-session');
+  const red = (cls) => ({ ok: false, error: { message: cls + ': details' } });
+  it('the LIVE sequence (SHORTFALL → CAPTURED → SHORTFALL → DUPLICATE → DEADLINE → DUPLICATE) fires the method-change note', () => {
+    let st = null;
+    st = trackWanderingReds(st, red('COUNT_SHORTFALL_SUPPLY'));
+    st = trackWanderingReds(st, red('CAPTURED_VALUE_UNBOUND'));
+    assert.ok(!st.note, 'two classes is not yet thrash');
+    st = trackWanderingReds(st, { ok: true, detectors: {} });
+    assert.ok(!st.note);
+    st = trackWanderingReds(st, red('COUNT_SHORTFALL_SUPPLY'));
+    st = trackWanderingReds(st, red('DUPLICATE_ID_REQUIRED'));
+    st = trackWanderingReds(st, red('SANDBOX_DEADLINE'));
+    assert.ok(st.note, 'third distinct class in the window fires');
+    assert.match(st.note, /WANDERING REDS/);
+    assert.match(st.note, /patch:true/);
+    assert.match(st.note, /escalate/);
+  });
+  it('the SAME class three times is convergence territory — no wandering note (the 205/207 breakers own it)', () => {
+    let st = null;
+    for (let i = 0; i < 3; i++) st = trackWanderingReds(st, red('COUNT_SHORTFALL_SUPPLY'));
+    assert.ok(!st.note);
+  });
+  it('a green resets the window; the note fires once (latched)', () => {
+    let st = null;
+    st = trackWanderingReds(st, red('A_X'));
+    st = trackWanderingReds(st, red('B_Y'));
+    st = trackWanderingReds(st, { ok: true, detectors: {} });
+    st = trackWanderingReds(st, red('C_Z'));
+    st = trackWanderingReds(st, red('D_W'));
+    assert.ok(!st.note, 'green reset the window mid-sequence');
+    st = trackWanderingReds(st, red('E_V'));
+    assert.ok(st.note, 'three distinct after the reset fires once');
+    st = trackWanderingReds(st, red('F_U'));
+    assert.ok(!st.note, 'latched — no repeat');
+  });
+});

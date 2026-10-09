@@ -292,6 +292,29 @@
     return st;
   }
 
+  // 208th-log follow-up (user: "每红一轮→全文重写→干跑→再验证→新错误类,
+  // 改进了吗?"): the live sequence was 4 DISTINCT error classes in 8 red
+  // verifies, never the same class twice — the 68th-round REPEATED notes
+  // fire on repeated classes, and wandering dodges them all. Three
+  // consecutive red verifies with THREE DISTINCT classes means each rewrite
+  // INTRODUCED a new defect: that is not convergence, it is thrash.
+  function trackWanderingReds(prev, verifyResult) {
+    const st = (prev && typeof prev === 'object') ? prev : { classes: [], note: null, fired: false };
+    if (!Array.isArray(st.classes)) st.classes = [];
+    st.note = null; // one-shot message semantics (207th-round lesson)
+    const msg = String((verifyResult && verifyResult.error && verifyResult.error.message) || '');
+    if (!msg) { st.classes = []; return st; }
+    const cls = msg.split(':')[0].trim();
+    st.classes.push(cls);
+    if (st.classes.length > 3) st.classes.shift();
+    if (st.fired) return st;
+    if (st.classes.length === 3 && new Set(st.classes).size === 3) {
+      st.fired = true;
+      st.note = 'WANDERING REDS: the last 3 verifies failed with 3 DIFFERENT error classes (' + st.classes.join(' → ') + ') — every full rewrite is INTRODUCING a new defect instead of fixing one; this is thrash, not convergence. Change the METHOD, not the code: (a) pick the SINGLE highest-value defect from the last verify only, repair it as a minimal patch:true (never rewrite the whole graph), dry-run THAT one change, verify; (b) if two consecutive verifies still land on new classes, stop repairing — escalate (annotate.request for determination questions, io.confirm for contract questions) or finish with the best verified artifact and an honest disclosure.';
+    }
+    return st;
+  }
+
   function buildTokenCapDetail(spend, budgets, green) {
     try {
       const sp = spend || {};
@@ -2159,6 +2182,10 @@
               ? pe.slice(0, 6).map((f) => String(f.path || f.field) + ' ' + (f.emptyCount || 0) + '/' + (f.totalCount || 0) + ' empty')
               : null;
             // 205th log: the one-record-short loop breaker.
+            state.wanderingReds = trackWanderingReds(state.wanderingReds, result);
+            if (state.wanderingReds && state.wanderingReds.note) {
+              state.transcript.push({ kind: 'system', text: state.wanderingReds.note });
+            }
             state.identityFailures = trackIdentityFailures(state.identityFailures, result);
             if (state.identityFailures && state.identityFailures.note) {
               state.transcript.push({ kind: 'system', text: state.identityFailures.note });
@@ -2479,7 +2506,7 @@
     return Math.max(0, nowMs - startMs - Math.max(0, Number(llmWaitMs) || 0) - Math.max(0, Number(parkedMs) || 0) - Math.max(0, Number(suspendCreditMs) || 0) - Math.max(0, Number(environmentalMs) || 0));
   }
 
-  const api = { createResearchSession, computeEffectiveElapsed: computeEffectiveElapsed, makeInstructionStripper, tokenWallProjection, trackNearMissShortfall, trackIdentityFailures, buildTokenCapDetail };
+  const api = { createResearchSession, computeEffectiveElapsed: computeEffectiveElapsed, makeInstructionStripper, tokenWallProjection, trackNearMissShortfall, trackIdentityFailures, trackWanderingReds, buildTokenCapDetail };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.ResearchSessionLib = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));
