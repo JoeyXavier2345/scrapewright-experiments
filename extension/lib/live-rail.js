@@ -99,8 +99,11 @@
       // First-live-log P-E: the research tab shows the LITERAL placeholder —
       // the rail does no template substitution (verify.run does, from input).
       // Surfacing this once per open stops the LLM from treating the literal
-      // as the real page contract.
-      const tmpl = url.match(/\{\{\s*\w+\s*\}\}/g);
+      // as the real page contract. 220th log: the PERCENT-ENCODED form
+      // (%7B%7Bkeyword%7D%7D) slipped past — the model opened a garbage
+      // search for the encoded placeholder and burned three opens before
+      // the literal {{..}} form warned.
+      const tmpl = url.match(/\{\{\s*\w+\s*\}\}/g) || url.match(/%7B%7B\s*\w+\s*%7D%7D/gi);
       const templateWarn = tmpl && tmpl.length
         ? 'url template parameter(s) unreplaced in the research tab (' + tmpl.join(', ') + ') — probes run against the literal placeholder; verify.run substitutes them from input'
         : null;

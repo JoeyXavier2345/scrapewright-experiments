@@ -7540,6 +7540,13 @@ function detectRepeatedTokenFields(data, outputSchema) {
       for (const rec of arr) {
         const v = rec ? rec[fk] : null;
         if (typeof v !== 'string' || !v) continue;
+        // 220th log: markup-shaped values are not text — raw outerHTML
+        // repeats CLASS/ATTRIBUTE tokens ("xat24cr", 'dir="auto"') ×15+ by
+        // construction, and the detector false-redded a contract htmlSnippet
+        // field three times in one session, forcing the model to strip
+        // attributes out of a field that asks for raw markup. Token
+        // repetition semantics apply to human-readable text only.
+        if (/<\/?[a-z][a-z0-9-]*[\s/>]/i.test(v)) continue;
         const toks = v.split(/\s+/).filter(Boolean);
         const counts = {};
         let topTok = null; let topN = 0;
