@@ -71,6 +71,8 @@
       detectIdenticalFieldValues: w.detectIdenticalFieldValues,
       detectRepeatedTokenFields: w.detectRepeatedTokenFields,
       detectIdentityMirror: w.detectIdentityMirror,
+      identifierPoolPasses: w.identifierPoolPasses,
+      detectIdentityMalformed: w.detectIdentityMalformed,
       detectDuplicateEntities: w.detectDuplicateEntities,
       detectOversizedFields: w.detectOversizedFields,
       detectCountShortfall: w.detectCountShortfall,
@@ -773,7 +775,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, shellHovercards: null, capturedValueUnbound: null, inventedIdFallbacks: null, siblingCountContrast: null, seeMoreUnexpanded: null, hovercardUnparsed: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null, resultStrayKeys: null, hardcodedNestedRoles: null, hoverEntityCoverage: null, repeatedTokenFields: null, identityMirror: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, shellHovercards: null, capturedValueUnbound: null, inventedIdFallbacks: null, siblingCountContrast: null, seeMoreUnexpanded: null, hovercardUnparsed: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null, resultStrayKeys: null, hardcodedNestedRoles: null, hoverEntityCoverage: null, repeatedTokenFields: null, identityMirror: null, identityMalformed: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -1421,6 +1423,57 @@
               'Exhaustion is a page fact only with $collectUntil certification; a shortfall without a receipt is RED at ANY ratio, not green-disclosed.'
             );
           }
+          // 222nd log: the green hole. Both arms above require
+          // maxContainers >= requested — a fresh verify tab matching FEWER
+          // containers than requested (5 < 6) hit NO gate, and the incident
+          // shipped a severe, UNCERTIFIED 2/6 as GREEN (the deployed run
+          // then delivered 2 records). Per the 134th doctrine the severe +
+          // uncertified class is RED regardless of the container count:
+          // fewer matched containers is not proof of scarcity — the fresh
+          // tab may simply not have scrolled as far as the research tab.
+          // The 135th certified-exhaustion disclosed-green exit is
+          // untouched (this arm requires certification !== true).
+          // Sustained-bar exemptions (145th doctrine): a $collectUntil-using
+          // artifact is governed by the primitive's own receipt, and a step
+          // that polled >=4 not-ready iterations across STEP_ITERATION
+          // events earned its exhaustion claim AUDITABLY. Loops INTERNAL to
+          // one step execution are not auditable — the 222nd incident's
+          // hand-rolled in-step 5-round loop produced no receipt verify can
+          // distinguish from "gave up", which is exactly why the primitive
+          // exists.
+          let sustainedPoll222 = false;
+          let usesCollectUntil222 = false;
+          try {
+            const itersU = new Map();
+            for (const ev of events) {
+              if (!ev || ev.type !== 'STEP_ITERATION') continue;
+              const sidU = String(ev.stepId || '');
+              const pvU = previewJson(ev.resultPreview);
+              if (pvU && pvU.done !== true) {
+                const keyU = sidU + '|nr';
+                itersU.set(keyU, (itersU.get(keyU) || 0) + 1);
+                if ((itersU.get(keyU) || 0) >= 4) sustainedPoll222 = true;
+              }
+            }
+            for (const st of (service && Array.isArray(service.steps) ? service.steps : [])) {
+              if (st && typeof st.script === 'string' && st.script.indexOf('$collectUntil') !== -1) usesCollectUntil222 = true;
+            }
+          } catch (eU) { /* exemptions are best-effort */ }
+          if (!error && !usesCollectUntil222 && !sustainedPoll222 &&
+              detectors.countShortfall &&
+              detectors.countShortfall.severe === true &&
+              detectors.countShortfall.exhaustionCertified !== true &&
+              typeof detectors.countShortfall.extracted === 'number' &&
+              typeof detectors.countShortfall.requested === 'number' &&
+              detectors.countShortfall.extracted < detectors.countShortfall.requested) {
+            const csU = detectors.countShortfall;
+            error = new Error(
+              'COUNT_SHORTFALL_UNCERTIFIED: ' + csU.field + ' delivered ' + csU.extracted + ' of ' + csU.requested +
+              ' requested (severe) with NO certified-exhaustion receipt — this is RED regardless of the container count' +
+              (typeof csU.maxContainers === 'number' ? ' (this run matched ' + csU.maxContainers + ' containers; fewer matched containers is NOT proof of scarcity — the fresh tab may simply not have scrolled as far as the research tab)' : '') +
+              '. Exits: (a) collect with $collectUntil(containerSel, {targetCount, idAttr}) — its certified-exhaustion receipt is the ONLY page-fact proof — then ship the certified count disclosed; (b) renegotiate the count via io.confirm; (c) keep collecting and re-verify. A hand-rolled one-round or counter-less "done" proves nothing (the premature-exhaustion lane owns that shape).'
+            );
+          }
         }
         if (typeof WU.detectRelativeTimestamps === 'function') {
           // Forty-sixth log: report-only. A time-like field whose values are
@@ -1823,6 +1876,13 @@
           const idm = WU.detectIdentityMirror(finalData, outputSchema) || [];
           if (idm.length) detectors.identityMirror = idm;
         }
+        // 222nd log: id-named fields shipping multi-word prose (regex-concat
+        // accidents) — report-only; the CAPTURED gate reds them when the
+        // pool holds a passing candidate.
+        if (typeof WU.detectIdentityMalformed === 'function') {
+          const idpr = WU.detectIdentityMalformed(finalData, outputSchema) || [];
+          if (idpr.length) detectors.identityMalformed = idpr;
+        }
         if (typeof WU.detectOversizedFields === 'function') {
           // Report-only (forty-first log): htmlSnippet fields read whole-card
           // outerHTML at 82396-99278 chars each (result.json: 332KB for 3
@@ -1961,7 +2021,9 @@
               // video duration must not rescue likes).
               const poolPass165 = (row165.semantic === 'count' && typeof WU.countPoolTextPasses === 'function')
                 ? (t) => WU.countPoolTextPasses(row165.field, t)
-                : (t) => WU.semanticPredicatePasses(row165.semantic, t);
+                : ((row165.semantic === 'identifier' && typeof WU.identifierPoolPasses === 'function')
+                    ? (t) => WU.identifierPoolPasses(t)
+                    : (t) => WU.semanticPredicatePasses(row165.semantic, t));
               const passInPool165 = pool165.filter(poolPass165);
               // 164th-calibration preserved: when the pool is only a UNION
               // (no per-record attribution) AND the read channel IS bound

@@ -1342,7 +1342,10 @@ function idValueShape(value) {
   // ladder.
   v = v.replace(/[?&]utm_[a-z0-9_]+=[^&\s]+/gi, '');
   if (/\S+(?:\s+\S+){5,}/.test(v)) {
-    return (/[?&]([a-z0-9_]*id|set)=/i.test(v) || /[A-Za-z0-9]{12,}/.test(v)) ? 'scoped' : 'prefix';
+    // 222nd round: the in-prose token threshold rises to >=16 — brand
+    // names (txchinatours, 12) are not identities; opaque post-link
+    // tokens are 16+. Applies to pool rescue via identifierPoolPasses.
+    return (/[?&]([a-z0-9_]*id|set)=/i.test(v) || /[A-Za-z0-9]{16,}/.test(v)) ? 'scoped' : 'prefix';
   }
   if (/\d{4,}/.test(v)) return 'scoped';
   if (/[?&]([a-z0-9_]*id|set)=/i.test(v)) return 'scoped';
@@ -1610,8 +1613,57 @@ function inferFieldSemantics(outputSchema) {
 }
 
 // The per-semantic predicate — generic value shapes, no channel knowledge.
-function semanticPredicatePasses(semantic, value) {
-  // Absent values fail scalar semantics but are NOT APPLICABLE to the
+// 222nd round: POOL-side identifier pass — a captured popover text that
+// genuinely holds an identity token (id-param URL or >=16 alnum run) can
+// rescue an id field (the model extracts the token), while prose carrying
+// only a ~12-char brand name cannot. Shipped values use
+// semanticPredicatePasses, which rejects all >=6-word prose.
+function identifierPoolPasses(value) {
+  if (value === null || value === undefined) return false;
+  const v = String(value);
+  if (!v) return false;
+  if (/\S+(?:\s+\S+){5,}/.test(v)) {
+    const stripped = v.replace(/[?&]utm_[a-z0-9_]+=[^&\s]+/gi, '');
+    return /[?&]([a-z0-9_]*id|set)=/i.test(stripped) || /[A-Za-z0-9]{16,}/.test(stripped);
+  }
+  return idValueShape(v) !== 'prefix' && idValueShape(v) !== 'empty';
+}
+
+// 222nd round: an id-named field shipping multi-word PROSE is a regex-concat
+// accident (the incident id: "hc Wednesday, October 7, 2026 at 10:38 AM
+// https://…/ 9-day trip…"). Report-only — the field may be optional, but
+// the value is malformed regardless, and the CAPTURED gate reds it whenever
+// the pool holds a passing candidate.
+function detectIdentityMalformed(data, outputSchema) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
+  if (!outputSchema || typeof outputSchema !== 'object') return [];
+  const props = outputSchema.properties && typeof outputSchema.properties === 'object'
+    ? outputSchema.properties : {};
+  const out = [];
+  for (const key of Object.keys(props)) {
+    const fieldKeys = schemaArrayItemFieldKeys(props[key]);
+    if (!fieldKeys) continue;
+    const arr = data[key];
+    if (!Array.isArray(arr) || arr.length < 1 || arr.length > 50) continue;
+    for (const fk of fieldKeys) {
+      if (!/(^|_)(post|item|record|entity|entry|thread|topic|author|user)?_?id$/i.test(fk) && !/id$/i.test(fk)) continue;
+      for (let i = 0; i < arr.length; i++) {
+        const v = arr[i] ? arr[i][fk] : null;
+        if (typeof v !== 'string' || !v) continue;
+        if (!/\S+(?:\s+\S+){5,}/.test(v)) continue;
+        out.push({
+          field: fk, path: key + '.' + fk, records: 1, totalRecords: arr.length,
+          sample: v.slice(0, 80),
+          note: 'the id value is multi-word PROSE (a concatenated match accident, e.g. label + timestamp + link fragments), never a single identity: extract the ONE identity token (the permalink/opaque-link/id-param) from the source instead of concatenating every matched fragment, or leave the field empty'
+        });
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+function semanticPredicatePasses(semantic, value) {  // Absent values fail scalar semantics but are NOT APPLICABLE to the
   // nested-array semantic (an undeclared/absent hovercards field is the
   // empty-census domain, not a captured-value drop).
   if ((value === null || value === undefined) && semantic !== 'contentfulEntries') return false;
@@ -1622,6 +1674,13 @@ function semanticPredicatePasses(semantic, value) {
     return subs.some((sub) => (typeof hasYearToken === 'function') ? hasYearToken(sub) : /\d{4}/.test(sub));
   }
   if (semantic === 'identifier') {
+    // 222nd log: a SHIPPED id value is never multi-word prose — the
+    // incident shipped "hc Wednesday, October 7, 2026 at 10:38 AM
+    // https://…/ 9-day trip…" (a regex-concat accident) and the 218th
+    // prose escape (>=12 alnum run inside prose) let the 12-char brand
+    // "txchinatours" qualify it. Pool candidates use
+    // identifierPoolPasses, which keeps the prose-with-token rescue.
+    if (/\S+(?:\s+\S+){5,}/.test(String(value))) return false;
     return idValueShape(value) !== 'prefix' && idValueShape(value) !== 'empty';
   }
   if (semantic === 'count') {
@@ -7249,6 +7308,7 @@ const DETECTOR_PLAIN = {
   repeatedTokenFields: { level: 'action', title: 'One token repeated many times', explain: (v) => 'These fields are a single token repeated 15+ times (' + briefEntries(v, (e) => (e.path || e.field || '?') + ' "' + (e.token || '') + '"×' + (e.records || '?')) + ') — a container-level brand/link-label string, not record content. Re-bind to the record text node.' },
   identityMirror: { level: 'advisory', title: 'Identity mirrors another shipped URL', explain: (v) => 'The id field equals a URL already shipped inside the same record (' + briefEntries(v, (e) => (e.path || e.field || '?') + ' ⇄ ' + (Array.isArray(e.mirroredIn) ? e.mirroredIn.join(',') : '') + (e.sample ? ' "' + String(e.sample).slice(0, 40) + '"' : '')) + ') — entity-scoped: two records by the same author would collide. Re-bind to the record-scoped permalink, or rename if entity scoping is intended.' },
   identicalFieldValues: { level: 'action', title: 'Identical value in every record', explain: (v) => 'A per-record field ships the SAME substantial value in every record (' + briefEntries(v, (e) => (e.path || e.field || '?') + ' "' + String(e.sample || '').slice(0, 30) + '"') + ') — a decoy/container-level read, not record content. Re-bind to a per-record element.' },
+  identityMalformed: { level: 'action', title: 'id is concatenated prose', explain: (v) => 'The id field carries multi-word prose — a regex-concat accident (label + timestamp + link fragments: ' + briefEntries(v, (e) => (e.path || e.field || '?') + ' "' + String(e.sample || '').slice(0, 40) + '"') + '). Extract the ONE identity token from the source, or leave the field empty.' },
   timeAbsoluteCapturedUnbound: { level: 'action', title: 'Captured absolute time not shipped', explain: () => 'The run captured a FULL absolute timestamp (e.g. from a hover tooltip) but the time field does not carry it — the assembly dropped the captured value. Bind it into the output time field.' }
 };
 function briefEntries(v, fmt) {
@@ -7775,7 +7835,7 @@ function syncLastVerifiedFromVerify(state, lv) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { normalizeIdValueForIdentity, idValueShape, inferFieldSemantics, semanticPredicatePasses, countPoolTextPasses, summarizePriorServiceEvidence, extractFailingFieldNames, computeSampleDiversity, detectInventedIdFallbacks, detectShellHovercards, pickPrimaryResultForPanel, detectDuplicateNestedEntries, extractInventedPseudoCandidates, detectInventedPseudoSelectors, recordContentSignature, countUniqueRecords, detectMediaArrayHygiene, unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectRepeatedTokenFields, detectIdentityMirror, detectHardcodedNestedRoles, detectHoverEntityCoverage, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectSeeMoreUnexpanded, detectHovercardUnparsed, detectHoverFamilyMiss, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectResultStrayKeys, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, detectOpenTabClosureRefs, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
+var WU_EXPORT_BAG = { normalizeIdValueForIdentity, idValueShape, inferFieldSemantics, semanticPredicatePasses, identifierPoolPasses, detectIdentityMalformed, countPoolTextPasses, summarizePriorServiceEvidence, extractFailingFieldNames, computeSampleDiversity, detectInventedIdFallbacks, detectShellHovercards, pickPrimaryResultForPanel, detectDuplicateNestedEntries, extractInventedPseudoCandidates, detectInventedPseudoSelectors, recordContentSignature, countUniqueRecords, detectMediaArrayHygiene, unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectRepeatedTokenFields, detectIdentityMirror, detectHardcodedNestedRoles, detectHoverEntityCoverage, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectSeeMoreUnexpanded, detectHovercardUnparsed, detectHoverFamilyMiss, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectResultStrayKeys, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, detectOpenTabClosureRefs, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;

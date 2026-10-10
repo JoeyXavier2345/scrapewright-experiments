@@ -341,7 +341,13 @@ describe('createVerifyRunner', () => {
     const { runner } = makeRunner(orch);
     // detectCountShortfall requires items.type==='object'.
     const out = await runner({ service: SERVICE, input: { count: 10 }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
-    assert.equal(out.report.ok, true, 'shortfall never forces retries (ZERO-TRAP lesson)');
+    // 222nd-round supersession: a NON-severe shortfall stays report-only
+    // (the ZERO-TRAP lesson holds); the severe + uncertified + unsustained
+    // class is now RED (COUNT_SHORTFALL_UNCERTIFIED) — this fixture is
+    // 3/10 (severe), so assert the new verdict and keep the detector/tag
+    // expectations.
+    assert.equal(out.report.ok, false, 'severe uncertified shortfall is red since round 222');
+    assert.match(out.report.error.message, /COUNT_SHORTFALL_UNCERTIFIED/);
     assert.ok(out.report.detectors.countShortfall, 'detector populated');
     assert.equal(out.report.detectors.countShortfall.extracted, 3);
     assert.equal(out.report.detectors.countShortfall.requested, 10);

@@ -117,7 +117,7 @@ const SERVICE = {
 describe('C. verify integration (216th log)', () => {
   it('REQUIRED repeated-token content vetoes the run RED', async () => {
     const runner = makeRunner(INCIDENT_POSTS);
-    const out = await runner({ service: SERVICE, input: { keyword: 'k', count: 6 }, outputSchema: SCHEMA });
+    const out = await runner({ service: SERVICE, input: { keyword: 'k', count: 2 }, outputSchema: SCHEMA });
     assert.equal(out.report.ok, false);
     assert.match(out.report.error.message, /REPEATED_TOKEN_FIELD/);
     assert.match(out.report.error.message, /Facebook/);
@@ -127,14 +127,14 @@ describe('C. verify integration (216th log)', () => {
     const schemaOpt = JSON.parse(JSON.stringify(SCHEMA));
     schemaOpt.properties.posts.items.required = ['hoverCards'];
     const runner = makeRunner(INCIDENT_POSTS);
-    const out = await runner({ service: SERVICE, input: { keyword: 'k', count: 6 }, outputSchema: schemaOpt });
+    const out = await runner({ service: SERVICE, input: { keyword: 'k', count: 2 }, outputSchema: schemaOpt });
     assert.equal(out.report.ok, true);
     assert.ok(Array.isArray(out.report.detectors.repeatedTokenFields) && out.report.detectors.repeatedTokenFields.length === 1);
   });
   it('the identity mirror rides the report without vetoing (postId is optional here)', async () => {
     const cleanPosts = INCIDENT_POSTS.map((p) => Object.assign({}, p, { content: 'real content about ' + p.hoverCards[0].name }));
     const runner = makeRunner(cleanPosts);
-    const out = await runner({ service: SERVICE, input: { keyword: 'k', count: 6 }, outputSchema: SCHEMA });
+    const out = await runner({ service: SERVICE, input: { keyword: 'k', count: 2 }, outputSchema: SCHEMA });
     assert.equal(out.report.ok, true);
     assert.ok(Array.isArray(out.report.detectors.identityMirror) && out.report.detectors.identityMirror.length === 1);
   });

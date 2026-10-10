@@ -134,12 +134,18 @@ describe('154th log F1 — COUNT_SHORTFALL_ASSEMBLY veto', () => {
     assert.match(out.report.error.message, /COUNT_SHORTFALL_(SUPPLY|ASSEMBLY)/);
   });
 
-  it('containers BELOW the requested count keeps the population-divergence lane (no assembly veto)', async () => {
+  it('containers BELOW the requested count: no assembly veto, but the 222nd-round UNCERTIFIED arm reds a severe uncertified shortfall', async () => {
+    // 222nd-round supersession: this exact shape (severe, uncertified,
+    // containers < requested) shipped GREEN in the 222nd incident and the
+    // deployed run delivered 2/6 — the population-divergence note stays on
+    // the detector, but the verdict is now RED unless exhaustion is
+    // certified or the poll was auditably sustained.
     const out = await makeRunner(orchWith({ posts: fourPostsClean() }, [
       { type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: '{"cards":4}',
         selectorDiagnostics: [{ containerMatches: 4 }] }
     ]))({ service: { targetUrl: 'https://e.com', steps: [{ id: 's1', name: 'x', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} }, input: { count: 10 }, outputSchema: SCHEMA });
-    assert.equal(out.report.ok, true);
+    assert.equal(out.report.ok, false, 'severe + uncertified is RED at any container count');
+    assert.match(out.report.error.message, /COUNT_SHORTFALL_UNCERTIFIED/);
     assert.match(out.report.detectors.countShortfall.note, /population divergence|genuine scarcity/i);
   });
 });
