@@ -1030,12 +1030,28 @@
                 censusTextFM += ' aria-label samples: ' + JSON.stringify(acFM.ariaLabelSamples.slice(0, 5)) + '.';
               }
             }
+            // 224th log: the WARM-vs-COLD contrast. The session's popover
+            // LRU (sessionEvidence.popoverSamples, fed by probe.hover /
+            // probe.timestamp / census timeHover on the research tab since
+            // the 87th round) proves the hover route works WARM; a fresh
+            // verify tab mounting 0 for the same family is cold-tab hover
+            // divergence. Without this line the model concluded "the hover
+            // route does not work", abandoned it for weaker aria routes,
+            // and shipped postTime="Ad".
+            let warmColdFM = '';
+            const seFM = (o.sessionEvidence && typeof o.sessionEvidence === 'object') ? o.sessionEvidence : null;
+            const warmSamplesFM = (seFM && Array.isArray(seFM.popoverSamples)) ? seFM.popoverSamples.filter(Boolean) : [];
+            if (warmSamplesFM.length) {
+              warmColdFM = ' WARM-vs-COLD contrast: THIS SESSION already captured popover text on the warm research tab (' +
+                warmSamplesFM.length + ' sample(s), e.g. ' + JSON.stringify(String(warmSamplesFM[0]).slice(0, 60)) +
+                ') — the hover route itself works warm. A fresh verify tab mounting 0 popovers for the same anchor family is cold-tab hover divergence, NOT proof the anchors are wrong: keep the anchor family, dry-run verify.run {preflight:true} on the warm tab, and when the preflight captures while the cold verify cannot, ship via the preflight evidence with the cold-tab limit disclosed (io.confirm the contract if needed) — do NOT abandon the hover route for weaker non-hover bindings.';
+            }
             error = toError(
               'HOVER_ANCHORS_FAMILY_MISS: step "' + (stepDefFM ? stepDefFM.name : familyMiss.stepId) + '" hovered ' +
               familyMiss.anchorsFound + ' anchor(s) and ' + familyMiss.hovercardsCaptured + ' popover(s) mounted (' +
               familyMiss.calls + ' call(s), ' + familyMiss.containersProcessed + ' container(s)) — the anchorSel FOUND anchors but no popover mounts on THAT family. ' +
               'Entity cards (author/group profile cards) mount on the ENTITY links — the anchors whose hrefs point at the entity pages (page/profile/group URLs, see the href samples below) — while timestamp tooltips mount on the permalink/media anchors. ' +
-              'Union both families in anchorSel, or split the call: one $extractWithHover with entity anchors for hoverCards + $timestamp/probe.timestamp for postTime.' + censusTextFM +
+              'Union both families in anchorSel, or split the call: one $extractWithHover with entity anchors for hoverCards + $timestamp/probe.timestamp for postTime.' + censusTextFM + warmColdFM +
               ' Ground the entity anchors against the samples above (container-scoped tag+[attr] form). If you already dry-ran probe.census {hover:true}, its timeHover.cardAnchors lists the anchors whose hover MOUNTED card text — anchor on that family.',
               familyMiss.stepId);
           }
