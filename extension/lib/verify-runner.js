@@ -1042,10 +1042,19 @@
             let warmColdFM = '';
             const seFM = (o.sessionEvidence && typeof o.sessionEvidence === 'object') ? o.sessionEvidence : null;
             const warmSamplesFM = (seFM && Array.isArray(seFM.popoverSamples)) ? seFM.popoverSamples.filter(Boolean) : [];
-            if (warmSamplesFM.length) {
-              warmColdFM = ' WARM-vs-COLD contrast: THIS SESSION already captured popover text on the warm research tab (' +
-                warmSamplesFM.length + ' sample(s), e.g. ' + JSON.stringify(String(warmSamplesFM[0]).slice(0, 60)) +
-                ') — the hover route itself works warm. A fresh verify tab mounting 0 popovers for the same anchor family is cold-tab hover divergence, NOT proof the anchors are wrong: keep the anchor family, dry-run verify.run {preflight:true} on the warm tab, and when the preflight captures while the cold verify cannot, ship via the preflight evidence with the cold-tab limit disclosed (io.confirm the contract if needed) — do NOT abandon the hover route for weaker non-hover bindings.';
+            // 226th log: the census timeHover route proves warmth through
+            // tooltipRoute.lastFullAbsolute (a FULL absolute captured on the
+            // warm research tab), not the popover LRU — the 226th session's
+            // census produced "Friday, October 9, 2026 at 8:29 PM" at 15:21
+            // yet both FAMILY_MISS receipts (15:37/15:43) carried no
+            // contrast because only popoverSamples keyed it.
+            const warmAbsoluteFM = (seFM && typeof seFM.lastFullAbsolute === 'string' && seFM.lastFullAbsolute) ? seFM.lastFullAbsolute : null;
+            if (warmSamplesFM.length || warmAbsoluteFM) {
+              const proofFM = warmSamplesFM.length
+                ? warmSamplesFM.length + ' popover sample(s), e.g. ' + JSON.stringify(String(warmSamplesFM[0]).slice(0, 60))
+                : 'a FULL absolute timestamp captured via hover on the warm research tab (' + JSON.stringify(String(warmAbsoluteFM).slice(0, 60)) + ')';
+              warmColdFM = ' WARM-vs-COLD contrast: THIS SESSION already proved the hover route works warm (' + proofFM +
+                ') — a fresh verify tab mounting 0 popovers for the same anchor family is cold-tab hover divergence, NOT proof the anchors are wrong: keep the anchor family, dry-run verify.run {preflight:true} on the warm tab, and when the preflight captures while the cold verify cannot, ship via the preflight evidence with the cold-tab limit disclosed (io.confirm the contract if needed) — do NOT abandon the hover route for weaker non-hover bindings.';
             }
             error = toError(
               'HOVER_ANCHORS_FAMILY_MISS: step "' + (stepDefFM ? stepDefFM.name : familyMiss.stepId) + '" hovered ' +

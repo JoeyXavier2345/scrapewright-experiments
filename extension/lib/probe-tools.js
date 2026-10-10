@@ -832,7 +832,16 @@
         '__t_aria: { selector: ' + JSON.stringify(anchorSel) + ', attr: "aria-label" },' +
         '__t_text: { selector: ' + JSON.stringify(anchorSel) + ' }' +
         '}, { hover: { anchorSel: ' + JSON.stringify(anchorSel) + ' }, containerIndex: ' + index + ' });';
-      const r = await runSnippet(snippet);
+      // 226th log: the dance ran on the bare rail default (30s) while the
+      // union anchorSel hovers EVERY matching anchor (this session: 7+
+      // aria-labelledby carriers + the default union) at up to 4.5s each
+      // plus 700ms remount waits — the 15:37 call died SANDBOX_DEADLINE
+      // mid-dance. Hover-aware default 60s; the caller may pass timeoutMs
+      // (capped like probe.snippet's).
+      const hoverBudget226 = (typeof a.timeoutMs === 'number' && a.timeoutMs > 0)
+        ? Math.min(a.timeoutMs, SNIPPET_MAX_TIMEOUT_MS)
+        : 60000;
+      const r = await runSnippet(snippet, hoverBudget226);
       if (r && typeof r.error === 'string') return r;
       const rec = Array.isArray(r) ? r[0] : null;
       if (!rec) return { error: 'no containers matched ' + containerSel + ' — check the container selector before concluding anything about timestamps' };
