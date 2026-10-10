@@ -2012,14 +2012,34 @@
             // the model either restores, verifies its fix green, or
             // explicitly overrides (shipRedArtifact:true) when the red
             // version is genuinely the better ship.
+            // 221st round: the (c) override is EVIDENCE-CHECKED. The
+            // incident session asserted {"shipRedArtifact":true,"summary":
+            // "it is genuinely the better artifact: it delivers 5 real
+            // posts"} over a GREEN v12 that delivered 6/6 — the naked
+            // self-assertion shipped the strictly-worse artifact. When both
+            // the green's and the red's verifies carry delivered counts, an
+            // override shipping STRICTLY FEWER items is rejected with the
+            // numbers; an at-least-equal red (or missing receipts on either
+            // side) still honors the explicit choice.
+            let overrideRejected221 = false;
+            if (turn.finish.shipRedArtifact === true && state.greenVerifyFacts && state.lastVerifyFacts &&
+                typeof state.greenVerifyFacts.delivered === 'number' && typeof state.lastVerifyFacts.delivered === 'number' &&
+                state.lastVerifyFacts.delivered < state.greenVerifyFacts.delivered) {
+              overrideRejected221 = true;
+            }
             if (state.lastVerifyOk === false &&
                 state.greenArtifactVersion &&
                 !state.greenRestoredCurrent &&
                 state.artifactVersions.length > state.greenArtifactVersion &&
-                turn.finish.shipRedArtifact !== true) {
+                (turn.finish.shipRedArtifact !== true || overrideRejected221)) {
               state.transcript.push({ kind: 'system', text:
                 'FINISH BLOCKED: the last verify ran RED against the CURRENT artifact (v' + state.artifactVersions.length +
                 ') while a GREEN-verified version (v' + state.greenArtifactVersion + ') is one restore away — shipping now deploys the unverified artifact with a verified one in hand. ' +
+                (overrideRejected221
+                  ? 'OVERRIDE REJECTED BY RECEIPTS: the shipRedArtifact assertion says the red is the better ship, but the verify receipts say otherwise — GREEN v' + state.greenArtifactVersion +
+                    ' delivered ' + state.greenVerifyFacts.delivered + ' while the CURRENT v' + state.artifactVersions.length + ' delivered ' + state.lastVerifyFacts.delivered +
+                    '. A strictly smaller delivery is never the better ship: restore the green, or fix forward until the current version delivers at least the green count (and verifies). '
+                  : '') +
                 'Either (a) service.update({restoreVersion:' + state.greenArtifactVersion + '}) — ONE turn, restores the verified steps — then finish; ' +
                 '(b) fix the current artifact and verify it GREEN before finishing; or ' +
                 '(c) finish with {"finish":{"summary":"…","shipRedArtifact":true}} to explicitly ship the red artifact with its disclosures — only when the red version is genuinely the better ship.' });
@@ -2268,6 +2288,15 @@
               state.transcript.push({ kind: 'system', text: state.nearMissShortfall.ceilingNote });
             }
             const cs = (result && result.detectors && result.detectors.countShortfall) ? result.detectors.countShortfall : null;
+            // 221st round: numeric delivered-count facts for the finish-gate
+            // receipt check — the (c) shipRedArtifact override claims "the
+            // red is the better ship"; when both sides carry counts, the
+            // claim is checked instead of trusted (the incident asserted
+            // "delivers 5 real posts" over a green that delivered 6).
+            state.lastVerifyFacts = { delivered: (cs && typeof cs.extracted === 'number') ? cs.extracted : null };
+            if (state.lastVerifyOk !== false && result && result.ok) {
+              state.greenVerifyFacts = { delivered: state.lastVerifyFacts.delivered };
+            }
             state.lastVerifyCountShortfall = cs
               ? 'requested ' + cs.requested + ' via the test input, extracted ' + cs.extracted + ' into ' + JSON.stringify(cs.field) + (cs.severe ? ' (severe)' : '') +
                 // 135th log: a hand-rolled "exhausted" flag is not a supply
