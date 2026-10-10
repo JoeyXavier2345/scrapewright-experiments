@@ -2163,7 +2163,7 @@
       // slipped through the fallback. $collectUntil(idAttr) does scroll +
       // identity-dedupe + certification in one harness call.
       // 211th-review #17: the original gate keyed on site-specific href
-      // tokens (fbid/story_fbid families) — a universality violation that
+      // tokens (the site-specific permalink query-param families) — a universality violation that
       // also left the identical bug invisible on every other site. The
       // GENERIC shape: a .match() regex over extraction output + a
       // seen-map/Set + a skip-on-falsy-id continue — the pattern that

@@ -378,7 +378,7 @@ Signature: \$extractWithHover(containerSel, fieldMap, opts) → Promise<Array<Re
     last container resolves to [] — a spent cursor for a pagination or
     resume loop (break on it, do not treat it as a selector failure); only
     a container selector matching ZERO containers throws.
-  - opts.maxWallMs: wall-clock budget for the hover batch (default 25000ms).
+  - opts.maxWallMs: wall-clock budget for the hover batch. DEFAULT SCALES with the declared work: min(90000, max(25000, containers*8000))ms — do NOT pass 25000 explicitly unless you want the old flat floor; an explicit value always wins. The effective budget rides every hoverSummary as wallBudgetMs.
     Each hovered anchor burns ~5-10s even when no popover appears, so a long
     feed can outlive the step budget with ZERO results. When the budget is
     hit, the call does NOT error — it resolves to the SAME records array,
@@ -6054,12 +6054,18 @@ function validateChain(steps) {
   // legitimate loop ONLY when it DECLARES its exit: a poll step inside the
   // cycle (maxIterations>1 — the sanctioned back-edge idiom) or an
   // explicit not-ready/failure signal in a member script.
-  const exitSignalRe = /done:\s*false|ready:\s*false|generating:\s*true|loading:\s*true|failed:\s*true|failed\s*:\s*true|\berror\s*:/i;
+  // 225th review #4: the exit test runs on COMMENT-STRIPPED script (exit
+  // tokens inside comments/teaching text are not declarations), and a
+  // maxIterations>1 budget alone is not an exit — the member must also
+  // carry a not-ready/failure signal (a retry budget with no not-ready
+  // emission rejoins the cycle on ready results and spins to the global
+  // cap exactly like the incident).
+  const cycleScriptOf = (m) => (typeof stripJSComments === 'function' ? stripJSComments(String((m && m.script) || '')) : String((m && m.script) || ''));
+  const exitSignalRe = /done:\s*false|ready:\s*false|generating:\s*true|loading:\s*true|failed\s*:\s*true|\berror\s*:/i;
   const succColor = new Map();
   const succStack = [];
-  let succCycle = null;
+  const allCycles225 = [];
   const dfsSucc = (id) => {
-    if (succCycle) return;
     succColor.set(id, 1);
     succStack.push(id);
     const step = steps.find((s) => s.id === id);
@@ -6067,7 +6073,10 @@ function validateChain(steps) {
       const t = step.onSuccess;
       if (t && t !== 'TERMINATE' && ids.has(t)) {
         if (succColor.get(t) === 1) {
-          succCycle = succStack.slice(succStack.indexOf(t)).concat(t);
+          // 225th review #4: enumerate EVERY cycle — the old scan broke on
+          // the first one found, so a benign declared cycle laundered a
+          // second exit-less cycle in the same graph.
+          allCycles225.push(succStack.slice(succStack.indexOf(t)).concat(t));
         } else if (!succColor.has(t)) {
           dfsSucc(t);
         }
@@ -6078,20 +6087,20 @@ function validateChain(steps) {
   };
   for (const s of steps) {
     if (s && s.id && !succColor.has(s.id)) dfsSucc(s.id);
-    if (succCycle) break;
   }
-  if (succCycle) {
-    const members = succCycle.slice(0, -1);
+  for (const cyc of allCycles225) {
+    const members = cyc.slice(0, -1);
     const declaresExit = members.some((mid) => {
       const m = steps.find((s) => s.id === mid);
       if (!m) return false;
-      if (m.maxIterations != null && m.maxIterations > 1) return true;
-      return exitSignalRe.test(String(m.script || ''));
+      const src = cycleScriptOf(m);
+      if (m.maxIterations != null && m.maxIterations > 1 && exitSignalRe.test(src)) return true;
+      return exitSignalRe.test(src);
     });
     if (!declaresExit) {
       return {
         valid: false,
-        error: `Step graph contains an onSuccess-only cycle with no declared exit: ${succCycle.join(' → ')}. ` +
+        error: `Step graph contains an onSuccess-only cycle with no declared exit: ${cyc.join(' → ')}. ` +
           'Ready/data results ALWAYS route onSuccess, so this cycle can never reach TERMINATE unless a step in it fails — it will spin every member (real DOM work each pass) until the global iteration cap kills the run as STEP_ITERATION_EXCEEDED. ' +
           'Fix: (a) route the cycle exit edge to TERMINATE (a linear chain), or (b) keep the loop but declare its exit — a poll step inside the cycle with maxIterations>1 returning {done:false} until done, or an explicit failure branch (return {failed:true}).'
       };
@@ -7308,6 +7317,7 @@ const DETECTOR_PLAIN = {
   repeatedTokenFields: { level: 'action', title: 'One token repeated many times', explain: (v) => 'These fields are a single token repeated 15+ times (' + briefEntries(v, (e) => (e.path || e.field || '?') + ' "' + (e.token || '') + '"×' + (e.records || '?')) + ') — a container-level brand/link-label string, not record content. Re-bind to the record text node.' },
   identityMirror: { level: 'advisory', title: 'Identity mirrors another shipped URL', explain: (v) => 'The id field equals a URL already shipped inside the same record (' + briefEntries(v, (e) => (e.path || e.field || '?') + ' ⇄ ' + (Array.isArray(e.mirroredIn) ? e.mirroredIn.join(',') : '') + (e.sample ? ' "' + String(e.sample).slice(0, 40) + '"' : '')) + ') — entity-scoped: two records by the same author would collide. Re-bind to the record-scoped permalink, or rename if entity scoping is intended.' },
   identicalFieldValues: { level: 'action', title: 'Identical value in every record', explain: (v) => 'A per-record field ships the SAME substantial value in every record (' + briefEntries(v, (e) => (e.path || e.field || '?') + ' "' + String(e.sample || '').slice(0, 30) + '"') + ') — a decoy/container-level read, not record content. Re-bind to a per-record element.' },
+  fieldRegression: { level: 'action', title: 'A previously-populated field regressed to empty', explain: (v) => 'A field that had values in an earlier verify came back empty/worse this run (' + briefEntries(v, (e) => (e.field || e.path || '?') + ' ' + (e.summary || '')) + '). Check what changed between the two versions — a selector/binding rewrite regressed it; restore the earlier binding for that field.' },
   identityMalformed: { level: 'action', title: 'id is concatenated prose', explain: (v) => 'The id field carries multi-word prose — a regex-concat accident (label + timestamp + link fragments: ' + briefEntries(v, (e) => (e.path || e.field || '?') + ' "' + String(e.sample || '').slice(0, 40) + '"') + '). Extract the ONE identity token from the source, or leave the field empty.' },
   timeAbsoluteCapturedUnbound: { level: 'action', title: 'Captured absolute time not shipped', explain: () => 'The run captured a FULL absolute timestamp (e.g. from a hover tooltip) but the time field does not carry it — the assembly dropped the captured value. Bind it into the output time field.' }
 };

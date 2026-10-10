@@ -221,8 +221,11 @@
             }
           } catch (e) { /* census is best-effort */ }
         }
-        if (warning) out.warning = warning;
-        else if (templateWarn) out.warning = templateWarn;
+        // 225th review #10: raw-source wins over the placeholder/timeout
+        // notes (the shell branch was guarded; the template branch
+        // clobbered the dead-tab diagnosis on the compound failure).
+        if (warning && !out.warning) out.warning = warning;
+        else if (templateWarn && !out.warning) out.warning = templateWarn;
         else if (typeof out.bodyTextChars === 'number' && out.bodyTextChars < 200 && !out.warning) {
           out.warning = 'body text is only ' + out.bodyTextChars + ' chars — the page is likely an UNHYDRATED SHELL (splash/loading markup; client JS has not rendered content yet). Call page.settle (or re-open and re-check) before probing and concluding the page is empty';
         }

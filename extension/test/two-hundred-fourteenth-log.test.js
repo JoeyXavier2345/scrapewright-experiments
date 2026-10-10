@@ -53,11 +53,23 @@ describe('A1. validateChain rejects the exit-less onSuccess cycle (214th log)', 
 });
 
 describe('A2. sanctioned loop idioms stay valid', () => {
-  it('cycle with a poll step declaring maxIterations>1 passes', () => {
+  // 225th review #4: a maxIterations>1 budget alone is no longer an exit
+  // declaration — the member must also carry a not-ready/failure signal
+  // (a retry budget with no not-ready emission rejoins the cycle on ready
+  // results and spins to the global cap). The poll fixtures now use a real
+  // poll script shape.
+  it('cycle with a poll step declaring maxIterations>1 AND a not-ready branch passes', () => {
+    const steps = incidentGraph();
+    steps[2].maxIterations = 5;
+    steps[2].script = "const ok=await $clickInList(sel, sub); if(!ok.all) return {done:false}; return {done:true};";
+    const out = validateChain(steps);
+    assert.equal(out.valid, true, JSON.stringify(out));
+  });
+  it('maxIterations>1 WITHOUT any not-ready/failure token is rejected (225th review #4)', () => {
     const steps = incidentGraph();
     steps[2].maxIterations = 5;
     const out = validateChain(steps);
-    assert.equal(out.valid, true, JSON.stringify(out));
+    assert.notEqual(out.valid, true, 'budget without a not-ready emission spins to the cap');
   });
   it('cycle with an explicit failure-signal token in a member script passes', () => {
     const steps = incidentGraph();
@@ -65,10 +77,10 @@ describe('A2. sanctioned loop idioms stay valid', () => {
     const out = validateChain(steps);
     assert.equal(out.valid, true, JSON.stringify(out));
   });
-  it('the orchestrator back-edge fixture (a⇄b, b maxIterations:50) passes', () => {
+  it('the orchestrator back-edge fixture (a⇄b, b maxIterations:50 + failure branch) passes', () => {
     const out = validateChain([
       { id: 'a', name: 'A', script: 'a', onSuccess: 'b', onFailure: 'TERMINATE', maxIterations: 1 },
-      { id: 'b', name: 'B', script: 'b', onSuccess: 'a', onFailure: 'TERMINATE', maxIterations: 50 }
+      { id: 'b', name: 'B', script: 'b; if (stalled) return {failed:true}; return {ok:true};', onSuccess: 'a', onFailure: 'TERMINATE', maxIterations: 50 }
     ]);
     assert.equal(out.valid, true, JSON.stringify(out));
   });

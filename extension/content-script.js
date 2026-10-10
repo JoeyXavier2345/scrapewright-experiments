@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '224-warm-cold-contrast';
+  const SW_BUILD_TAG = '225-review-batch';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -270,6 +270,8 @@
       var c = (typeof containerCount === 'number' && containerCount > 0) ? containerCount : 0;
       return Math.min(90000, Math.max(25000, c * 8000));
     }
+    var anchorResolutionStatsInline = { reResolved: 0, drift: 0 };
+    function getAnchorResolutionStats() { return anchorResolutionStatsInline; }
     function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverFn, opts) {
       if (!Array.isArray(containers)) {
         throw new Error('$extractWithHover: containers must be an array');
@@ -325,6 +327,9 @@
       // the step budget; a budget hit returns { records, partial } with the
       // resume cursor instead of dying as a zombie.
       var maxWallMs = (opts && typeof opts.maxWallMs === 'number' && opts.maxWallMs > 0) ? opts.maxWallMs : defaultHoverWallBudgetMs(containers.length);
+      var reResolvedAnchors225 = 0;
+      var anchorPopulationDrift225 = 0;
+      anchorResolutionStatsInline = { reResolved: 0, drift: 0 };
       var wallStart = Date.now();
       var processedCount = 0;
       // Sequential hover iteration. Only one popover can be on screen at a
@@ -346,10 +351,22 @@
             // during the previous dwell/dismiss, and a stale
             // pre-enumerated handle is box-less forever (every later
             // anchor refused as anchor_not_hoverable, no mouse movement).
+            // 225th review #5 (mirror of lib): identity-guarded — connected
+            // handles win; detached handles are replaced only on count
+            // parity; drift is counted for the receipt.
             var anchorEl = anchors[j];
             try {
-              var liveAnchor = container.querySelectorAll(anchorSel)[j];
-              if (liveAnchor && liveAnchor !== anchorEl) anchorEl = liveAnchor;
+              if (anchorEl && anchorEl.isConnected) {
+                // still live — no re-resolution needed
+              } else {
+                var liveList225 = container.querySelectorAll(anchorSel);
+                if (liveList225.length === anchors.length && liveList225[j]) {
+                  if (liveList225[j] !== anchorEl) { reResolvedAnchors225 += 1; anchorResolutionStatsInline = { reResolved: reResolvedAnchors225, drift: anchorPopulationDrift225 }; }
+                  anchorEl = liveList225[j];
+                } else {
+                  anchorPopulationDrift225 += 1; anchorResolutionStatsInline = { reResolved: reResolvedAnchors225, drift: anchorPopulationDrift225 };
+                }
+              }
             } catch (_) { /* keep the enumerated handle */ }
             var anchorHref = '';
             try {
@@ -885,6 +902,7 @@
       extractListMultiRecords,
       extractWithHoverRecords,
       defaultHoverWallBudgetMs,
+      getAnchorResolutionStats,
       clickInListItems,
       computeExtractListDiagnostics,
       computeClickInListDiagnostics,
@@ -4431,6 +4449,20 @@
           // needs to remount and lay out — the retry measured the same
           // zero rect and gave up. 700ms.
           await new Promise(function (r) { setTimeout(r, 700); });
+          // 225th review #15: the remount segment sat OUTSIDE every deadline
+          // check — a throttle-stretched sleep (the 138th class) ran a full
+          // dispatch+dwell cycle past an expired budget. Re-check now.
+          if (typeof outerDeadlineExceeded === 'function') {
+            var derr225 = outerDeadlineExceeded(deadlineAt, 'hover remount');
+            if (derr225) {
+              return {
+                hovered: false, htmlSnippet: null, popoverSelector: null, autoDiscovered: false,
+                hoverDispatched: false, hoverReason: 'outer_deadline_exceeded', reason: 'outer_deadline_exceeded',
+                reasonDetail: derr225,
+                budgetNote: 'the owning script budget ended during the remount wait — this anchor was abandoned before dispatch.'
+              };
+            }
+          }
           rect = anchor.getBoundingClientRect();
           // Only an ATTEMPTED remount that still yields 0×0 earns the
           // attached/virtualized reasonDetail — a box-less walk with no
@@ -5643,7 +5675,12 @@
     var batchWallMs = opts.maxWallMs;
     if (typeof deadlineAt === 'number' && Number.isFinite(deadlineAt)) {
       var remaining = deadlineAt - Date.now();
-      batchWallMs = Math.min((typeof batchWallMs === 'number' && batchWallMs > 0) ? batchWallMs : 25000, Math.max(0, remaining));
+      // 225th review #3: the fallback here was the pre-223 flat 25000 — with
+      // deadlineAt ALWAYS finite on the production path (the executor sets
+      // it unconditionally), an explicit number always reached the lib and
+      // defaultHoverWallBudgetMs was dead code. Use the scaled helper.
+      var fallback225 = (ops && typeof ops.defaultHoverWallBudgetMs === 'function') ? ops.defaultHoverWallBudgetMs(processed.length) : 25000;
+      batchWallMs = Math.min((typeof batchWallMs === 'number' && batchWallMs > 0) ? batchWallMs : fallback225, Math.max(0, remaining));
     }
     var batchStart160 = Date.now();
     var ret = await ops.extractWithHoverRecords(
@@ -5722,13 +5759,20 @@
         }
       }
     }
-    _diagnostics.hoverSummary = {
+    // 225th review #5/#8: effective wall budget + anchor-resolution stats
+    // ride EVERY summary (not only the partial envelope) — the agent sizes
+    // maxContainers/maxWallMs from the receipt.
+    _diagnostics.hoverSummary = Object.assign({
+      wallBudgetMs: (typeof batchWallMs === 'number' && batchWallMs > 0) ? batchWallMs : ((ops && typeof ops.defaultHoverWallBudgetMs === 'function') ? ops.defaultHoverWallBudgetMs(processed.length) : null),
+      anchorsReResolved: (ops && typeof ops.getAnchorResolutionStats === 'function') ? (ops.getAnchorResolutionStats().reResolved || 0) : null,
+      anchorPopulationDrift: (ops && typeof ops.getAnchorResolutionStats === 'function') ? (ops.getAnchorResolutionStats().drift || 0) : null
+    }, _diagnostics.hoverSummary, {
       anchorsFound: anchorsFound,
       hovercardsCaptured: hovercardsCaptured,
       hoverFailures: hoverFailures,
       failureReasons: failureReasons,
       observedPopoverCount: observedPopoverCount
-    };
+    });
     // 212th log: coverage census — anchored AND zero-anchor containers mixed
     // means the anchorSel catches only a DOM-shape subset of the population.
     if (anchoredContainers > 0 && zeroAnchorContainers > 0) {

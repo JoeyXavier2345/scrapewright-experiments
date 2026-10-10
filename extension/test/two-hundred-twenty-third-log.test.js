@@ -78,7 +78,9 @@ describe('B. domHover remount retry wait (223rd round, source pin)', () => {
     const cs = fs.readFileSync(path.join(__dirname, '..', 'content-script.js'), 'utf8');
     const i = cs.indexOf('attached, box-less after scroll retry');
     assert.ok(i > -1, 'the retry block exists');
-    const region = cs.slice(Math.max(0, i - 1200), i);
+    // 225th: the retry block grew a post-wait deadline guard; the marker
+    // text moved further from the wait — search the wider window.
+    const region = cs.slice(Math.max(0, i - 2400), i + 400);
     assert.match(region, /setTimeout\(r,\s*700\)/, 'the remount wait is 700ms');
     assert.doesNotMatch(region, /setTimeout\(r,\s*250\)/, 'the old 250ms wait is gone from the retry');
   });

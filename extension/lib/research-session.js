@@ -1736,6 +1736,9 @@
       if (running) return buildReport();
       if (state.stopped && state.stopped.reason !== 'paused') return buildReport();
       running = true;
+      // 225th review #9: a fresh run never inherits an armed pause (one
+      // armed before a natural stop re-paused the next Resume).
+      pauseFlag = false;
       // Tenth-log N3: the feedback continuation resets its budget segment
       // (turns 0) but carries the full transcript — that history is what
       // makes it a continuation, so the flag must key on either signal.
@@ -1764,6 +1767,7 @@
       let lastClassFail = null;
       try {
         while (true) {
+        try {
           if (abortFlag) { report = await stop('aborted', abortReason); break; }
           if (pauseFlag) {
             pauseFlag = false;
@@ -2022,9 +2026,21 @@
             // numbers; an at-least-equal red (or missing receipts on either
             // side) still honors the explicit choice.
             let overrideRejected221 = false;
-            if (turn.finish.shipRedArtifact === true && state.greenVerifyFacts && state.lastVerifyFacts &&
-                typeof state.greenVerifyFacts.delivered === 'number' && typeof state.lastVerifyFacts.delivered === 'number' &&
-                state.lastVerifyFacts.delivered < state.greenVerifyFacts.delivered) {
+            // 225th review #1/#6: delivered counts now come from the
+            // report's deliveredCounts (present on full delivery too — the
+            // old detector-only facts were null for exactly the incident's
+            // 6/6 green); receipts are version-stamped and ignored when
+            // they predate the artifact they are quoted against; a red
+            // carrying a unique count is compared by UNIQUE (a padded red
+            // with duplicates is not "more delivered").
+            const redDel225 = state.lastVerifyFacts && (state.lastVerifyFacts.version === state.artifactVersions.length)
+              ? ((typeof state.lastVerifyFacts.unique === 'number') ? state.lastVerifyFacts.unique : state.lastVerifyFacts.delivered)
+              : null;
+            const greenDel225 = state.greenVerifyFacts && (state.greenVerifyFacts.version === state.greenArtifactVersion)
+              ? state.greenVerifyFacts.delivered : null;
+            if (turn.finish.shipRedArtifact === true &&
+                typeof redDel225 === 'number' && typeof greenDel225 === 'number' &&
+                redDel225 < greenDel225) {
               overrideRejected221 = true;
             }
             if (state.lastVerifyOk === false &&
@@ -2037,7 +2053,7 @@
                 ') while a GREEN-verified version (v' + state.greenArtifactVersion + ') is one restore away — shipping now deploys the unverified artifact with a verified one in hand. ' +
                 (overrideRejected221
                   ? 'OVERRIDE REJECTED BY RECEIPTS: the shipRedArtifact assertion says the red is the better ship, but the verify receipts say otherwise — GREEN v' + state.greenArtifactVersion +
-                    ' delivered ' + state.greenVerifyFacts.delivered + ' while the CURRENT v' + state.artifactVersions.length + ' delivered ' + state.lastVerifyFacts.delivered +
+                    ' delivered ' + greenDel225 + ' while the CURRENT v' + state.artifactVersions.length + ' delivered ' + redDel225 +
                     '. A strictly smaller delivery is never the better ship: restore the green, or fix forward until the current version delivers at least the green count (and verifies). '
                   : '') +
                 'Either (a) service.update({restoreVersion:' + state.greenArtifactVersion + '}) — ONE turn, restores the verified steps — then finish; ' +
@@ -2293,9 +2309,26 @@
             // red is the better ship"; when both sides carry counts, the
             // claim is checked instead of trusted (the incident asserted
             // "delivers 5 real posts" over a green that delivered 6).
-            state.lastVerifyFacts = { delivered: (cs && typeof cs.extracted === 'number') ? cs.extracted : null };
+            // 225th review #1: prefer the report's deliveredCounts (raw
+            // record counts per schema array, present on full delivery too)
+            // — the 221st facts read only countShortfall, which is null
+            // when every array meets the ask, making the evidence check
+            // vacuous for exactly the full-delivery green of its own
+            // incident. #6: stamp the artifact version so stale receipts
+            // (facts captured against an older artifact than the one the
+            // finish gates) are ignored; uniqueExtracted wins over raw
+            // extracted when the red is the padded shape.
+            const dc225 = (result && result.deliveredCounts && typeof result.deliveredCounts === 'object') ? result.deliveredCounts : null;
+            const delivered225 = (cs && typeof cs.extracted === 'number')
+              ? cs.extracted
+              : (dc225 ? (dc225[cs ? cs.field : Object.keys(dc225)[0]] != null ? dc225[cs ? cs.field : Object.keys(dc225)[0]] : (Object.keys(dc225).length ? Math.max.apply(null, Object.values(dc225)) : null)) : null);
+            state.lastVerifyFacts = {
+              delivered: delivered225,
+              unique: (cs && typeof cs.uniqueExtracted === 'number') ? cs.uniqueExtracted : null,
+              version: state.artifactVersions.length
+            };
             if (state.lastVerifyOk !== false && result && result.ok) {
-              state.greenVerifyFacts = { delivered: state.lastVerifyFacts.delivered };
+              state.greenVerifyFacts = { delivered: delivered225, unique: null, version: state.artifactVersions.length };
             }
             state.lastVerifyCountShortfall = cs
               ? 'requested ' + cs.requested + ' via the test input, extracted ' + cs.extracted + ' into ' + JSON.stringify(cs.field) + (cs.severe ? ' (severe)' : '') +
@@ -2528,7 +2561,16 @@
           attachKnowledge(result);
           maybeCompact();
           await persist();
-        }
+        
+        } catch (eLoop225) {
+          // 225th review #9: an unexpected throw must land in a TERMINAL
+          // state — the old path left status 'running' forever, wedging
+          // the double-start guard and the Intervene send wait for 20 min.
+          state.status = 'stopped';
+          state.stopped = { reason: 'engine-crash', detail: String((eLoop225 && eLoop225.message) || eLoop225) };
+          try { emit('stopped', buildReport().stopped || state.stopped); } catch (_e225) {}
+          report = buildReport();
+        }}
       } finally {
         running = false;
       }

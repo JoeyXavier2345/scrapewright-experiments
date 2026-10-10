@@ -51,4 +51,16 @@ describe('DETECTOR_PLAIN completeness (217th log)', () => {
     const missing = Array.from(keys).filter((k) => !cat.has(k));
     assert.deepEqual(missing, [], 'all report detector keys cataloged — missing: ' + missing.join(', '));
   });
+  // 225th review #7: the guard scanned verify-runner ONLY — detector keys
+  // assigned in research-session (fieldRegression shipped uncataloged and
+  // rendered the bare placeholder) were invisible.
+  it('drift guard: detector keys assigned in research-session and session-tools are cataloged too', () => {
+    const cat = new Set(Object.keys(WU.DETECTOR_PLAIN));
+    for (const f of ['research-session.js', 'session-tools.js']) {
+      const src = fs.readFileSync(path.join(__dirname, '..', 'lib', f), 'utf8');
+      for (const m of src.matchAll(/(?:result\.)?detectors\.([A-Za-z_][A-Za-z0-9_]*)\s*=/g)) {
+        assert.ok(cat.has(m[1]), f + ' assigns detectors.' + m[1] + ' with no DETECTOR_PLAIN entry');
+      }
+    }
+  });
 });

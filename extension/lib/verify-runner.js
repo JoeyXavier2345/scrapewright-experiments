@@ -73,6 +73,7 @@
       detectIdentityMirror: w.detectIdentityMirror,
       identifierPoolPasses: w.identifierPoolPasses,
       detectIdentityMalformed: w.detectIdentityMalformed,
+      stripJSComments: w.stripJSComments,
       detectDuplicateEntities: w.detectDuplicateEntities,
       detectOversizedFields: w.detectOversizedFields,
       detectCountShortfall: w.detectCountShortfall,
@@ -1323,7 +1324,10 @@
               }
               for (const st of (service && Array.isArray(service.steps) ? service.steps : [])) {
                 if (!st || typeof st.script !== 'string') continue;
-                if (/\$collectUntil/.test(st.script)) continue; // the primitive carries its own sustained bar + certification
+                // 225th review #2: call-shape on comment-stripped text — a
+                // comment mentioning the primitive is not a call.
+                const strippedPE225 = (typeof WU.stripJSComments === 'function') ? WU.stripJSComments(st.script) : st.script;
+                if (/\$collectUntil\s*\(/.test(strippedPE225)) continue; // the primitive carries its own sustained bar + certification
                 if (!/\$scroll(By|ToBottom|IntoView)/.test(st.script)) continue; // only scroll-driven collectors can exit "exhausted"
                 const sid = String(st.id || '');
                 const iters = iterCountPE.get(sid) || 0;
@@ -1337,9 +1341,21 @@
                 // the preview carries no number, the run's delivered count
                 // is the counter: below the ask + uncertified + severe =
                 // the same one-round self-declared "done".
+                // 225th review #11: the fallback is guarded — without a
+                // shortfall row the counter is undefined (fired "counter at
+                // undefined" on non-shortfall runs), and when the census
+                // PROVES supply (maxContainers >= requested) the ASSEMBLY
+                // arm's merge diagnosis owns the run instead.
+                const peSupply225 = !!(detectors.countShortfall &&
+                  typeof detectors.countShortfall.maxContainers === 'number' &&
+                  typeof detectors.countShortfall.requested === 'number' &&
+                  detectors.countShortfall.maxContainers >= detectors.countShortfall.requested);
                 const counterPE = numsPE.length
                   ? Math.max.apply(null, numsPE)
-                  : detectors.countShortfall.extracted;
+                  : ((detectors.countShortfall && typeof detectors.countShortfall.extracted === 'number' && !peSupply225)
+                      ? detectors.countShortfall.extracted
+                      : undefined);
+                if (counterPE === undefined) continue;
                 if (counterPE >= reqPE) continue;
                 error = new Error(
                   'PREMATURE_EXHAUSTION: step "' + sid + '" exited done:true after ' + iters +
@@ -1460,19 +1476,38 @@
           let sustainedPoll222 = false;
           let usesCollectUntil222 = false;
           try {
+            // 225th review #2: both exemptions are SCOPED and shape-checked.
+            // (a) not-ready must be an EXPLICIT signal from the orchestrator
+            // whitelist (done/ready/complete/finished/responseReady===false,
+            // generating/loading===true) — done!==true counted plain DATA
+            // results as polls, and any unrelated wait step exempted the
+            // gate. (b) the streak must belong to a COLLECTOR-family step
+            // (scroll/click/count primitives in its script) — the 145th
+            // doctrine reads per-collector. (c) $collectUntil must appear
+            // as a CALL in comment-stripped script text — a comment
+            // mentioning the primitive disarmed the gate.
+            const isNotReady225 = function (pv) {
+              return !!(pv && (pv.done === false || pv.ready === false || pv.complete === false ||
+                pv.finished === false || pv.responseReady === false || pv.generating === true || pv.loading === true));
+            };
+            const collectorStep225 = new Set();
+            for (const st of (service && Array.isArray(service.steps) ? service.steps : [])) {
+              if (!st || typeof st.script !== 'string') continue;
+              const stripped225 = (typeof WU.stripJSComments === 'function') ? WU.stripJSComments(st.script) : st.script;
+              if (/\$scroll(By|ToBottom|IntoView)|\$clickInList|\$collectUntil|\$count\s*\(/.test(stripped225)) collectorStep225.add(String(st.id || ''));
+              if (/\$collectUntil\s*\(/.test(stripped225)) usesCollectUntil222 = true;
+            }
             const itersU = new Map();
             for (const ev of events) {
               if (!ev || ev.type !== 'STEP_ITERATION') continue;
               const sidU = String(ev.stepId || '');
+              if (!collectorStep225.has(sidU)) continue;
               const pvU = previewJson(ev.resultPreview);
-              if (pvU && pvU.done !== true) {
+              if (isNotReady225(pvU)) {
                 const keyU = sidU + '|nr';
                 itersU.set(keyU, (itersU.get(keyU) || 0) + 1);
                 if ((itersU.get(keyU) || 0) >= 4) sustainedPoll222 = true;
               }
-            }
-            for (const st of (service && Array.isArray(service.steps) ? service.steps : [])) {
-              if (st && typeof st.script === 'string' && st.script.indexOf('$collectUntil') !== -1) usesCollectUntil222 = true;
             }
           } catch (eU) { /* exemptions are best-effort */ }
           if (!error && !usesCollectUntil222 && !sustainedPoll222 &&
@@ -2579,6 +2614,24 @@
         pages: result && Array.isArray(result.pages)
           ? (result.pagesTruncated ? result.pages.length + '+' : String(result.pages.length))
           : '0',
+        // 225th review #1: deliveredCounts — the raw record count per
+        // schema array field, computed from finalData INDEPENDENT of
+        // detectCountShortfall (which returns null on full delivery — the
+        // 221st evidence check read only the detector and was vacuous for
+        // exactly the green that delivered everything, its own incident
+        // shape). The finish gate prefers these counts.
+        deliveredCounts: (function () {
+          try {
+            if (!finalData || !outputSchema || typeof outputSchema !== 'object') return undefined;
+            const props225 = outputSchema.properties || {};
+            const out225 = {};
+            for (const k225 of Object.keys(props225)) {
+              const arr225 = finalData ? finalData[k225] : null;
+              if (Array.isArray(arr225)) out225[k225] = arr225.length;
+            }
+            return Object.keys(out225).length ? out225 : undefined;
+          } catch (e225) { return undefined; }
+        })(),
         // 219th round: renamed from eventCount — `events` on the report is
         // the TAG-string array (the engine reads result.events for
         // knowledge auto-attach, session-tools pushes STAGNANT_DISCLOSURES

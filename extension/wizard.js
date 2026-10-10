@@ -470,9 +470,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!wizardSession) return;
     try {
       const st = wizardSession.state().session.status;
-      if (st === 'running') {
-        if (typeof wizardSession.unpause === 'function') wizardSession.unpause();
-      } else if (st === 'paused') {
+      // 225th review #9: retract UNCONDITIONALLY — a pause armed before a
+      // natural stop (status neither running nor paused) survived Cancel
+      // and re-paused the next Resume.
+      if (typeof wizardSession.unpause === 'function') wizardSession.unpause();
+      if (st === 'paused') {
         setSessionControls('running');
         const report = await wizardSession.run();
         if (report && report.stopped && sessionStopPresentsOutcome(report.stopped.reason, wizardSession.state().session)) await presentSessionCompletion();
@@ -493,6 +495,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (wizardSession && wizardSession.state().session.status === 'running') {
       const t0 = Date.now();
       btn.disabled = true;
+      const cancelBtn225 = document.getElementById('btnSessionInterveneCancel');
+      if (cancelBtn225) cancelBtn225.disabled = true;
       try {
         while (wizardSession.state().session.status === 'running') {
           if (Date.now() - t0 > 20 * 60 * 1000) {
@@ -505,6 +509,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       } finally {
         btn.disabled = false;
         btn.textContent = 'Send & Resume';
+        if (cancelBtn225) cancelBtn225.disabled = false;
       }
     }
     // Bridge into the feedback sender: it reads its own textarea, so mirror

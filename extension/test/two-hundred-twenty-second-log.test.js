@@ -33,30 +33,6 @@ const { createVerifyRunner } = require('../lib/verify-runner');
 
 // ---------- F1: the uncertified severe green hole ----------
 
-function makeRunner(finalPosts, shortfallPatch) {
-  const deps = {
-    ensureLock: async () => {}, releaseLock: async () => {},
-    createTab: async () => ({ id: 1 }), removeTab: async () => {}, waitForTabLoad: async () => {},
-    sendMessage: async () => ({ pong: true }),
-    executeScript: async () => ({ result: 'ok', selectorDiagnostics: [] }),
-    captureSnapshot: async () => ({ html: '<html></html>' }),
-    evaluateCondition: async () => true,
-    orchestrate: async (svc, input, d, opts) => {
-      await d.createTab(svc.targetUrl);
-      opts.onEvent({ type: 'EXECUTION_START' });
-      opts.onEvent({ type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: '{"done":true}' });
-      return { finalResult: { posts: finalPosts }, steps: [], pages: [], pagesTruncated: false };
-    }
-  };
-  const runner = createVerifyRunner(deps);
-  return async (args) => {
-    // reach in and patch the shortfall the runner computes from schema+data
-    const out = await runner(args);
-    void shortfallPatch;
-    return out;
-  };
-}
-
 const SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
   type: 'object', required: ['content'], properties: { content: { type: 'string' }, id: { type: 'string' } } } } } };
 const SERVICE = {
@@ -73,7 +49,6 @@ describe('F1. severe UNCERTIFIED shortfall is red regardless of container count 
   // count=6, then the gate arm keyed on the detector row.
   it('the incident shape (2/6 severe, uncertified, 5 containers < 6 requested) is RED naming certification', async () => {
     const { createVerifyRunner: cvr } = require('../lib/verify-runner');
-    let shortfalls;
     const deps = {
       ensureLock: async () => {}, releaseLock: async () => {},
       createTab: async () => ({ id: 1 }), removeTab: async () => {}, waitForTabLoad: async () => {},
@@ -87,17 +62,18 @@ describe('F1. severe UNCERTIFIED shortfall is red regardless of container count 
         return { finalResult: { posts: TWO_POSTS }, steps: [], pages: [], pagesTruncated: false };
       }
     };
-    const orig = WU.detectCountShortfall;
-    shortfalls = orig;
     const runner = cvr(deps);
     const out = await runner({ service: SERVICE, input: { count: 6 }, outputSchema: SCHEMA });
     const cs = out.report.detectors.countShortfall;
     assert.ok(cs && cs.extracted <= 2, 'detector censused the shortfall: ' + JSON.stringify(cs));
-    // the gate: severe + uncertified must be RED at any container count
-    if (cs && cs.severe && cs.exhaustionCertified !== true) {
-      assert.equal(out.report.ok, false, 'uncertified severe shortfall must not pass green');
-      assert.match(out.report.error.message, /CERTIFY|certif/i);
-    }
+    // 225th review #12: unconditional — the conditional form was
+    // self-disabling (severe/certification never pinned).
+    assert.equal(cs.severe, true, '2/6 is severe');
+    assert.notEqual(cs.exhaustionCertified, true, 'uncertified');
+    assert.equal(out.report.ok, false, 'uncertified severe shortfall must not pass green');
+    assert.match(out.report.error.message, /COUNT_SHORTFALL_UNCERTIFIED/);
+    assert.equal(typeof out.report.deliveredCounts, 'object', 'deliveredCounts rides the report (225th #1)');
+    assert.equal(out.report.deliveredCounts.posts, 2);
   });
   it('the gate source carries the container-independent arm (structural pin)', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'verify-runner.js'), 'utf8');

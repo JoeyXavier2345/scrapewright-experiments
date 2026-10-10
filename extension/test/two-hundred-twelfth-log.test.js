@@ -52,13 +52,14 @@ for (const [label, getOps] of [['lib', () => libOps], ['inline mirror', () => lo
         { anchorSel: 'span a[href]' },
         async () => ({ hovered: true, htmlSnippet: '<div>card</div>' }),
         { allowEmpty: true });
-      void out;
-      // cards 3-4 are div-wrapped → zero anchors for 'span a[href]'
-      const sum = out._diagnostics && out._diagnostics.hoverSummary;
-      if (!sum && getOps() === libOps) {
-        // lib-level summary rides the caller; the census key is asserted via
-        // source audit below for lib. For the mirror the wrapper attaches it.
-      }
+      // 225th review #13: behavioral assertion — cards 3-4 are div-wrapped
+      // (zero anchors for 'span a[href]') so their hovercards are EMPTY
+      // while cards 1-2 captured one each.
+      assert.equal(out.length, 4, 'one record per container');
+      // JSON compare — the mirror's arrays live in the inline realm and
+      // strict deepEqual rejects cross-realm prototypes.
+      assert.equal(JSON.stringify(Array.prototype.map.call(out, (r) => (r.hovercards || []).length)), '[1,1,0,0]',
+        'zero-anchor containers ship empty hovercards (the census signal)');
       // The records themselves: cards 3-4 got hovercards:[] — that IS the
       // zero-anchor signal; assert the census computation source exists.
       // the census lives in the content-script domExtractWithHover summary
@@ -81,7 +82,7 @@ describe('2b. video-player chrome rejected as a popover (212th log, source audit
     const src = fs.readFileSync(path.join(__dirname, '..', 'content-script.js'), 'utf8');
     assert.match(src, /video_player_chrome/, 'rejection reason exists');
     assert.match(src, /querySelector\('video'\)/, 'video presence probed');
-    assert.match(src, /60/, 'short-text bound present');
+    assert.match(src, /vt212\.length < 60/, 'short-text bound present (pinned to the code, not any 60 in the file)');
   });
 });
 

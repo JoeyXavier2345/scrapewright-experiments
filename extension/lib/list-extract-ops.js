@@ -89,6 +89,9 @@ function resetMatchGuardSkips() { matchGuardSkips = 0; }
 // caller. extractWithHoverRecords resets it at call start.
 let hoverReadCappedByField = null;
 function getHoverReadCapped() { return hoverReadCappedByField; }
+// 225th review #5: per-call anchor-resolution stats for the receipt lane.
+let anchorResolutionStats = { reResolved: 0, drift: 0 };
+function getAnchorResolutionStats() { return anchorResolutionStats; }
 function isHoverPopoverSpec(spec) {
   return !!(spec && typeof spec === 'object' &&
     (spec.read === 'hoverPopover' || spec.read === 'hoverPopoverHtml'));
@@ -572,6 +575,9 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
   // unchanged).
   const maxWallMs = (opts && typeof opts.maxWallMs === 'number' && opts.maxWallMs > 0) ? opts.maxWallMs : defaultHoverWallBudgetMs(containers.length);
   const wallStart = Date.now();
+  anchorResolutionStats = { reResolved: 0, drift: 0 };
+  let reResolvedAnchors = 0;
+  let anchorPopulationDrift = 0;
   let processedCount = 0;
   for (let i = 0; i < containers.length; i++) {
     if (i > 0 && (Date.now() - wallStart) > maxWallMs) break;
@@ -593,10 +599,25 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
       // anchor_not_hoverable with no mouse movement: the visible hovering
       // stops at post 3-4 while the batch "processes" the rest. One qsa
       // per anchor is negligible.
+      // 225th review #5: identity-guarded re-resolution. Positional
+      // [j] is only trustworthy when the LIVE population size matches the
+      // snapshot (mid-dwell insert/remove skews the index onto a different
+      // anchor — wrong hover, self-consistent, undetectable downstream).
+      // Connected snapshot handles win outright; a detached handle is
+      // replaced only on count parity; drift is counted for the receipt.
       let anchorEl = anchors[j];
       try {
-        const live = container.querySelectorAll(anchorSel)[j];
-        if (live && live !== anchorEl) anchorEl = live;
+        if (anchorEl && anchorEl.isConnected) {
+          // still live — no re-resolution needed
+        } else {
+          const liveList = container.querySelectorAll(anchorSel);
+          if (liveList.length === anchors.length && liveList[j]) {
+            if (liveList[j] !== anchorEl) reResolvedAnchors += 1;
+            anchorEl = liveList[j];
+          } else {
+            anchorPopulationDrift += 1;
+          }
+        }
       } catch (_) { /* keep the enumerated handle */ }
       // RC51 (console.log 2026-08-14): anchorHref is the primary downstream
       // classification signal — step scripts bucket hovercards by the source
@@ -1128,6 +1149,7 @@ const api = {
   extractListMultiRecords,
   extractWithHoverRecords,
   defaultHoverWallBudgetMs,
+  getAnchorResolutionStats,
   clickInListItems,
   computeExtractListDiagnostics,
   computeClickInListDiagnostics,

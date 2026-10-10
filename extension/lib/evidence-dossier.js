@@ -127,6 +127,17 @@
     if (typeof require !== 'undefined') {
       try { return require('./dom-cleaner'); } catch (e) { /* fall through */ }
     }
+    // 225th review #8: the 216/222 detector families reach the model's
+    // census too (they were panel-only — the model lost the advisories
+    // once the verify receipt scrolled out of context).
+    try {
+      const rt = Array.isArray(r.detectors && r.detectors.repeatedTokenFields) ? r.detectors.repeatedTokenFields : [];
+      for (const e of rt.slice(0, 3)) out.push('repeated-token ' + (e.path || e.field) + ' "' + String(e.token || '').slice(0, 20) + '" x15+ in ' + (e.records || '?') + '/' + (e.totalRecords || '?') + ' records');
+      const im = Array.isArray(r.detectors && r.detectors.identityMirror) ? r.detectors.identityMirror : [];
+      for (const e of im.slice(0, 2)) out.push('id-mirror ' + (e.path || e.field) + ' == ' + (Array.isArray(e.mirroredIn) ? e.mirroredIn.join(',') : ''));
+      const imal = Array.isArray(r.detectors && r.detectors.identityMalformed) ? r.detectors.identityMalformed : [];
+      for (const e of imal.slice(0, 2)) out.push('id-malformed ' + (e.path || e.field) + ' multi-word prose id');
+    } catch (_) { /* census lanes are best-effort */ }
     return (typeof global !== 'undefined' && global.DomCleaner) || null;
   }
 
