@@ -226,7 +226,11 @@ function readField(container, spec) {
     // Empty selector → the container itself.
     if (refAttr) return resolveAriaReference(container, refAttr).text;
     if (attr) {
-      if (attr === 'textContent' || attr === 'innerText') return capElementTextRead(readTextProperty(container));
+      if (attr === 'innerText') return capElementTextRead(readTextProperty(container));
+      // 219th round: an EXPLICIT textContent request reads the DOM property
+      // — the old innerText-first routing silently dropped hidden spans
+      // (the labelledby carriers) from explicit textContent reads.
+      if (attr === 'textContent') return capElementTextRead(container.textContent == null ? '' : container.textContent);
       if (DOM_PROPERTY_READS.has(attr)) return capElementHtmlRead(container[attr]);
       return container.getAttribute(attr);
     }
@@ -236,7 +240,8 @@ function readField(container, spec) {
   if (!el) return undefined;
   if (refAttr) return resolveAriaReference(el, refAttr).text;
   if (attr) {
-    if (attr === 'textContent' || attr === 'innerText') return capElementTextRead(readTextProperty(el));
+    if (attr === 'innerText') return capElementTextRead(readTextProperty(el));
+    if (attr === 'textContent') return capElementTextRead(el.textContent == null ? '' : el.textContent);
     if (DOM_PROPERTY_READS.has(attr)) return capElementHtmlRead(el[attr]);
     return el.getAttribute(attr);
   }

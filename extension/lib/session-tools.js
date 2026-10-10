@@ -1452,7 +1452,7 @@
       if (!lastVerify) return { error: 'no verify run yet in this session — run verify.run first' };
       const all = lastVerify.events || [];
       const events = a.stepId != null ? all.filter((e) => e && String(e.stepId) === String(a.stepId)) : all;
-      const out = { at: lastVerify.at, eventCount: all.length };
+      const out = { at: lastVerify.at, rawEventCount: all.length };
       if (lastVerify.staleArtifact) {
         out.warning = 'this diagnostics snapshot predates the current artifact — run verify.run again before trusting it for the new version';
       }
@@ -2185,12 +2185,41 @@
       // origin duplicates the run tab the orchestrator ALREADY opens —
       // three target-site tabs on screen, and the sub-tab dies at step end
       // so later steps never see the page it opened.
+      // 211th review #11 / 219th round: ORIGIN equality alone also flagged
+      // legitimate DETAIL pages (different path family). Scope by path
+      // SHAPE: fire when the opened path equals the target path with
+      // {{param}} segments as wildcards, or the two share a named directory
+      // (the 204th variant-reopen class — /search/top vs /search/posts);
+      // detail pages under other directories pass.
       try {
         const svcTuL = (typeof d.getDraftService === 'function') ? d.getDraftService() : null;
         const svcOriginTu = (function () {
           try { return new URL((svcTuL && svcTuL.targetUrl) || '').origin; } catch (e) { return null; }
         })();
+        const pathSegsOf = function (u) {
+          try {
+            const x = new URL(u, svcOriginTu);
+            return x.pathname.split('/').filter(Boolean).map((sg) => sg.replace(/\{\{[^}]+\}\}/g, '*'));
+          } catch (e) { return null; }
+        };
+        const segEq = function (a, b) {
+          if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+          for (let i = 0; i < a.length; i++) {
+            if (a[i] !== '*' && b[i] !== '*' && a[i] !== b[i]) return false;
+          }
+          return true;
+        };
+        const sharedDir = function (a, b) {
+          if (!Array.isArray(a) || !Array.isArray(b)) return 0;
+          let n = 0;
+          const min = Math.min(a.length, b.length) - 1; // last segment is the page, not a directory
+          for (let i = 0; i < min; i++) {
+            if (a[i] === '*' || b[i] === '*' || a[i] === b[i]) n += 1; else break;
+          }
+          return n;
+        };
         if (svcOriginTu) {
+          const tuSegs = pathSegsOf((svcTuL && svcTuL.targetUrl) || '');
           for (const s of steps) {
             const src = String((s && s.script) || '');
             if (src.indexOf('$openTab') === -1) continue;
@@ -2198,7 +2227,9 @@
             if (!urlMatch) continue;
             let o = null;
             try { o = new URL(urlMatch[1], svcOriginTu).origin; } catch (e) { o = null; }
-            if (o === svcOriginTu) {
+            if (o !== svcOriginTu) continue;
+            const openSegs = pathSegsOf(urlMatch[1]);
+            if (segEq(tuSegs, openSegs) || sharedDir(tuSegs, openSegs) >= 1) {
               staticLint.push('OPENTAB_DUPLICATES_TARGET: step "' + String((s && s.id) || '') + '" $openTabs a URL on the service targetUrl origin (' + svcOriginTu + ') — the orchestrator ALREADY opens the targetUrl tab for every run, so this step opens a redundant third tab, and its sub-tab is destroyed at step end (later steps never ran on the page it opened). If the page variant is better, amend the service URL once via service.update({targetUrl}) and DROP the open step; keep $openTab for detail pages only.');
             }
           }

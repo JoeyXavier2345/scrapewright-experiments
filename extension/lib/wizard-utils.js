@@ -1474,15 +1474,35 @@ function detectDuplicateNestedEntries(data, schema) {
       const arr = rec[k];
       if (!Array.isArray(arr)) continue;
       const groups = new Map();
+      const pendingNoDisc = [];
       let entryCount = 0;
+      // 219th round: entries WITHOUT a type/role discriminator used to form
+      // their own group — a named (typed) entry and its unnamed re-capture
+      // of the same entity escaped duplicate grouping. Empty-disc entries
+      // now join the existing group with the same idish (the link/identity
+      // part); distinct typed entities on one link stay separate.
+      const idishOfKey = function (key) { return String(key).slice(String(key).indexOf('::') + 2); };
       for (let i = 0; i < arr.length; i++) {
         const e = arr[i];
         if (!e || typeof e !== 'object' || Array.isArray(e)) continue;
         entryCount += 1;
         const key = nestedEntryIdentityKey(e);
         if (!key) continue;
+        if (String(key).indexOf('::') === 0) { pendingNoDisc.push({ index: i + 1, entry: e, key: key }); continue; }
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push({ index: i + 1, entry: e });
+      }
+      for (const p of pendingNoDisc) {
+        const idish = idishOfKey(p.key);
+        let joined = false;
+        for (const key of Array.from(groups.keys())) {
+          if (idishOfKey(key) === idish) {
+            groups.get(key).push({ index: p.index, entry: p.entry });
+            joined = true;
+            break;
+          }
+        }
+        if (!joined) groups.set(p.key, [{ index: p.index, entry: p.entry }]);
       }
       if (entryCount >= 2) {
         for (const key of groups.keys()) {
@@ -2249,7 +2269,12 @@ function extractInventedPseudoCandidates(script) {
     if (before === '+' || after === '+') continue;
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(str)) continue;
     if (!/^[:#.[*a-zA-Z]/.test(str)) continue;
-    const pseudoish = /:[a-zA-Z]+-[a-zA-Z]/.test(str) || (/[:]/.test(str) && /[[#.]/.test(str));
+    // 219th round: Playwright chaining syntax ("sel >> nth=1", "sel >>
+    // text=Foo") is not CSS — querySelector throws on it, but the
+    // pseudo-class scan did not see the '>>' engine syntax at all (the
+    // 218th session burned a round on it before self-healing).
+    const pseudoish = /:[a-zA-Z]+-[a-zA-Z]/.test(str) || (/[:]/.test(str) && /[[#.]/.test(str)) ||
+      (/>>/.test(str) && (/[a-z]+=/i.test(str.split('>>').pop()) || /[[#.:]/.test(str)));
     if (!pseudoish) continue;
     out.push({
       sel: str,

@@ -203,7 +203,7 @@ describe('verify dead-tab guard (199th log)', () => {
     const { runner } = makeRunner({ pingOkTabs: null, orchestrate });
     const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
     assert.equal(out.report.ok, true, 'attempt 2 goes green, got ' + JSON.stringify(out.report.error));
-    assert.equal(out.report.eventCount, 0, 'attempt-1 events must be dropped on retry, got ' + out.report.eventCount);
+    assert.equal(out.report.rawEventCount, 0, 'attempt-1 events must be dropped on retry, got ' + out.report.rawEventCount);
     assert.equal(out.events.length, 0, 'raw event log is attempt-2 only');
   });
 
@@ -307,7 +307,7 @@ describe('verify dead-tab guard (199th log)', () => {
     const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
     assert.equal(out.report.ok, true, 'attempt 2 must complete green — a cross-attempt streak must not trip the breaker, got ' + JSON.stringify(out.report.error));
     assert.equal(out.raw.breaker, null, 'no breaker on a healthy retried run');
-    assert.equal(out.report.eventCount, 2, 'attempt-2 events only');
+    assert.equal(out.report.rawEventCount, 2, 'attempt-2 events only');
   });
 
   it('199th re-review: REAL StepOrchestrator passes a bare CONTENT_SCRIPT_NOT_READY rejection through unswallowed', async () => {

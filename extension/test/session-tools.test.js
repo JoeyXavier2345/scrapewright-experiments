@@ -175,7 +175,7 @@ describe('createSessionTools', () => {
     state.draft = { targetUrl: 'x', steps: GOOD_STEPS };
     await t.tools['verify.run']({});
     const r = await t.tools['diag.read']({});
-    assert.equal(r.eventCount, 1);
+    assert.equal(r.rawEventCount, 1);
     assert.ok(Array.isArray(r.counters) && r.counters[0].stepId === 's1');
     assert.ok(typeof r.selectorDiagnostics === 'string');
     const r2 = await t.tools['diag.read']({ kind: 'counters' });

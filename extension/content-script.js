@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '218-idshape-prose';
+  const SW_BUILD_TAG = '219-defect-sweep';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -138,7 +138,10 @@
       if (!sel) {
         if (refAttr) return resolveLabelledbyText(container, refAttr).text;
         if (attr) {
-          if (attr === 'textContent' || attr === 'innerText') return capElementTextRead(readTextProperty(container));
+          if (attr === 'innerText') return capElementTextRead(readTextProperty(container));
+          // 219th round: an EXPLICIT textContent request reads the DOM
+          // property — hidden spans (the labelledby carriers) survive.
+          if (attr === 'textContent') return capElementTextRead(container.textContent == null ? '' : container.textContent);
           if (DOM_PROPERTY_READS.has(attr)) return capElementHtmlRead(container[attr]);
           return container.getAttribute(attr);
         }
@@ -148,7 +151,8 @@
       if (!el) return undefined;
       if (refAttr) return resolveLabelledbyText(el, refAttr).text;
       if (attr) {
-        if (attr === 'textContent' || attr === 'innerText') return capElementTextRead(readTextProperty(el));
+        if (attr === 'innerText') return capElementTextRead(readTextProperty(el));
+        if (attr === 'textContent') return capElementTextRead(el.textContent == null ? '' : el.textContent);
         if (DOM_PROPERTY_READS.has(attr)) return capElementHtmlRead(el[attr]);
         return el.getAttribute(attr);
       }
@@ -165,7 +169,8 @@
         if (refAttr) return [resolveLabelledbyText(container, refAttr).text];
         let val;
         if (attr) {
-          if (attr === 'textContent' || attr === 'innerText') val = capElementTextRead(readTextProperty(container));
+          if (attr === 'innerText') val = capElementTextRead(readTextProperty(container));
+          else if (attr === 'textContent') val = capElementTextRead(container.textContent == null ? '' : container.textContent);
           else if (DOM_PROPERTY_READS.has(attr)) val = capElementHtmlRead(container[attr]);
           else val = container.getAttribute(attr);
         } else {

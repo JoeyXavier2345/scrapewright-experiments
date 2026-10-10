@@ -36,7 +36,7 @@ describe('createVerifyRunner', () => {
     const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array' } } } });
     assert.equal(out.report.ok, true);
     assert.equal(out.report.error, null);
-    assert.equal(out.report.eventCount, 2);
+    assert.equal(out.report.rawEventCount, 2);
     assert.deepEqual(out.report.events, []);
     assert.equal(out.report.schemaOk, true);
     assert.ok(out.report.score.score >= 100, 'requiredCoverage 1.0 → score >= 100');

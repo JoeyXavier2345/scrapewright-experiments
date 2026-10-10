@@ -2501,7 +2501,12 @@
         pages: result && Array.isArray(result.pages)
           ? (result.pagesTruncated ? result.pages.length + '+' : String(result.pages.length))
           : '0',
-        eventCount: events.length,
+        // 219th round: renamed from eventCount — `events` on the report is
+        // the TAG-string array (the engine reads result.events for
+        // knowledge auto-attach, session-tools pushes STAGNANT_DISCLOSURES
+        // onto it), and a same-root counter invited the misreading that the
+        // two were the same collection. This counts the RAW run events.
+        rawEventCount: events.length,
         // 199th log: infra-level tab retry disclosure (error page / dead
         // content script) — the verdict is from the SECOND fresh tab; the
         // first attempt's cause rides here for the journal.
