@@ -23,6 +23,18 @@
 // Text reads get the same 50K budget as element HTML, disclosed on cut.
 const DOM_PROPERTY_READS = new Set(['outerHTML', 'innerHTML', 'textContent', 'innerText']);
 
+// 223rd round: the hover-batch wall budget DEFAULT scales with the declared
+// work — the old flat 25000ms covered ~3-4 cold-tab hovers (4500ms timeout
+// each, ~2 anchors per container) and the visible hovering stopped at post
+// 3-4 while the batch "processed" the rest without popovers. 8s per
+// container, floored at 25s, capped at 90s (the hover-aware step budget is
+// 120s).
+function defaultHoverWallBudgetMs(containerCount) {
+  const n = (typeof containerCount === 'number' && containerCount > 0) ? containerCount : 0;
+  return Math.min(90000, Math.max(25000, n * 8000));
+}
+
+
 // 机械-语义分离（spec 3.A，mirror of content-script.js inline ops）：match
 // 是 LLM 自写正则——基建只应用，不解释（谓词零知识）。命中即取整个
 // 原文值，未命中得空串；非法正则报错教重写。
@@ -558,7 +570,7 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
   // processed records wrapped in a { records, partial } envelope (all-fit
   // runs keep returning the plain array — consumers' Array.isArray path is
   // unchanged).
-  const maxWallMs = (opts && typeof opts.maxWallMs === 'number' && opts.maxWallMs > 0) ? opts.maxWallMs : 25000;
+  const maxWallMs = (opts && typeof opts.maxWallMs === 'number' && opts.maxWallMs > 0) ? opts.maxWallMs : defaultHoverWallBudgetMs(containers.length);
   const wallStart = Date.now();
   let processedCount = 0;
   for (let i = 0; i < containers.length; i++) {
@@ -573,7 +585,19 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
     }
     const hovercards = [];
     for (let j = 0; j < anchors.length; j++) {
-      const anchorEl = anchors[j];
+      // 223rd round: re-resolve the anchor RIGHT BEFORE its hover. On a
+      // virtualized feed the previous anchor's dwell/dismiss recycles the
+      // card — the pre-enumerated element handle is replaced (detached or
+      // permanently box-reclaimed), the domHover remount retry re-measures
+      // the same stale handle, and every later anchor is refused as
+      // anchor_not_hoverable with no mouse movement: the visible hovering
+      // stops at post 3-4 while the batch "processes" the rest. One qsa
+      // per anchor is negligible.
+      let anchorEl = anchors[j];
+      try {
+        const live = container.querySelectorAll(anchorSel)[j];
+        if (live && live !== anchorEl) anchorEl = live;
+      } catch (_) { /* keep the enumerated handle */ }
       // RC51 (console.log 2026-08-14): anchorHref is the primary downstream
       // classification signal — step scripts bucket hovercards by the source
       // anchor link. The hover layer was fully working (18/18 picks, 68/68
@@ -1103,6 +1127,7 @@ const api = {
   extractListRecords,
   extractListMultiRecords,
   extractWithHoverRecords,
+  defaultHoverWallBudgetMs,
   clickInListItems,
   computeExtractListDiagnostics,
   computeClickInListDiagnostics,

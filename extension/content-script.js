@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '222-uncertified-shortfall';
+  const SW_BUILD_TAG = '223-anchor-reresolve';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -263,6 +263,13 @@
       return records;
     }
 
+    // 223rd round (inline mirror of lib/list-extract-ops.js): the hover
+    // wall budget DEFAULT scales with the declared work — the flat 25s
+    // covered ~3-4 cold hovers and visible hovering stopped at post 3-4.
+    function defaultHoverWallBudgetMs(containerCount) {
+      var c = (typeof containerCount === 'number' && containerCount > 0) ? containerCount : 0;
+      return Math.min(90000, Math.max(25000, c * 8000));
+    }
     function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverFn, opts) {
       if (!Array.isArray(containers)) {
         throw new Error('$extractWithHover: containers must be an array');
@@ -317,7 +324,7 @@
       // budget — a hover batch over a long feed outlives the probe rail and
       // the step budget; a budget hit returns { records, partial } with the
       // resume cursor instead of dying as a zombie.
-      var maxWallMs = (opts && typeof opts.maxWallMs === 'number' && opts.maxWallMs > 0) ? opts.maxWallMs : 25000;
+      var maxWallMs = (opts && typeof opts.maxWallMs === 'number' && opts.maxWallMs > 0) ? opts.maxWallMs : defaultHoverWallBudgetMs(containers.length);
       var wallStart = Date.now();
       var processedCount = 0;
       // Sequential hover iteration. Only one popover can be on screen at a
@@ -334,7 +341,16 @@
           }
           var hovercards = [];
           for (var j = 0; j < anchors.length; j++) {
+            // 223rd round (mirror of lib): re-resolve the anchor RIGHT
+            // BEFORE its hover — a virtualized feed replaces card nodes
+            // during the previous dwell/dismiss, and a stale
+            // pre-enumerated handle is box-less forever (every later
+            // anchor refused as anchor_not_hoverable, no mouse movement).
             var anchorEl = anchors[j];
+            try {
+              var liveAnchor = container.querySelectorAll(anchorSel)[j];
+              if (liveAnchor && liveAnchor !== anchorEl) anchorEl = liveAnchor;
+            } catch (_) { /* keep the enumerated handle */ }
             var anchorHref = '';
             try {
               anchorHref = anchorEl.getAttribute('href') || '';
@@ -868,6 +884,7 @@
       extractListRecords,
       extractListMultiRecords,
       extractWithHoverRecords,
+      defaultHoverWallBudgetMs,
       clickInListItems,
       computeExtractListDiagnostics,
       computeClickInListDiagnostics,
@@ -4410,7 +4427,10 @@
         try { remountTarget.scrollIntoView({ block: 'center', behavior: 'instant' }); }
         catch (_) { try { remountTarget.scrollIntoView(); } catch (_2) { remountTarget = null; } }
         if (remountTarget) {
-          await new Promise(function (r) { setTimeout(r, 250); });
+          // 223rd round: 250ms was shorter than a cold-tab virtualizer
+          // needs to remount and lay out — the retry measured the same
+          // zero rect and gave up. 700ms.
+          await new Promise(function (r) { setTimeout(r, 700); });
           rect = anchor.getBoundingClientRect();
           // Only an ATTEMPTED remount that still yields 0×0 earns the
           // attached/virtualized reasonDetail — a box-less walk with no
