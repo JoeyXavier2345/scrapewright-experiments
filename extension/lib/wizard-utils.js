@@ -1328,8 +1328,22 @@ function duplicateRecordSamples(records, indices, sigFields) {
 // bind the per-card link attribute directly instead of the regex capture.
 // Mechanical discriminator over the raw value; no site tokens.
 function idValueShape(value) {
-  const v = String(value || '');
+  let v = String(value || '');
   if (!v) return 'empty';
+  // 218th log: PROSE must earn the scoped verdict. A captured page-card
+  // text ("Name · Public figure SHOP: … 85K Followers") carried
+  // utm_id=97758 — the 4-digit tracking token made the whole blob
+  // classify 'scoped', so the identifier rescue demanded binding posts.id
+  // from prose across four red rounds. utm_* params are stripped first
+  // (tracking, not identity — the 74th-round href-diff precedent); a
+  // multi-word value (>=6 whitespace tokens) then passes ONLY on a real
+  // identity token (>=12 alnum run or an id-param URL) — years/counts
+  // buried in prose never rescue an id. Standalone values keep the old
+  // ladder.
+  v = v.replace(/[?&]utm_[a-z0-9_]+=[^&\s]+/gi, '');
+  if (/\S+(?:\s+\S+){5,}/.test(v)) {
+    return (/[?&]([a-z0-9_]*id|set)=/i.test(v) || /[A-Za-z0-9]{12,}/.test(v)) ? 'scoped' : 'prefix';
+  }
   if (/\d{4,}/.test(v)) return 'scoped';
   if (/[?&]([a-z0-9_]*id|set)=/i.test(v)) return 'scoped';
   if (/[A-Za-z0-9]{12,}/.test(v)) return 'scoped';

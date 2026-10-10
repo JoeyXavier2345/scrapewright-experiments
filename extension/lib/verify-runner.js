@@ -1971,7 +1971,21 @@
               if (pools165.mode !== 'per-record' && detectors.unusedCaptures &&
                   detectors.unusedCaptures.popoverReadFields > 0) continue;
               if (!passInPool165.length) continue;
-              const sample165 = String(passInPool165[0]).slice(0, 80);
+              // 218th log: quote the EVIDENCE, not a head slice. An
+              // identifier rescue used to print the first 80 chars of the
+              // passing candidate — a long popover text hid the token that
+              // actually passed, and the model fought four red rounds
+              // against a "satisfying value" it could not see.
+              let sample165;
+              if (row165.semantic === 'identifier') {
+                const full165 = String(passInPool165[0]);
+                const toks165 = full165.match(/[?&][a-z0-9_]*id=[^&\s]+|[A-Za-z0-9]{12,}|\d{4,}/gi) || [];
+                sample165 = toks165.length
+                  ? (toks165.slice().sort((a, b) => b.length - a.length)[0].slice(0, 90))
+                  : full165.slice(0, 80);
+              } else {
+                sample165 = String(passInPool165[0]).slice(0, 80);
+              }
               detectors.capturedValueUnbound = detectors.capturedValueUnbound || [];
               detectors.capturedValueUnbound.push({
                 field: row165.field, path: row165.path, semantic: row165.semantic,
