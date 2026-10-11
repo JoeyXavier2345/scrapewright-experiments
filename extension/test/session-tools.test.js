@@ -1539,7 +1539,9 @@ describe('probe.census (speed track 2026-09-29)', () => {
     const ev1 = t1.capture.verifyArgs && t1.capture.verifyArgs.sessionEvidence;
     assert.ok(ev1, 'sessionEvidence rides the verify call');
     assert.equal(ev1.probeTimestampCalls, 1, 'the census-run timestamp dance counts as an exercise');
-    assert.equal(ev1.lastFullAbsolute, true, 'a year-carrying timeHover absolute satisfies the full-absolute lane');
+    // 228th #5: the lane now stores the ABSOLUTE STRING (the 226
+    // contrast requires typeof string) — truthy-true was the old shape.
+    assert.equal(ev1.lastFullAbsolute, 'September 11, 2026', 'a year-carrying timeHover absolute satisfies the full-absolute lane as the string');
     // No hover requested → no exercise credit.
     const t2 = censusProbeDeps(async () => ({ total: 3, sampled: [0], lanes: {} }));
     const tools2 = createSessionTools(t2.deps);

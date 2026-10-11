@@ -1503,7 +1503,7 @@
             for (const st of (service && Array.isArray(service.steps) ? service.steps : [])) {
               if (!st || typeof st.script !== 'string') continue;
               const stripped225 = (typeof WU.stripJSComments === 'function') ? WU.stripJSComments(st.script) : st.script;
-              if (/\$scroll(By|ToBottom|IntoView)|\$clickInList|\$collectUntil|\$count\s*\(/.test(stripped225)) collectorStep225.add(String(st.id || ''));
+              if (/\$scroll(By|ToBottom|IntoView)\s*\(|\$clickInList\s*\(|\$collectUntil\s*\(|\$count\s*\(/.test(stripped225)) collectorStep225.add(String(st.id || ''));
               if (/\$collectUntil\s*\(/.test(stripped225)) usesCollectUntil222 = true;
             }
             const itersU = new Map();
@@ -2413,6 +2413,20 @@
               const dsrc161 = lastDiags161[lastDiags161.length - 1] || null;
               const diag161 = {};
               if (dsrc161 && typeof dsrc161.containerMatches === 'number') diag161.containerMatches = dsrc161.containerMatches;
+              // 228th review #12: the 225th wallBudgetMs/anchorsReResolved/
+              // anchorPopulationDrift fields rode _diagnostics and the SW
+              // journal only — no model-visible lane rendered them.
+              if (dsrc161 && dsrc161.hoverSummary && typeof dsrc161.hoverSummary === 'object') {
+                const hs228 = dsrc161.hoverSummary;
+                const lane228 = {};
+                if (typeof hs228.wallBudgetMs === 'number') lane228.wallBudgetMs = hs228.wallBudgetMs;
+                if (typeof hs228.anchorsReResolved === 'number' && hs228.anchorsReResolved > 0) lane228.anchorsReResolved = hs228.anchorsReResolved;
+                if (typeof hs228.anchorPopulationDrift === 'number' && hs228.anchorPopulationDrift > 0) {
+                  lane228.anchorPopulationDrift = hs228.anchorPopulationDrift;
+                  lane228.driftNote = 'the live anchor population changed mid-batch (virtualized remount) — narrow anchorSel or resume with containerRange';
+                }
+                if (Object.keys(lane228).length) diag161.anchorResolution = lane228;
+              }
               const hc161 = dsrc161 && dsrc161.hoverCost;
               if (hc161 && typeof hc161 === 'object') {
                 diag161.hoverCost = {
@@ -2620,9 +2634,12 @@
             const hitT = detectors.implausibleTimeFields.find((f) => isReq227(f.path));
             if (hitT) also227.push(hitT.path + ' ' + (hitT.implausibleCount || '?') + '/' + (hitT.nonEmpty || '?') + ' values carry no date shape (e.g. ' + JSON.stringify(String(hitT.sample || '').slice(0, 20)) + ')');
           }
-          if (!/DUPLICATE_ID_REQUIRED/.test(error.message) && detectors.duplicateIdValues && typeof detectors.duplicateIdValues === 'object' && Array.isArray(detectors.duplicateIdValues.fields)) {
-            const hitD = detectors.duplicateIdValues.fields.find((f) => isReq227((f && (f.path || f.field)) || ''));
-            if (hitD) also227.push((hitD.path || hitD.field) + ' repeats "' + String(hitD.value || '').slice(0, 24) + '" on ' + (hitD.count || '?') + ' record(s)');
+          // 228th review #6: the detector is a BARE array of row objects
+          // (the .fields wrapper shape never existed in production) — the
+          // lane could not fire.
+          if (!/DUPLICATE_ID_REQUIRED/.test(error.message) && Array.isArray(detectors.duplicateIdValues)) {
+            const hitD = detectors.duplicateIdValues.find((f) => f && typeof f.value === 'string' && isReq227(f.path || f.field || ''));
+            if (hitD) also227.push((hitD.path || hitD.field) + ' repeats "' + String(hitD.value).slice(0, 24) + '" on ' + (hitD.count || '?') + ' record(s)');
           }
           if (!/REQUIRED_FIELD_EMPTY/.test(error.message) && Array.isArray(detectors.partialEmptyFields)) {
             const hitE = detectors.partialEmptyFields.find((f) => f.emptyRatio >= 1 && isReq227(f.path));

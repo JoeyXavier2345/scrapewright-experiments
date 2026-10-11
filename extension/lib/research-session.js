@@ -2033,15 +2033,33 @@
             // they predate the artifact they are quoted against; a red
             // carrying a unique count is compared by UNIQUE (a padded red
             // with duplicates is not "more delivered").
+            const field228 = (state.lastVerifyFacts && state.lastVerifyFacts.field) ||
+              (state.greenVerifyFacts && state.greenVerifyFacts.field) || null;
+            const resolveCount228 = (facts, preferUnique) => {
+              if (!facts) return null;
+              const base = (field228 && facts.counts && typeof facts.counts[field228] === 'number')
+                ? facts.counts[field228]
+                : facts.delivered;
+              if (preferUnique && typeof facts.unique === 'number') return facts.unique;
+              return base;
+            };
             const redDel225 = state.lastVerifyFacts && (state.lastVerifyFacts.version === state.artifactVersions.length)
-              ? ((typeof state.lastVerifyFacts.unique === 'number') ? state.lastVerifyFacts.unique : state.lastVerifyFacts.delivered)
+              ? resolveCount228(state.lastVerifyFacts, true)
               : null;
             const greenDel225 = state.greenVerifyFacts && (state.greenVerifyFacts.version === state.greenArtifactVersion)
-              ? state.greenVerifyFacts.delivered : null;
+              ? resolveCount228(state.greenVerifyFacts, typeof (state.lastVerifyFacts && state.lastVerifyFacts.unique) === 'number')
+              : null;
+            let overrideUnchecked228 = false;
             if (turn.finish.shipRedArtifact === true &&
                 typeof redDel225 === 'number' && typeof greenDel225 === 'number' &&
                 redDel225 < greenDel225) {
               overrideRejected221 = true;
+            } else if (turn.finish.shipRedArtifact === true &&
+                       (redDel225 == null || greenDel225 == null)) {
+              // 228th review #11: the version-stamp rule correctly skips
+              // stale receipts — but a silent skip is indistinguishable
+              // from an override that SURVIVED the evidence check.
+              overrideUnchecked228 = true;
             }
             if (state.lastVerifyOk === false &&
                 state.greenArtifactVersion &&
@@ -2066,6 +2084,10 @@
             // Thirteenth log: five consecutive RED verifies still finished as a
             // plain 'completed' — an honest ship note must not read as green.
             let detail = turn.finish.summary || null;
+            if (overrideUnchecked228) {
+              detail = (detail ? detail + ' ' : '') +
+                '[OVERRIDE UNCHECKED — verify receipts are stale for the artifacts they would be quoted against, so the delivered-count evidence check was SKIPPED; the ship rests on the assertion alone]';
+            }
             if (state.lastVerifyOk === false) {
               const ef = state.lastVerifyEmptyFields
                 ? '; confirmed field(s) empty in every record: ' + state.lastVerifyEmptyFields.join(', ') +
@@ -2319,16 +2341,36 @@
             // finish gates) are ignored; uniqueExtracted wins over raw
             // extracted when the red is the padded shape.
             const dc225 = (result && result.deliveredCounts && typeof result.deliveredCounts === 'object') ? result.deliveredCounts : null;
+            // 228th review #7: the facts keep the WHOLE counts map plus the
+            // shortfall field — the old capture read the red's
+            // countShortfall.extracted (shortfall FIELD) against the
+            // green's FIRST schema array (deliveredCounts key order), so a
+            // two-array schema compared comments against posts and
+            // force-rejected strictly-better reds with fabricated numbers.
+            // The gate now resolves BOTH sides through the SAME field.
+            const factsField228 = (cs && cs.field) ? String(cs.field) : null;
             const delivered225 = (cs && typeof cs.extracted === 'number')
               ? cs.extracted
-              : (dc225 ? (dc225[cs ? cs.field : Object.keys(dc225)[0]] != null ? dc225[cs ? cs.field : Object.keys(dc225)[0]] : (Object.keys(dc225).length ? Math.max.apply(null, Object.values(dc225)) : null)) : null);
+              : (dc225 && factsField228 && typeof dc225[factsField228] === 'number'
+                  ? dc225[factsField228]
+                  : (dc225 && Object.keys(dc225).length ? dc225[Object.keys(dc225)[0]] : null));
             state.lastVerifyFacts = {
               delivered: delivered225,
               unique: (cs && typeof cs.uniqueExtracted === 'number') ? cs.uniqueExtracted : null,
-              version: state.artifactVersions.length
+              version: state.artifactVersions.length,
+              field: factsField228,
+              counts: dc225 || null
             };
             if (state.lastVerifyOk !== false && result && result.ok) {
-              state.greenVerifyFacts = { delivered: delivered225, unique: null, version: state.artifactVersions.length };
+              // 228th review #10: the green keeps its unique count too —
+              // unique-vs-raw asymmetry force-rejected higher-unique reds.
+              state.greenVerifyFacts = {
+                delivered: delivered225,
+                unique: (cs && typeof cs.uniqueExtracted === 'number') ? cs.uniqueExtracted : null,
+                version: state.artifactVersions.length,
+                field: factsField228,
+                counts: dc225 || null
+              };
             }
             state.lastVerifyCountShortfall = cs
               ? 'requested ' + cs.requested + ' via the test input, extracted ' + cs.extracted + ' into ' + JSON.stringify(cs.field) + (cs.severe ? ' (severe)' : '') +
@@ -2566,10 +2608,17 @@
           // 225th review #9: an unexpected throw must land in a TERMINAL
           // state — the old path left status 'running' forever, wedging
           // the double-start guard and the Intervene send wait for 20 min.
+          // 228th review #2: TERMINAL means the loop EXITS — the original
+          // catch had no break, so a crash re-entered while(true): a
+          // zombie engine burning LLM turns under status 'stopped', or a
+          // synchronous re-crash spin freezing the page. persistFinal for
+          // stop() parity (the crash reason must survive a reload).
           state.status = 'stopped';
           state.stopped = { reason: 'engine-crash', detail: String((eLoop225 && eLoop225.message) || eLoop225) };
           try { emit('stopped', buildReport().stopped || state.stopped); } catch (_e225) {}
           report = buildReport();
+          try { await persistFinal(); } catch (_e228) { /* crash-path persistence is best-effort */ }
+          break;
         }}
       } finally {
         running = false;

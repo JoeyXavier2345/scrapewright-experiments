@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '227b-hover-journal-fields';
+  const SW_BUILD_TAG = '228-review-batch2';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -5763,7 +5763,7 @@
     // ride EVERY summary (not only the partial envelope) — the agent sizes
     // maxContainers/maxWallMs from the receipt.
     _diagnostics.hoverSummary = Object.assign({
-      wallBudgetMs: (typeof batchWallMs === 'number' && batchWallMs > 0) ? batchWallMs : ((ops && typeof ops.defaultHoverWallBudgetMs === 'function') ? ops.defaultHoverWallBudgetMs(processed.length) : null),
+      wallBudgetMs: (typeof batchWallMs === 'number') ? batchWallMs : ((ops && typeof ops.defaultHoverWallBudgetMs === 'function') ? ops.defaultHoverWallBudgetMs(processed.length) : null),
       anchorsReResolved: (ops && typeof ops.getAnchorResolutionStats === 'function') ? (ops.getAnchorResolutionStats().reResolved || 0) : null,
       anchorPopulationDrift: (ops && typeof ops.getAnchorResolutionStats === 'function') ? (ops.getAnchorResolutionStats().drift || 0) : null
     }, _diagnostics.hoverSummary, {

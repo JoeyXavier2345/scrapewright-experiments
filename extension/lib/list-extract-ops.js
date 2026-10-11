@@ -617,6 +617,10 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
           } else {
             anchorPopulationDrift += 1;
           }
+          // 228th review #3: the lib (the PRIMARY production path) never
+          // wrote the counters back — getAnchorResolutionStats() returned
+          // {0,0} while the inline mirror reported real numbers.
+          anchorResolutionStats = { reResolved: reResolvedAnchors, drift: anchorPopulationDrift };
         }
       } catch (_) { /* keep the enumerated handle */ }
       // RC51 (console.log 2026-08-14): anchorHref is the primary downstream

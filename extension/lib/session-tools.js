@@ -1229,7 +1229,11 @@
             st && typeof st.script === 'string' && /\$extract/i.test(st.script));
           if (extractStep) {
             const pfOpts = Object.assign({}, input || {});
-            const pfRes = await d.rail.executeDsl(extractStep.script, { input: pfOpts, timeoutMs: 20000, preflight: true });
+            // 228th review #14: the hard-coded 20s could never complete a
+            // hover batch (each anchor ~4.5s+700ms) — the warm-contrast
+            // teaching routes preflight for exactly those batches.
+            const pfBudget228 = /\$(extractWithHover|hover|timestamp)\s*\(/.test(extractStep.script) ? 60000 : 20000;
+            const pfRes = await d.rail.executeDsl(extractStep.script, { input: pfOpts, timeoutMs: pfBudget228, preflight: true });
             preflight = {
               executed: true,
               stepId: extractStep.id || null,
@@ -2551,8 +2555,12 @@
             tooltipRoute.probeTimestampCalls += 1;
             if (typeof r.timeHover.anchorsProbed === 'number') tooltipRoute.lastAnchorsProbed = r.timeHover.anchorsProbed;
             const abs = r.timeHover.absolute;
+            // 228th review #5: store the STRING — the 226 warm-contrast
+            // channel requires typeof 'string'; the boolean made the fix
+            // dead again (truthiness keeps the older boolean consumer
+            // correct).
             tooltipRoute.lastFullAbsolute = (typeof abs === 'string' && abs &&
-              (WU.hasYearToken ? WU.hasYearToken(abs) : /(?:19|20)\d{2}/.test(abs)));
+              (WU.hasYearToken ? WU.hasYearToken(abs) : /(?:19|20)\d{2}/.test(abs))) ? abs : tooltipRoute.lastFullAbsolute;
           }
         } catch (_) { /* bookkeeping must never break the tool */ }
         return r;
@@ -2573,7 +2581,7 @@
             if (typeof out.anchorsProbed === 'number') tooltipRoute.lastAnchorsProbed = out.anchorsProbed;
             const abs = out.absolute;
             tooltipRoute.lastFullAbsolute = (typeof abs === 'string' && abs &&
-              (WU.hasYearToken ? WU.hasYearToken(abs) : /(?:19|20)\d{2}/.test(abs)));
+              (WU.hasYearToken ? WU.hasYearToken(abs) : /(?:19|20)\d{2}/.test(abs))) ? abs : tooltipRoute.lastFullAbsolute;
           }
         } catch (_) { /* bookkeeping must never break the tool */ }
         return out;
@@ -2607,7 +2615,7 @@
       { name: 'probe.scrollUntil', args: '{sel, targetCount, maxRounds?, settleMs?, by?, scrollSel?}', returns: '{satisfied,finalCount,rounds,trace,reason,note?} — scroll→settle→count loop stopping the MOMENT sel reaches targetCount. reason=count_frozen: sel matches static chrome, re-target it; reason=at_bottom: the SCROLL ROOT tested is exhausted — retry with scrollSel at the feed\'s inner scrollable container; reason=max_rounds: still growing, re-run' },
       { name: 'probe.extract', args: '{containerSel, fieldMap, multi?, allowEmpty?}', returns: '{total,records[3],emptyFields{field:emptyCount}}' },
       { name: 'probe.loginState', args: '{}', returns: '{loggedIn, loginWall, evidence, note} — login/logout marker census. Quote it BEFORE any "requires login"/"unauthenticated" claim; page shape alone is NOT login-state evidence' },
-      { name: 'probe.timestamp', args: '{containerSel, anchorSel?, index?}', returns: '{heuristicValue, value, absolute, relative, candidates[{value,source,relative}], note?} — ONE call does the whole timestamp dance on one card (hovers time-ish anchors, harvests labelledby/aria/text, date-shape filtered, absolute preferred). Judge candidates[] yourself when the heuristic misses. FIRST move whenever postTime is relative or junk' },
+      { name: 'probe.timestamp', args: '{containerSel, anchorSel?, index?, timeoutMs?}', returns: '{heuristicValue, value, absolute, relative, candidates[{value,source,relative}], note?} — ONE call does the whole timestamp dance on one card (hovers time-ish anchors, harvests labelledby/aria/text, date-shape filtered, absolute preferred). timeoutMs default 60000 max 90000 — the union anchorSel hovers EVERY matching anchor; raise it on anchor-dense cards' },
       { name: 'diag.read', args: '{stepId?, kind?}', returns: '{selectorDiagnostics, failingStep?, popover, counters, lastError?} — kind:"contract" (no verify needed) shows confirmation/schema state BEFORE verify.run; kind:"unusedCaptures" returns the verify report\'s unconsumed popover captures' },
       { name: 'verify.run', args: '{input?, preflight?} — optional input override for THIS run (the INPUT_VALUE_SUSPECT alternate-value re-test); preflight:true dry-runs the extract step on the warm research tab first (default off)', returns: '{ok,score,error,detectors,steps,resultDebug?,finalResult,schemaOk,tabRetry?} — tabRetry?: fresh-tab retry disclosure (firstError names the dead-tab cause). detectors.partialEmptyFields: confirmed fields that came back empty, with emptyRatio and emptyRecordSamples (1-based record ordinals + hints) — probe those records on the research tab instead of blind-rewriting. detectors.emptyFieldDiagnostics: per-field falsification crumbs (missingIds, 0-container sub-selectors, absent attrs) — read BEFORE re-probing. resultDebug surfaces small non-record debug keys. A field populated on the research tab but empty in verify depends on page state the warm tab ACCUMULATED — re-derive on a fresh page' },
       { name: 'annotate.request', args: '{why, fields?, containerSel?}', returns: '{annotations[{selector,purpose,outputField}]} | {cancelled} — REQUIRES a confirmed I/O contract (io.confirm first)' },

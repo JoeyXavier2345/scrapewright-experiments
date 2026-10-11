@@ -838,9 +838,11 @@
       // plus 700ms remount waits — the 15:37 call died SANDBOX_DEADLINE
       // mid-dance. Hover-aware default 60s; the caller may pass timeoutMs
       // (capped like probe.snippet's).
-      const hoverBudget226 = (typeof a.timeoutMs === 'number' && a.timeoutMs > 0)
-        ? Math.min(a.timeoutMs, SNIPPET_MAX_TIMEOUT_MS)
-        : 60000;
+      let hoverBudget226 = 60000;
+      if (a.timeoutMs != null && !(typeof a.timeoutMs === 'number' && a.timeoutMs > 0)) {
+        return { error: 'timeoutMs must be a positive number (default 60000, max ' + SNIPPET_MAX_TIMEOUT_MS + ') — the union anchorSel hovers EVERY matching anchor, so raise it on anchor-dense cards rather than retrying' };
+      }
+      if (typeof a.timeoutMs === 'number' && a.timeoutMs > 0) hoverBudget226 = Math.min(a.timeoutMs, SNIPPET_MAX_TIMEOUT_MS);
       const r = await runSnippet(snippet, hoverBudget226);
       if (r && typeof r.error === 'string') return r;
       const rec = Array.isArray(r) ? r[0] : null;

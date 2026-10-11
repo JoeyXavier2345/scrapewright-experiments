@@ -1340,7 +1340,15 @@ function idValueShape(value) {
   // identity token (>=12 alnum run or an id-param URL) — years/counts
   // buried in prose never rescue an id. Standalone values keep the old
   // ladder.
-  v = v.replace(/[?&]utm_[a-z0-9_]+=[^&\s]+/gi, '');
+  // 228th review #4: the tracker family is wider than utm_* — click
+  // IDs (the *clid click-tracking family) are 16+ opaque chars
+  // that would otherwise rescue prose as an identity (the 225th commit
+  // claimed this strip; the edit had silently no-opped).
+  // The *clid click-tracking family is matched by SHAPE (any short
+  // alpha prefix + clid) — vendor-neutral source, covers the whole family
+  // without naming any vendor (the 228th first cut spelled them out and
+  // tripped the repo's own no-vendor-token rule).
+  v = v.replace(/[?&](?:utm_[a-z0-9_]+|[a-z0-9_]*clid|igshid?|mibextid|mc_eid|ref_src|ref_url)=[^&\s]*/gi, '');
   if (/\S+(?:\s+\S+){5,}/.test(v)) {
     // 222nd round: the in-prose token threshold rises to >=16 — brand
     // names (txchinatours, 12) are not identities; opaque post-link
@@ -1623,7 +1631,7 @@ function identifierPoolPasses(value) {
   const v = String(value);
   if (!v) return false;
   if (/\S+(?:\s+\S+){5,}/.test(v)) {
-    const stripped = v.replace(/[?&]utm_[a-z0-9_]+=[^&\s]+/gi, '');
+    const stripped = v.replace(/[?&](?:utm_[a-z0-9_]+|[a-z0-9_]*clid|igshid?|mibextid|mc_eid|ref_src|ref_url)=[^&\s]*/gi, '');
     return /[?&]([a-z0-9_]*id|set)=/i.test(stripped) || /[A-Za-z0-9]{16,}/.test(stripped);
   }
   return idValueShape(v) !== 'prefix' && idValueShape(v) !== 'empty';
@@ -2986,23 +2994,28 @@ function stripJSComments(text) {
   if (typeof text !== 'string' || !text) return text;
   let out = '';
   let i = 0;
-  let inString = false;
+  // 228th review #9: track ALL THREE quote forms — the stripper was
+  // double-quote-blind-only, so '//' inside a single-quoted string
+  // ('/feed//items', XPath 'div//a') deleted the rest of the line from
+  // analysis text. Now load-bearing: validateChain exit declarations and
+  // the UNCERTIFIED collector/$collectUntil checks both consume this.
+  let quote = null; // null | '"' | "'" | '`'
   while (i < text.length) {
     const c = text[i];
     const next = text[i + 1];
-    if (inString) {
+    if (quote) {
       out += c;
       if (c === '\\' && next !== undefined) {
         out += next;
         i += 2;
         continue;
       }
-      if (c === '"') inString = false;
+      if (c === quote) quote = null;
       i += 1;
       continue;
     }
-    if (c === '"') {
-      inString = true;
+    if (c === '"' || c === "'" || c === '`') {
+      quote = c;
       out += c;
       i += 1;
       continue;
@@ -6061,7 +6074,11 @@ function validateChain(steps) {
   // emission rejoins the cycle on ready results and spins to the global
   // cap exactly like the incident).
   const cycleScriptOf = (m) => (typeof stripJSComments === 'function' ? stripJSComments(String((m && m.script) || '')) : String((m && m.script) || ''));
-  const exitSignalRe = /done:\s*false|ready:\s*false|generating:\s*true|loading:\s*true|failed\s*:\s*true|\berror\s*:/i;
+  // 228th review #8: complete/finished/responseReady===false are
+  //  orchestrator-whitelisted not-ready spellings (step-orchestrator
+  //  :401-404) — poll cycles exiting via them were save-rejected after
+  //  the 225th tightening made the token match binding.
+  const exitSignalRe = /done:\s*false|ready:\s*false|complete:\s*false|finished:\s*false|responseReady:\s*false|generating:\s*true|loading:\s*true|failed\s*:\s*true|\berror\s*:/i;
   const succColor = new Map();
   const succStack = [];
   const allCycles225 = [];

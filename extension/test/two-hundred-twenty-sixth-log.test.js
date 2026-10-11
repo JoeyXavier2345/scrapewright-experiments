@@ -89,9 +89,11 @@ describe('B. probe.timestamp runs the dance on a hover-aware budget (226th log)'
     const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'probe-tools.js'), 'utf8');
     const i = src.indexOf('226th log: the dance ran on the bare rail default');
     assert.ok(i > -1, 'the fix marker exists');
-    const region = src.slice(i, i + 800);
-    assert.match(region, /runSnippet\(snippet, hoverBudget226\)/, 'budget forwarded');
-    assert.match(region, /: 60000/, 'hover-aware default');
+    // 228th: the validation rework moved the pieces — pin by content, not window.
+    const region = src.slice(i - 200, i + 1100);
+    assert.match(src, /runSnippet\(snippet, hoverBudget226\)/, 'budget forwarded');
+    assert.match(region, /60000/, 'hover-aware default');
     assert.match(region, /SNIPPET_MAX_TIMEOUT_MS/, 'caller timeoutMs capped like snippet');
+    assert.match(region, /timeoutMs must be a positive number/, 'invalid timeoutMs rejected with the cap-naming error (228th #13)');
   });
 });
