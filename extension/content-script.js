@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '227-also-red-crossref';
+  const SW_BUILD_TAG = '227b-hover-journal-fields';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -5909,7 +5909,14 @@
       hovercardsCaptured: hovercardsCaptured,
       hoverFailures: hoverFailures,
       failureReasons: failureReasons,
-      observedPopoverCount: observedPopoverCount
+      observedPopoverCount: observedPopoverCount,
+      // 227th round check: the observability fields rode only the
+      // model-facing _diagnostics.hoverSummary — the SW-journal event (the
+      // human diagnostic channel) never showed the effective budget or the
+      // re-resolution counters.
+      wallBudgetMs: (_diagnostics.hoverSummary && typeof _diagnostics.hoverSummary.wallBudgetMs === 'number') ? _diagnostics.hoverSummary.wallBudgetMs : null,
+      anchorsReResolved: (_diagnostics.hoverSummary && typeof _diagnostics.hoverSummary.anchorsReResolved === 'number') ? _diagnostics.hoverSummary.anchorsReResolved : null,
+      anchorPopulationDrift: (_diagnostics.hoverSummary && typeof _diagnostics.hoverSummary.anchorPopulationDrift === 'number') ? _diagnostics.hoverSummary.anchorPopulationDrift : null
     });
     // Ninety-second-round regression (13b89ca follow-through): the legacy
     // `partialEnvelope || records` let the dual-shape detection's bare
