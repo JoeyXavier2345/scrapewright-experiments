@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '231-opentab-budget-align';
+  const SW_BUILD_TAG = '232-opentab-cancel-headroom';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -5943,15 +5943,25 @@
   // collect body (feed wait + 4 scroll/settle rounds + a 64s hover wall
   // budget) died OPEN_TAB_TIMEOUT at exactly 60s while the sub-tab kept
   // working. The local cap now MATCHES the remote budget.
-  const OPEN_TAB_LOCAL_TIMEOUT_MS = 120000; // relay cap — matches the remote executor budget (sixtieth-round)
+  // 232nd log: the relay timer starts at SEND — it includes the sub-tab
+  // LOAD (7s in the 231st session; up to 120s on slow networks per the
+  // tab-load tolerance directive), which the remote 120s exec budget does
+  // not count. Default = 120s exec + 60s load headroom.
+  const OPEN_TAB_LOCAL_TIMEOUT_MS = 180000;
 
   async function domOpenTab(url, fnStr, input, timeoutMs) {
     const budget = (typeof timeoutMs === 'number' && timeoutMs > 0)
-      ? Math.min(timeoutMs, 180000) : OPEN_TAB_LOCAL_TIMEOUT_MS;
+      ? Math.min(timeoutMs, 300000) : OPEN_TAB_LOCAL_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
       const reqId = ++openTabCounter;
       const timer = setTimeout(() => {
         if (openTabPending.delete(reqId)) {
+          // 232nd log: kill the zombie sub-tab — the 231st session's batch
+          // burned 49s past the caller's error on a tab the model had
+          // already been told failed.
+          try {
+            chrome.runtime.sendMessage({ type: 'OPEN_TAB_CANCEL', reqId: reqId }).catch(() => {});
+          } catch (_) { /* cancel is best-effort */ }
           reject(new Error('OPEN_TAB_TIMEOUT: the sub-tab execution did not answer within its budget of ' + budget + 'ms (reqId=' + reqId + ') — the pending request was cleaned up (the sub-tab may finish in the background; its diagnostics ride the journal). SIZE THE BODY to the budget: each $waitForStable can take up to 20s and a hover batch scales with containers (~8s each) — narrow the work (fewer settle rounds, maxContainers, containerRange), pass $openTab(url, fn, {timeoutMs}) to raise it (max 180000), or move the extraction to the orchestrator tab (amend targetUrl — the 204th exit) instead of retrying.'));
         }
       }, budget);

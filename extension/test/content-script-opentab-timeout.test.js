@@ -26,22 +26,26 @@ describe('B9: $openTab local timeout', () => {
     const openTabPending = new Map();
     const sent = [];
     const chrome = { runtime: { sendMessage: (msg) => { sent.push(msg); } } };
-    const factory = eval('(function (openTabPending, chrome) { let openTabCounter = 0; let currentSenderTabId = 11; const OPEN_TAB_LOCAL_TIMEOUT_MS = 60000; return (' + sliceFn('domOpenTab') + '); })');
+    // 232nd: the constant is now 180000 in source — the eval harness
+    // pins its OWN small copy so the test stays fast; the extracted
+    // domOpenTab reads the harness binding.
+    const factory = eval('(function (openTabPending, chrome) { let openTabCounter = 0; let currentSenderTabId = 11; const OPEN_TAB_LOCAL_TIMEOUT_MS = 250; return (' + sliceFn('domOpenTab') + '); })');
     return { fn: factory(openTabPending, chrome), openTabPending, sent };
   }
 
   it('times out locally, cleans the pending entry, and teaches', async () => {
     const { fn, openTabPending, sent } = buildDomOpenTab();
-    const p = fn('https://example.com/item', 'return 1;', 15); // tiny timeout override for the test
+    const p = fn('https://example.com/item', 'return 1;', null, 40); // tiny timeout override (4th arg, 232nd)
     await assert.rejects(() => p, /OPEN_TAB_TIMEOUT/);
     assert.equal(openTabPending.size, 0, 'pending entry cleaned up');
-    assert.equal(sent.length, 1);
-    assert.equal(sent[0].type, 'OPEN_TAB_EXECUTE');
+    // 232nd: the timeout also fires the zombie-kill cancel.
+    assert.equal(sent.filter((m) => m.type === 'OPEN_TAB_EXECUTE').length, 1);
+    assert.equal(sent.filter((m) => m.type === 'OPEN_TAB_CANCEL').length, 1, 'the cancel rides the same channel');
   });
 
   it('a normal reply resolves and clears the timer path (no OPEN_TAB_TIMEOUT)', async () => {
     const { fn, openTabPending } = buildDomOpenTab();
-    const p = fn('https://example.com/item', 'return 1;', 60);
+    const p = fn('https://example.com/item', 'return 1;', null, 200);
     setTimeout(() => {
       const entry = [...openTabPending.values()][0];
       entry.resolve({ title: 'ok' });

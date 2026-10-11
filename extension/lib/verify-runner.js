@@ -1124,6 +1124,19 @@
               containerZero = WU.detectContainerMatchZero(events) || null;
               if (containerZero) detectors.containerZero = containerZero;
             }
+            // 232nd log: when the failing extraction ran INSIDE $openTab,
+            // its sub-tab diagnostics (anchor censuses, hover summaries)
+            // never reach this receipt — the 231st session's v2 verify
+            // shipped all-null hover detectors while the journal showed a
+            // done event with anchorsFound 0. Name the blind spot + exits.
+            let openTabBlind232 = '';
+            try {
+              const usesOT232 = (service && Array.isArray(service.steps) ? service.steps : [])
+                .some((st) => st && typeof st.script === 'string' && /\$openTab\s*\(/.test(st.script));
+              if (usesOT232) {
+                openTabBlind232 = ' NOTE: a step wraps extraction in $openTab — the sub-tab\'s selector/hover diagnostics DO NOT reach this receipt (its batch summary rides the session journal only), so the field census below may be empty for sub-tab work. Exits: (a) run the same extraction as a probe.snippet on the research tab to see its real diagnostics; (b) move the extraction to the orchestrator tab (amend targetUrl to the sub-tab URL — the 204th exit) so diagnostics flow.';
+              }
+            } catch (_) { /* note is best-effort */ }
             let msg;
             if (census && census.length) {
               const lines = census.map((c) => {
@@ -1132,7 +1145,7 @@
               });
               msg = 'FIELD_MATCH_ZERO / EMPTY_EXTRACTION: required field(s) [' + emptyFields.join(', ') + '] are present but every extracted item has only empty values, or no items were extracted at all. Field census from SELECTOR DIAGNOSTICS — ' + lines.join('; ') + '. The containers themselves DID match, so the page has the repeating items but this field\'s sub-selector found nothing on them. Two likely mechanisms: ' +
                 '(a) POPULATION DIVERGENCE — your selectors were grounded on the research page, and a different verify INPUT (different query values) can change the result-card population entirely; first re-verify with the SAME input values that drove the research page before touching selectors; ' +
-                '(b) your own step JS filters records on this field (e.g. .filter(p => p.' + census[0].field + ' && ...)) and silently dropped every extracted record — a filtered-to-0 result with containers present is NOT extraction success: keep a RAW fallback count (records.length before filtering / $count(containerSel)) and treat filtered-to-0 as not-ready or an error, never as {done:true}.';
+                '(b) your own step JS filters records on this field (e.g. .filter(p => p.' + census[0].field + ' && ...)) and silently dropped every extracted record — a filtered-to-0 result with containers present is NOT extraction success: keep a RAW fallback count (records.length before filtering / $count(containerSel)) and treat filtered-to-0 as not-ready or an error, never as {done:true}.' + openTabBlind232;
             } else if (containerZero && containerZero.length) {
               // Twenty-fifth log: when a census hit carries a live selector
               // differential whose stripped-base count is >0, the page HAS
@@ -1154,9 +1167,9 @@
                 const weakest = diffHit.selectorDifferential[diffHit.selectorDifferential.length - 1];
                 msg = 'EMPTY_EXTRACTION / SELECTOR_OVERFILTERED: no list containers matched — ' + zLines.join('; ') +
                   '. The differential above is live evidence: the stripped base ' + JSON.stringify(String(weakest.sel).slice(0, 100)) + ' matched ' + weakest.count +
-                  ' element(s) on the verify page, so the page HAS items and YOUR OWN trailing :not()/:has() clause(s) removed every one of them. This is a selector problem — NOT an input-value problem (do not re-test other input values) and NOT a fieldMap problem. Census each clause: count the selector with and without it (or attrStats with the descendant form sel + " [attr]") and drop or invert the clause that zeroes the population — attribute markers whose names look promotional (data-ad-*) are often design-system attributes present on ALL cards, ads and organic alike.';
+                  ' element(s) on the verify page, so the page HAS items and YOUR OWN trailing :not()/:has() clause(s) removed every one of them. This is a selector problem — NOT an input-value problem (do not re-test other input values) and NOT a fieldMap problem. Census each clause: count the selector with and without it (or attrStats with the descendant form sel + " [attr]") and drop or invert the clause that zeroes the population — attribute markers whose names look promotional (data-ad-*) are often design-system attributes present on ALL cards, ads and organic alike.' + openTabBlind232;
               } else {
-                msg = 'EMPTY_EXTRACTION / INPUT_VALUE_SUSPECT: no list containers matched at all — ' + zLines.join('; ') + '. When the page shows ZERO result items, the input VALUE itself is the prime suspect: the site may simply have no content for it (an obscure keyword, an over-specific filter) — that is not a selector bug. Before touching selectors, re-run verify.run with {"input": {<param>: <a DIFFERENT, more common value>}} (e.g. a headword you saw populate the page during research). If the alternate value returns data, the step graph is fine: adopt it via service.update({testInput: {...}}) so the default input works, and note the input-value sensitivity. Only if a common value ALSO returns zero containers are the selectors/steps the suspects.';
+                msg = 'EMPTY_EXTRACTION / INPUT_VALUE_SUSPECT: no list containers matched at all — ' + zLines.join(' + openTabBlind232;; ') + '. When the page shows ZERO result items, the input VALUE itself is the prime suspect: the site may simply have no content for it (an obscure keyword, an over-specific filter) — that is not a selector bug. Before touching selectors, re-run verify.run with {"input": {<param>: <a DIFFERENT, more common value>}} (e.g. a headword you saw populate the page during research). If the alternate value returns data, the step graph is fine: adopt it via service.update({testInput: {...}}) so the default input works, and note the input-value sensitivity. Only if a common value ALSO returns zero containers are the selectors/steps the suspects.';
               }
             } else {
               msg = 'EMPTY_EXTRACTION: required field(s) [' + emptyFields.join(', ') + '] are present but every extracted item has only empty values, or no items were extracted at all. The script found list items but the field selectors are wrong.';

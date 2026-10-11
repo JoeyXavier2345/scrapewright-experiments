@@ -1345,6 +1345,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ tabId: sender.tab?.id });
     return false;
   }
+  // 232nd log: a local-relay timeout (the parent already gave up) kills the
+  // sub-tab so the zombie batch cannot keep burning a page the model was
+  // told failed.
+  if (message.type === 'OPEN_TAB_CANCEL') {
+    const zombieTabId = openTabSubTabs.get(message.reqId);
+    if (zombieTabId != null) {
+      openTabSubTabs.delete(message.reqId);
+      debugLogger.log('warn', 'background', 'OPEN_TAB_CANCEL: removing zombie sub-tab', { reqId: message.reqId, tabId: zombieTabId });
+      closeScrapeTab({ id: zombieTabId }).catch(() => {});
+    }
+    sendResponse({ ack: true });
+    return true;
+  }
   if (message.type === 'OPEN_TAB_EXECUTE') {
     // Prefer the browser-authenticated sender tab over the message field.
     // The latter is retained only for compatibility with older relay paths.
@@ -1789,6 +1802,11 @@ async function captureSubTabSnapshot(tabId, label) {
   }
 }
 
+// 232nd log: reqId -> sub-tab registry so a local-relay timeout can KILL
+// the zombie sub-tab (the 231st session's batch burned 49s past the
+// caller's error on a tab the model had already been told failed).
+const openTabSubTabs = new Map();
+
 async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId, input) {
   debugLogger.log('info', 'background', 'handleOpenTabExecute start', { url, parentTabId, reqId });
   let parentUrl = null;
@@ -1814,6 +1832,7 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId, input) {
   // RC12→RC17: popup window so the detail page actually renders its lazy-loaded
   // content (FB post comments, product reviews, etc.).
   const tab = await createScrapeTab(resolvedUrl);
+  openTabSubTabs.set(reqId, tab.id);
   // RC64: activate the sub-tab BEFORE it loads. Chrome only produces
   // compositor frames for the active tab, so a never-activated sub-tab mounts
   // the app shell (waits resolve) but never renders content — every extract
@@ -1892,6 +1911,7 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId, input) {
     }
 
     await closeScrapeTab(tab);
+    openTabSubTabs.delete(reqId); // 232nd: normal completion leaves nothing to cancel
     debugLogger.log('info', 'background', 'handleOpenTabExecute sub-tab completed', { tabId: tab.id });
     if (parentTabId) {
       chrome.tabs.sendMessage(parentTabId, {

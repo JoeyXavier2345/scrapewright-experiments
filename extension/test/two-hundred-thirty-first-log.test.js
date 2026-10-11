@@ -33,11 +33,13 @@ describe('231st round — the $openTab relay/executor budget split-brain', () =>
     const cs = fs.readFileSync(path.join(__dirname, '..', 'content-script.js'), 'utf8');
     const i = cs.indexOf('231st log: the local relay cap');
     assert.ok(i > -1, 'the fix marker exists');
-    const region = cs.slice(i, i + 700);
-    assert.match(region, /OPEN_TAB_LOCAL_TIMEOUT_MS = 120000/, 'cap raised to match the remote');
+    // 232nd: the default moved to 180000 (120s exec + load headroom —
+    // the relay timer starts at SEND and includes the sub-tab load).
+    const region = cs.slice(i - 400, i + 900);
+    assert.match(cs, /OPEN_TAB_LOCAL_TIMEOUT_MS = 180000/, 'cap carries load headroom');
     const j = cs.indexOf('async function domOpenTab');
     assert.ok(j > -1);
-    assert.match(cs.slice(j, j + 500), /Math\.min\(timeoutMs, 180000\)/, 'caller timeoutMs honored, capped at 180s');
+    assert.match(cs.slice(j, j + 500), /Math\.min\(timeoutMs, 300000\)/, 'caller timeoutMs honored, capped at 300s (232nd)');
   });
   it('the DSL forwards opts.timeoutMs through the sandbox and the relay call', () => {
     const sb = fs.readFileSync(path.join(__dirname, '..', 'sandbox.js'), 'utf8');
