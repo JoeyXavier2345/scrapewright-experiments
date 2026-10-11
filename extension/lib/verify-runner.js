@@ -2602,6 +2602,38 @@
           'written against OBSERVED values, not hoped-for shapes.' +
           (partialRouteLines.length ? ' Field routes: ' + partialRouteLines.join('; ') + '.' : '')
         : null;
+      // 227th log: one gate names one field, and the model fixed the named
+      // defect then re-verified only to discover the NEXT required-field
+      // veto — one 90s verify cycle per defect. When a veto already fired,
+      // the OTHER required-field violation classes append a one-line ALSO
+      // RED cross-reference so a single verify teaches everything to fix.
+      try {
+        if (error && typeof error.message === 'string' && error.message.indexOf('ALSO RED') === -1) {
+          const also227 = [];
+          const isReq227 = (path) => {
+            try {
+              const reqF = (typeof WU.schemaItemRequiredForPath === 'function') ? WU.schemaItemRequiredForPath(outputSchema, String(path || '')) : null;
+              return Array.isArray(reqF) && reqF.indexOf(String(path || '').split('.').pop()) !== -1;
+            } catch (_) { return false; }
+          };
+          if (!/TIME_SHAPE_VIOLATION/.test(error.message) && Array.isArray(detectors.implausibleTimeFields)) {
+            const hitT = detectors.implausibleTimeFields.find((f) => isReq227(f.path));
+            if (hitT) also227.push(hitT.path + ' ' + (hitT.implausibleCount || '?') + '/' + (hitT.nonEmpty || '?') + ' values carry no date shape (e.g. ' + JSON.stringify(String(hitT.sample || '').slice(0, 20)) + ')');
+          }
+          if (!/DUPLICATE_ID_REQUIRED/.test(error.message) && detectors.duplicateIdValues && typeof detectors.duplicateIdValues === 'object' && Array.isArray(detectors.duplicateIdValues.fields)) {
+            const hitD = detectors.duplicateIdValues.fields.find((f) => isReq227((f && (f.path || f.field)) || ''));
+            if (hitD) also227.push((hitD.path || hitD.field) + ' repeats "' + String(hitD.value || '').slice(0, 24) + '" on ' + (hitD.count || '?') + ' record(s)');
+          }
+          if (!/REQUIRED_FIELD_EMPTY/.test(error.message) && Array.isArray(detectors.partialEmptyFields)) {
+            const hitE = detectors.partialEmptyFields.find((f) => f.emptyRatio >= 1 && isReq227(f.path));
+            if (hitE) also227.push(hitE.path + ' is empty in ' + (hitE.emptyCount || '?') + '/' + (hitE.totalCount || '?') + ' records');
+          }
+          if (also227.length) {
+            error.message += ' ALSO RED — fix together, not one verify at a time: ' + also227.join('; ') + '.';
+          }
+        }
+      } catch (e227) { /* the cross-reference must never break the report */ }
+
       const report = {
         // 160th round: the EFFECTIVE input this run executed (override or
         // the confirmed testInput) — the wizard panel uses it to keep the
