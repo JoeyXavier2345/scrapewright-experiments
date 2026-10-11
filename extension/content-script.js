@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '230-discrimination-first';
+  const SW_BUILD_TAG = '231-opentab-budget-align';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -1895,7 +1895,7 @@
           // 199th log: args[2] is the step input object — it rides the relay
           // so the sub-tab execution gets __input__ (the fn is serialized by
           // source; outer closures are invisible in the sub-tab).
-          result = await domOpenTab(data.args[0], data.args[1], data.args[2]);
+          result = await domOpenTab(data.args[0], data.args[1], data.args[2], data.args[3]); // 231st: opts.timeoutMs
           break;
         case 'exists': {
           const __t0 = Date.now();
@@ -5937,15 +5937,22 @@
 
   const openTabPending = new Map();
   let openTabCounter = 0;
-  const OPEN_TAB_LOCAL_TIMEOUT_MS = 60000; // B9: local cap — background must answer within this
+  // 231st log: the local relay cap was 60s while the REMOTE executor budget
+  // is 120s (the sixtieth-round raise never reached this end) — the split
+  // brain killed bodies the harness itself teaches: the 230th session's
+  // collect body (feed wait + 4 scroll/settle rounds + a 64s hover wall
+  // budget) died OPEN_TAB_TIMEOUT at exactly 60s while the sub-tab kept
+  // working. The local cap now MATCHES the remote budget.
+  const OPEN_TAB_LOCAL_TIMEOUT_MS = 120000; // relay cap — matches the remote executor budget (sixtieth-round)
 
   async function domOpenTab(url, fnStr, input, timeoutMs) {
-    const budget = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : OPEN_TAB_LOCAL_TIMEOUT_MS;
+    const budget = (typeof timeoutMs === 'number' && timeoutMs > 0)
+      ? Math.min(timeoutMs, 180000) : OPEN_TAB_LOCAL_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
       const reqId = ++openTabCounter;
       const timer = setTimeout(() => {
         if (openTabPending.delete(reqId)) {
-          reject(new Error('OPEN_TAB_TIMEOUT: sub-tab execution did not answer within ' + budget + 'ms (reqId=' + reqId + ') — the pending request was cleaned up; check the background service worker, and do not retry in a tight loop.'));
+          reject(new Error('OPEN_TAB_TIMEOUT: the sub-tab execution did not answer within its budget of ' + budget + 'ms (reqId=' + reqId + ') — the pending request was cleaned up (the sub-tab may finish in the background; its diagnostics ride the journal). SIZE THE BODY to the budget: each $waitForStable can take up to 20s and a hover batch scales with containers (~8s each) — narrow the work (fewer settle rounds, maxContainers, containerRange), pass $openTab(url, fn, {timeoutMs}) to raise it (max 180000), or move the extraction to the orchestrator tab (amend targetUrl — the 204th exit) instead of retrying.'));
         }
       }, budget);
       // Wrap so the TAB_RESULT handler's plain resolve/reject clears the

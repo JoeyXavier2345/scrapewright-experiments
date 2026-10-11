@@ -246,10 +246,11 @@ describe('$openTab __input__ threading (source audit across the relay chain)', (
   });
 
   it('content-script: domOpenTab receives args[2] and the OPEN_TAB_EXECUTE message carries input', () => {
-    assert.match(csSrc, /domOpenTab\(data\.args\[0\]\s*,\s*data\.args\[1\]\s*,\s*data\.args\[2\]\)/,
-      'args[2] (input) forwarded');
+    // 231st: args[3] (opts.timeoutMs) joins the relay call.
+    assert.match(csSrc, /domOpenTab\(data\.args\[0\]\s*,\s*data\.args\[1\]\s*,\s*data\.args\[2\]\s*,\s*data\.args\[3\]\)/,
+      'args[2] (input) + args[3] (opts) forwarded');
     const fnStart = csSrc.indexOf('async function domOpenTab(');
-    const fnBody = fnStart === -1 ? '' : csSrc.slice(fnStart, fnStart + 1400);
+    const fnBody = fnStart === -1 ? '' : csSrc.slice(fnStart, fnStart + 2400); // 231st: the budget comment widened the fn
     assert.match(fnBody, /input/, 'domOpenTab signature/message includes input');
     assert.match(fnBody, /type:\s*'OPEN_TAB_EXECUTE'[\s\S]{0,400}input/, 'message carries input');
   });

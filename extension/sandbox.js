@@ -82,7 +82,10 @@
       '$count': (sel) => send('count', sel, []),
       '$list': (sel) => send('list', sel, []),
       '$waitForStable': (sel, opts) => send('waitForStable', sel, [opts || {}]),
-      '$openTab': (url, fn) => send('openTab', null, [url, fn ? fn.toString() : '', (input && typeof input === 'object') ? input : null]),
+      // 231st log: opts.timeoutMs forwards to the relay cap (default
+      // 120000, max 180000) — heavy bodies (settle rounds + hover batches)
+      // can opt up instead of dying at the default.
+      '$openTab': (url, fn, opts) => send('openTab', null, [url, fn ? fn.toString() : '', (input && typeof input === 'object') ? input : null, (opts && typeof opts.timeoutMs === 'number') ? opts.timeoutMs : undefined]),
       '$extractList': (containerSel, fieldMap, opts) => send('extractList', containerSel, [fieldMap, opts || {}]),
       '$extractListMulti': (containerSel, fieldMap, opts) => send('extractListMulti', containerSel, [fieldMap, opts || {}]),
       '$extractWithHover': (containerSel, fieldMap, opts) => send('extractWithHover', containerSel, [fieldMap, opts || {}]),
