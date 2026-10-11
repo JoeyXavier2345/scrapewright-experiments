@@ -786,7 +786,6 @@
           error.stepId = orchestrationError.stepId || null;
         }
       }
-
       const finalData = result ? ((result.finalResult && result.finalResult.data) || result.finalResult) : null;
 
       // 机械-语义分离（spec 3.C）：观测平权——SW 诊断里躺着的弹层捕获
@@ -817,6 +816,7 @@
             const prev = byCall.get(k);
             if (!prev) {
               byCall.set(k, { captured: captured, readFields: read, samples: (cp.samples || []).slice(0, 3) });
+
             } else {
               prev.captured += captured;
               prev.readFields = Math.max(prev.readFields, read);
@@ -1532,6 +1532,45 @@
               }
             }
           } catch (eU) { /* exemptions are best-effort */ }
+          // 233rd log: a verify that delivered ZERO records returned
+          // ok:true (certified exhaustion + maxContainers<requested skipped
+          // every arm) and became the GREEN-verified restore target — the
+          // death detail then pointed "[LAST GREEN = v1 ... restore]" at a
+          // zero-record artifact. Certification of zero is a page-supply
+          // CLAIM that belongs in renegotiation/finish disclosure, never a
+          // green verify; and when the certifying run matched a near-empty
+          // tab the certification itself is starved-tab evidence (230th
+          // directive).
+          try {
+            if (!error && detectors.countShortfall &&
+                typeof detectors.countShortfall.requested === 'number' && detectors.countShortfall.requested > 0 &&
+                typeof detectors.countShortfall.extracted === 'number' && detectors.countShortfall.extracted === 0) {
+              // 233rd: the more precise diagnosis when the required key is
+              // absent ENTIRELY (the incident's terminal step returned a
+              // different shape) — a graph fix, not a supply question.
+              try {
+                const reqA233 = (outputSchema && Array.isArray(outputSchema.required)) ? outputSchema.required.filter((k) => typeof k === 'string') : [];
+                const keysA233 = (finalData && typeof finalData === 'object' && !Array.isArray(finalData)) ? Object.keys(finalData) : [];
+                const missA233 = reqA233.filter((k) => keysA233.indexOf(k) === -1);
+                if (missA233.length && keysA233.length) {
+                  error = new Error(
+                    'RESULT_KEY_MISSING: the schema\'s required top-level key(s) [' + missA233.join(', ') + '] appear NOWHERE in the run result (result keys: [' + keysA233.join(', ') + ']) — the TERMINAL step of the chain returns a different shape, so the deployed service would answer with no [' + missA233.join(', ') + '] at all while verify says green. Fix the graph: the step that produces [' + missA233.join(', ') + '] must be the TERMINAL step (route the chain so its onSuccess is TERMINATE), or restructure so the final step assembles and returns the required shape.'
+                  );
+                }
+              } catch (_) { /* fall through to the zero message */ }
+              if (!error) {
+              const starved233 = (typeof detectors.countShortfall.maxContainers === 'number' && detectors.countShortfall.maxContainers <= 2);
+              error = new Error(
+                'ZERO_DELIVERED: ' + detectors.countShortfall.field + ' delivered 0 of ' + detectors.countShortfall.requested +
+                  ' requested' + (detectors.countShortfall.exhaustionCertified === true ? ' (an exhaustion receipt EXISTS, but ' +
+                    (starved233
+                      ? 'it was certified on a near-empty tab (' + detectors.countShortfall.maxContainers + ' container(s) matched) — that is cold-tab starvation evidence, not a page supply fact: per the 230th directive, check the record discrimination and scroll the verify tab deeper before believing a supply claim'
+                      : 'certifying zero supply is a page-supply claim, not a data verification') + ')' : '') +
+                  '. A verify that ships nothing verifies nothing: it can never be GREEN. Exits: (a) re-verify with a more common input value (INPUT_VALUE_SUSPECT — a page with genuinely zero results for this value is an input question); (b) check the container discrimination (the 230th directive: base population vs filtered); (c) renegotiate the count/contract via io.confirm — the zero-supply claim belongs THERE, disclosed, not here.'
+                  );
+              }
+            }
+          } catch (e233) { /* the zero gate must never break the report */ }
           if (!error && !usesCollectUntil222 && !sustainedPoll222 &&
               detectors.countShortfall &&
               detectors.countShortfall.severe === true &&

@@ -861,8 +861,17 @@ function buildIORenderString(inputSchema, outputSchema) {
 // that use it. max() semantics: never lower an explicit higher config.
 function hoverAwareTimeoutMs(steps, baseMs) {
   const base = Number.isFinite(baseMs) && baseMs > 0 ? baseMs : 30000;
-  const usesHoverPipeline = (steps || []).some(s => /\$extractWithHover\s*\(/.test(s.script || ''));
-  return usesHoverPipeline ? Math.max(base, 120000) : base;
+  // 233rd log: sequential $extractWithHover calls ADD their wall budgets —
+  // three calls at 25s floor each plus per-anchor dwell exceeded the flat
+  // 120s and died SANDBOX_DEADLINE. Scale by call count, capped at the
+  // relay-side 300s.
+  let calls233 = 0;
+  for (const s of (steps || [])) {
+    const m = String((s && s.script) || '').match(/\$extractWithHover\s*\(/g);
+    if (m) calls233 += m.length;
+  }
+  if (!calls233) return base;
+  return Math.min(300000, Math.max(base, 120000, calls233 * 90000));
 }
 
 // console.log 2026-08-23 (search-feed site): step 3's $clickInList clicked 0,

@@ -2392,7 +2392,8 @@
               field: factsField228,
               counts: dc225 || null
             };
-            if (state.lastVerifyOk !== false && result && result.ok) {
+            if (state.lastVerifyOk !== false && result && result.ok &&
+                delivered225 !== 0) { // 233rd: a zero-delivered verify is never the green restore target
               // 228th review #10: the green keeps its unique count too —
               // unique-vs-raw asymmetry force-rejected higher-unique reds.
               state.greenVerifyFacts = {
