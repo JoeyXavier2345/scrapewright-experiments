@@ -64,7 +64,7 @@ describe('B. supply-ceiling window — interleaved failures still count (207th l
     st = trackNearMissShortfall(st, miss(7, 3));      // 3rd shortfall in the window — FIRES here
     assert.ok(st.ceilingNote, 'window-based note fires despite interleaving');
     assert.match(st.ceilingNote, /SUPPLY CEILING/i);
-    assert.match(st.ceilingNote, /6, ?4, ?3, ?5|observed/i);
+    assert.match(st.ceilingNote, /6 of 7, 4 of 7, 3 of 7|6, ?4, ?3, ?5/i); // 230th: rendered as 'N of M' pairs
     assert.match(st.ceilingNote, /io\.confirm/);
     assert.match(st.ceilingNote, /collectUntil|certif/i);
   });

@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '229-renegotiation-exit';
+  const SW_BUILD_TAG = '230-discrimination-first';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -125,7 +125,10 @@
       if (spec && typeof spec === 'object' && spec.multi === true) {
         return readFieldAll(container, spec);
       }
-      const sel = typeof spec === 'string' ? spec : spec.selector;
+      // 230th (mirror): '.' means the container itself (the live model
+      // spelled self this way twice).
+      let sel = typeof spec === 'string' ? spec : spec.selector;
+      if (sel === '.') sel = '';
       const attr = typeof spec === 'string' ? null : spec.attr;
       // Thirty-third log D1 (mirrors lib/list-extract-ops.js): labelledby
       // resolves the ARIA reference on the match — the anti-scrape decoy in
@@ -160,7 +163,10 @@
     }
 
     function readFieldAll(container, spec) {
-      const sel = typeof spec === 'string' ? spec : spec.selector;
+      // 230th (mirror): '.' means the container itself (the live model
+      // spelled self this way twice).
+      let sel = typeof spec === 'string' ? spec : spec.selector;
+      if (sel === '.') sel = '';
       const attr = typeof spec === 'string' ? null : spec.attr;
       const lb = (spec && typeof spec === 'object') ? spec.labelledby : undefined;
       const refAttr = lb === true ? 'aria-labelledby'

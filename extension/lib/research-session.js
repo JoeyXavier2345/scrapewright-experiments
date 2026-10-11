@@ -246,7 +246,11 @@
         } else {
           st.ceilingNote = 'SUPPLY CEILING: ' + uncert.length + ' of the last ' + st.window.length + ' verifies shipped below the requested count (delivered ' +
             uncert.map((x) => x.extracted + ' of ' + x.requested).join(', ') +
-            ') — the page SUPPLY on fresh tabs is the ceiling, and interleaved other errors do not change that. Exits: (a) renegotiate the COUNT via io.confirm — propose a testInput count at/below the observed supply (the panel test values are user-editable; the 132nd disclosure will name the lowering); (b) $collectUntil-certify the ceiling on a verify run and ship the certified shortfall DISCLOSED; (c) only if the identity census shows unique records your assembly dropped, fix the assembly. Another same-count contract does not move the wall.';
+            '). 230th directive (user ground truth: scrolling loads MORE posts — a repeated shortfall is a DISCRIMINATION problem until proven otherwise): exits IN ORDER — ' +
+            '(a) CHECK YOUR RECORD DISCRIMINATION FIRST: count the BASE container population (probe.count of the bare feed selector) vs how many containers carry your id/URL shapes; distinct-ids far below base-containers means YOUR FILTER is dropping real posts (link shapes vary: re-census the href families on a verify tab before trusting the filter), not the page refusing to supply them. ' +
+            '(b) WHEN THE ORGANIC-VS-AD SPLIT IS UNCERTAIN, ASK THE USER TO MARK IT: annotate.request the population (fields omitted, containerSel set) — the page tab comes forward, hovering highlights elements, clicking marks; the user points at the real posts once and your selector is grounded. Do NOT guess the split from card shape alone. ' +
+            '(c) SCROLL-CERTIFY before any ceiling claim: $collectUntil on the verify tab to targetCount (stall bar >=3 rounds) — an uncertified count is never a page fact. ' +
+            '(d) ONLY THEN renegotiate the count via io.confirm WITH the new testInput (the user owns the contract); or ship the certified shortfall disclosed. Another same-count contract does not move the wall — and neither does a wrong filter.';
         }
         return st;
       }
@@ -456,6 +460,13 @@
     const observationLog = Obs.createObservationLog(cfg.seed && cfg.seed.observation);
     const ledger = LedgerLib.createFindingsLedger(cfg.seed && cfg.seed.ledger);
     let lastVerifyFailingFields171 = null;
+    // 230th log (user ground truth: scrolling ALWAYS loads more posts): the
+    // session's best research-tab collection count — to contradict wrong
+    // "supply ceiling" diagnoses (the 229th session read 6 verify-tab
+    // containers/1 distinct id as a page supply fact while its own research
+    // tab had collected 15-23 cards).
+    let researchSupplyHigh230 = 0;
+
     let lastVerifyErrorPrefix171 = '';
     // 197th round (spec §3): true when the last captured verify.run carried
     // environmental wait markers (screen lock / display-off recovery) — its
@@ -2178,6 +2189,13 @@
           const __parkedBeforeDispatch = parkedByTool.get(turn.tool) || 0;
           const __envBeforeDispatch = environmentalWaitTotal;
           let result = await dispatchTool(turn.tool, turn.args);
+          // 230th: research-supply high-water mark from scroll-family receipts.
+          try {
+            const r230 = (result && typeof result === 'object') ? result : null;
+            const n230 = (r230 && (typeof r230.collected === 'number' ? r230.collected :
+                          (typeof r230.finalCount === 'number' ? r230.finalCount : null)));
+            if (n230 && n230 > researchSupplyHigh230 && !/verify/.test(String(turn.tool))) researchSupplyHigh230 = n230;
+          } catch (_) { /* high-water mark is best-effort */ }
           __currentDispatchTool = null;
           // 197th round (spec §5): an op that waited out a locked/idle screen
           // reports environmental.waitedMs on its receipt. Book it once per
@@ -2323,7 +2341,20 @@
               state.transcript.push({ kind: 'system', text: state.nearMissShortfall.note });
             }
             if (state.nearMissShortfall && state.nearMissShortfall.ceilingNote) {
-              state.transcript.push({ kind: 'system', text: state.nearMissShortfall.ceilingNote });
+              let note230 = state.nearMissShortfall.ceilingNote;
+              // 230th: the in-session contradiction — the model's own
+              // research-tab collections gathered far more cards than the
+              // verify census reports. Name it; it kills the wrong
+              // "supply" reading mechanically.
+              try {
+                const lastCs230 = (state.lastVerifyFacts && typeof state.lastVerifyFacts.delivered === 'number') ? state.lastVerifyFacts.delivered : null;
+                if (researchSupplyHigh230 > 0 && lastCs230 !== null && researchSupplyHigh230 >= lastCs230 * 2) {
+                  note230 += ' CONTRADICTION IN YOUR OWN RECEIPTS: research-tab scrolling collected ' + researchSupplyHigh230 +
+                    ' cards this session while the verify run delivered ' + lastCs230 +
+                    ' — the page DOES supply more under scrolling; the shortfall is your discrimination or scroll depth on the verify tab, not the page. Fix (a)/(c) before touching the count.';
+                }
+              } catch (_) { /* contradiction line is best-effort */ }
+              state.transcript.push({ kind: 'system', text: note230 });
             }
             const cs = (result && result.detectors && result.detectors.countShortfall) ? result.detectors.countShortfall : null;
             // 221st round: numeric delivered-count facts for the finish-gate

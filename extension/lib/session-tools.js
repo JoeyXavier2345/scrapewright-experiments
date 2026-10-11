@@ -2206,6 +2206,19 @@
       // {{param}} segments as wildcards, or the two share a named directory
       // (the 204th variant-reopen class — /search/top vs /search/posts);
       // detail pages under other directories pass.
+      // 230th log: selector:'.' for "the container itself" — the live model
+      // wrote it in two consecutive artifact versions and it surfaced only
+      // at VERIFY. The DSL now MAPS '.' to self at read time, but teach the
+      // canonical spelling so authors see it before the artifact lands.
+      try {
+        for (const sDot of steps) {
+          const srcDot = String((sDot && sDot.script) || '');
+          if (!/selector\s*:\s*['"`\.]['"`]/.test(srcDot) && !/selector\s*:\s*['"`]\./.test(srcDot)) continue;
+          if (!/['"`]\.[ '"`]/.test(srcDot)) continue;
+          staticLint.push('FIELD_SELECTOR_DOT: step "' + String((sDot && sDot.id) || '') + '" uses selector \'.\' — the harness maps it to the container itself, but the canonical spelling is an EMPTY string (selector:\'\') or a real sub-selector. Author with the canonical form.');
+          break;
+        }
+      } catch (eDot) { /* advisory lint must never block */ }
       try {
         const svcTuL = (typeof d.getDraftService === 'function') ? d.getDraftService() : null;
         const svcOriginTu = (function () {

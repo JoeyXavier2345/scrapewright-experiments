@@ -232,7 +232,11 @@ function readField(container, spec) {
   if (spec && typeof spec === 'object' && spec.multi === true) {
     return readFieldAll(container, spec);
   }
-  const sel = typeof spec === 'string' ? spec : spec.selector;
+  let sel = typeof spec === 'string' ? spec : spec.selector;
+  // 230th log: '.' is the natural spelling for "the container itself" and
+  // the live model wrote it in two consecutive artifact versions — invalid
+  // CSS to querySelector, surfaced only at VERIFY. Map it to self ('').
+  if (sel === '.') sel = '';
   const attr = typeof spec === 'string' ? null : spec.attr;
   // labelledby takes precedence over attr when both are present: reading the
   // raw attribute value back is an id list, never the human text.
@@ -274,7 +278,8 @@ function readField(container, spec) {
 // only, so the LLM kept picking the author link as publishTime and producing
 // empty timestamps across every iteration.
 function readFieldAll(container, spec) {
-  const sel = typeof spec === 'string' ? spec : spec.selector;
+  let sel = typeof spec === 'string' ? spec : spec.selector;
+  if (sel === '.') sel = ''; // 230th: '.' means the container itself (mirror of readField)
   const attr = typeof spec === 'string' ? null : spec.attr;
   const refAttr = typeof spec === 'string' ? null : normalizeLabelledby(spec);
   if (!sel) {
