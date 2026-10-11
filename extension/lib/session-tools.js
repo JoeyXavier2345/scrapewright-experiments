@@ -656,10 +656,21 @@
         if (proposedTestInput) ioConfirmedTestInput = proposedTestInput;
         if (ioConfirmedTestInput) ioConfirmedTestInputShape = incomingInputShape;
         const recoveredAttached = attachConfirmedSchemas(ioConfirmedSchemas);
+        // 229th log: the renegotiation dead-end. The endgame model wanted to
+        // lower the contracted count toward the observed supply, had its
+        // service.update({testInput}) rejected as TEST_INPUT_UNCONFIRMED,
+        // then re-proposed io.confirm WITHOUT testInput — this receipt said
+        // only "same contract, proceeding", so the model never learned the
+        // exit is to include the NEW testInput HERE. Name it.
+        const renegotiationNote229 = (a.testInput == null && priorTestInput)
+          ? ' — NOTE: this call carried NO testInput, so the confirmed test values (' + JSON.stringify(priorTestInput) +
+            ') remain in force; verify.run and service.update({testInput}) with different values stay TEST_INPUT_UNCONFIRMED. To renegotiate test VALUES (e.g. lower count toward the observed page supply), send io.confirm AGAIN WITH the new testInput {…} — the user confirms the amended values once and the new contract sticks.'
+          : '';
         return {
           confirmed: true,
           note: 'contract already confirmed — same contract, proceeding without re-prompting the user'
             + (recoveredAttached ? '; recovered schemas applied to the current artifact' : '')
+            + renegotiationNote229
         };
       }
       const sess = (ctx && ctx.session) || null;
