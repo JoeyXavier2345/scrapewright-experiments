@@ -673,7 +673,8 @@ describe('budgets and breakers', () => {
       'nineteenth log: artifact v1 landed at 55/60 — the no-artifact 75% advisory escalates to a direct order');
     assert.match(advisories[3].text, /90% of the turn budget spent: 18 of 20/);
     assert.match(advisories[3].text, /FINALIZE/);
-    assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'contract-delay', 'finalize', 'first-verify-early', 'half']);
+    // 243rd round: low-turn-budget joins for below-default fixtures.
+    assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'contract-delay', 'finalize', 'first-verify-early', 'half', 'low-turn-budget']);
     const cd175 = st.transcript.find(e => e.kind === 'system' && /CONTRACT DELAY: turn 12 of 20/.test(e.text || ''));
     assert.ok(cd175, 'contract-delay fired at turn 12 alongside the bucket family');
   });
@@ -735,7 +736,7 @@ describe('budgets and breakers', () => {
     assert.match(advisories[0].text, /45% of the turn budget spent: 16 of 20/);
     assert.match(advisories[1].text, /75% of the turn budget spent: 16 of 20/);
     assert.match(advisories[2].text, /90% of the turn budget spent: 18 of 20/);
-    assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'contract-delay', 'finalize', 'first-verify-early', 'half']);
+    assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'contract-delay', 'finalize', 'first-verify-early', 'half', 'low-turn-budget']);
   });
 });
 

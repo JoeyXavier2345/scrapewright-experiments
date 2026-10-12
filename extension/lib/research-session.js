@@ -1758,6 +1758,25 @@
       state.stopped = null;
       segmentStart = now();
       emit('session_start', { sessionId: state.id, resuming: resuming });
+      // 243rd log: surface a BELOW-DEFAULT turn budget at start — three
+      // consecutive live sessions (239/241/243) died at the user-persisted
+      // 35-turn cap mid-convergence (fix in flight, artifact left
+      // unverified) while the engine default is 60. Surfacing, never
+      // overriding: the model gets convergence-preserving guidance, the
+      // stop detail already names the remedy, and the advisory line lands
+      // in the session log for post-mortems.
+      try {
+        if (Number.isFinite(budgets.maxTurns) && budgets.maxTurns < DEFAULTS.budgets.maxTurns) {
+          if (!Array.isArray(state.budgetAdvisories)) state.budgetAdvisories = [];
+          if (state.budgetAdvisories.indexOf('low-turn-budget') === -1) {
+            state.budgetAdvisories.push('low-turn-budget');
+            state.transcript.push({ kind: 'system', text:
+              'TURN BUDGET: this session runs maxTurns=' + budgets.maxTurns + ' (below the engine default ' + DEFAULTS.budgets.maxTurns +
+              ') — recent sessions on hostile pages died at the cap with the fix in flight and the artifact unverified. Prefer convergence-preserving moves: batch fixes into one service.update, verify once per shape change, renegotiate uncertain fields via io.confirm EARLY rather than researching them, and name this budget in the finish summary if it binds.' });
+            emit('budget_advisory', { key: 'low-turn-budget', maxTurns: budgets.maxTurns, defaultMaxTurns: DEFAULTS.budgets.maxTurns });
+          }
+        }
+      } catch (e243) { /* the low-budget advisory is best-effort */ }
       let report = null;
       // Sixty-eighth log F2: consecutive-identical-failure tracker. The
       // incident resent the SAME failing 33-container $extractWithHover
