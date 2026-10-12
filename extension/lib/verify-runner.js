@@ -2576,9 +2576,19 @@
                   : c.path + ' ships ' + c.rel + ' relative + ' + c.part + ' partial-no-year record(s) (e.g. ' +
                     JSON.stringify(String(c.sample || '').slice(0, 24)) + ')' +
                     (mixed237 ? ' while ' + full237 + ' record(s) carry FULL absolutes — the stragglers are capture failures, not page truth' : '');
-                const fix237 = capturedAbs237
-                  ? 'Your own hover captures ALREADY contain a full absolute ("' + capturedAbs237 + '" — picked popovers and rejectedAddedTexts alike): bind the field in the SAME $extractWithHover call via read:\'hoverPopover\' with a year-carrying match regex — no new hovers needed.'
-                  : 'Re-run $timestamp with anchorSel narrowed to the failing card (or read:\'hoverPopover\' with a year-carrying match) until every record carries a full absolute.';
+            const fix237 = capturedAbs237
+              ? 'Your own hover captures ALREADY contain a full absolute ("' + capturedAbs237 + '" — picked popovers and rejectedAddedTexts alike): bind the field in the SAME $extractWithHover call via read:\'hoverPopover\' with a year-carrying match regex — no new hovers needed.'
+              : 'Re-run $timestamp with anchorSel narrowed to the failing card (or read:\'hoverPopover\' with a year-carrying match) until every record carries a full absolute.' +
+                // 239th log: the incident model narrowed its anchorSel to the
+                // AUTHOR families only ('h2 a, h3 a') after the over-broad
+                // union burned its budget — the TIME anchor was never hovered,
+                // the red looked unanswerable, and the finish claimed "the
+                // page cannot provide it". When hovercards WERE captured but
+                // none carries ANY date-shaped text, say WHY: the union has
+                // no time-anchor family.
+                ((!capturedAbs237 && inRunCaptured > 0 && !allSamples.some(sampleDateShape))
+                  ? ' None of this run\'s ' + inRunCaptured + ' captured hovercard(s) carries ANY date-shaped text — the anchorSel hovers no TIME anchor at all (author/card anchors only): ADD the time-anchor family to the union (the anchor census in the HOVER_ANCHORS_BLIND receipt / probe.census {hover:true} names the families present — mind the descendant direction: the carrier may be the labelled span itself, not a wrapping link).'
+                  : '');
                 const gateMsg237 = 'REQUIREMENT_TIME_SOURCE_DROPPED: the requirement designates the hover-popover timestamp as the time source (时间戳悬浮窗 → 发帖时间), but ' +
                   detail237 + '. Disclosure alone is not a sanctioned exit when the requirement names the source. Fix: ' + fix237 +
                   ' Or renegotiate via io.confirm.';

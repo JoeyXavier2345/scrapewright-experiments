@@ -2100,6 +2100,27 @@
               // from an override that SURVIVED the evidence check.
               overrideUnchecked228 = true;
             }
+            // 239th log: finish on a REQUIREMENT-mandate red with NO green
+            // anywhere. The incident session (rs-1791805627028-1) finished
+            // after three reds asserting "页面上确实取不到" — while its own
+            // receipt carried a MIXED population (1 full absolute + 4
+            // relative = capture failures, not page truth) and the user was
+            // never asked. A requirement-mandated data/source is the USER's
+            // to drop, not the model's to conclude: block ONCE (the second
+            // finish is honored through the honest-note path), exits
+            // spelled out.
+            if (state.lastVerifyOk === false &&
+                !state.greenArtifactVersion &&
+                turn.finish.shipRedArtifact !== true &&
+                !state.requirementFinishBlocked239 &&
+                /REQUIREMENT_[A-Z_]+/.test(String(state.lastVerifyErrorText239 || ''))) {
+              state.requirementFinishBlocked239 = true;
+              state.transcript.push({ kind: 'system', text:
+                'FINISH BLOCKED (requirement mandate): the last verify ran RED on a REQUIREMENT_* gate — the requirement itself mandates this data/source, and a "the page cannot provide it" reading is contradicted by the verify\'s own receipts (a MIXED population or a captured-but-unbound absolute is a capture failure, not page truth). Either (a) renegotiate via io.confirm — the USER decides whether the mandate drops; (b) keep fixing — the red names the exact exit (re-run the receipt\'s first fix move); or (c) finish again — the second finish is honored as an explicit best-effort ship with the disclosures.' });
+              state.spend.finishBlocks = (state.spend.finishBlocks || 0) + 1;
+              await persist();
+              continue;
+            }
             if (state.lastVerifyOk === false &&
                 state.greenArtifactVersion &&
                 !state.greenRestoredCurrent &&
@@ -2331,6 +2352,12 @@
               state.priorVerifyReport = result;
             }
             state.lastVerifyOk = !!(result && typeof result === 'object' && result.ok === true);
+            // 239th log: the finish gate needs the last red's error text to
+            // recognize REQUIREMENT_* mandate gates (the incident model
+            // finished asserting "the page genuinely cannot provide it"
+            // while its own receipts said capture-failure).
+            state.lastVerifyErrorText239 = (result && result.error && result.error.message)
+              ? String(result.error.message).slice(0, 600) : null;
             // 129th-round review fix: green-only finalResult snapshot for
             // the same-site seed (see the state defaults). The report's
             // finalResult is the context-diet-sampled copy (3 records,
