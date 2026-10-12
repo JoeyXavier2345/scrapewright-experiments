@@ -1960,14 +1960,22 @@
                   const REL_AGE = /\b(?:seconds?|minutes?|hours?|hrs?|days?|weeks?|months?|years?)\s+ago\b|\byesterday\b|\btoday\b|just now|\d+\s*(?:min|sec|hr|h)\b/i;
                   return !hasDateComp && !REL_AGE.test(v);
                 });
-                if (noDateShapeT.length && !error) {
+                if (noDateShapeT.length) {
+                  // 241st log: this was an `!error`-only gate — the incident's
+                  // v4 shipped postTime 'Ad','Ad','Ad' while an earlier gate
+                  // (REQUIREMENT_EXPAND_DROPPED) had already set the error, so
+                  // the decoy read stayed NAMELESS in the red the model read.
+                  // Compose like the rest of the family: append, don't skip.
                   const bT = noDateShapeT[0];
-                  error = new Error(
-                    'TIME_SHAPE_VIOLATION: ' + rowT.path + ' record #' + bT.index + ' carries "' + String(bT.value).slice(0, 40) +
+                  const shapeMsgT = 'TIME_SHAPE_VIOLATION: ' + rowT.path + ' record #' + bT.index + ' carries "' + String(bT.value).slice(0, 40) +
                     '" — a REQUIRED absolute-time field must carry a full date (Month D, YYYY at H:MM); emoji-panel labels, video durations, and page-chrome text are anchor-selector misses. ' +
                     'Tighten the anchor to the timestamp element itself and filter candidates by date shape (the match: regex in the fieldMap or a candidates filter in the assembly). ' +
-                    'Renegotiate via io.confirm only if the page truly has no absolute timestamp for these cards.'
-                  );
+                    'Renegotiate via io.confirm only if the page truly has no absolute timestamp for these cards.';
+                  if (!error) {
+                    error = new Error(shapeMsgT);
+                  } else if (!/TIME_SHAPE_VIOLATION/.test(String(error.message))) {
+                    error = new Error(error.message + ' ALSO RED — fix together, not one verify at a time: ' + shapeMsgT);
+                  }
                   break;
                 }
               }
@@ -2408,7 +2416,15 @@
           ((typeof WU.schemaItemRequiredForPath === 'function')
             ? (WU.schemaItemRequiredForPath(outputSchema, String(pe.path || '')) || []).indexOf(String(pe.field)) !== -1
             : true));
-      if ((Array.isArray(detectors.relativeTimestamps) && detectors.relativeTimestamps.length) || emptyTimeRequired130.length) {
+      // 241st log: the block also opens for IMPLAUSIBLE required time rows
+      // (postTime 'Ad','Ad','Ad' — the decoy read) — they are neither
+      // relative (detectRelativeTimestamps needs date shape) nor empty, so
+      // the block stayed shut and Gate B never saw them.
+      const implausibleRequired241 = (Array.isArray(detectors.implausibleTimeFields) ? detectors.implausibleTimeFields : [])
+        .filter((itf) => itf && ((typeof WU.schemaItemRequiredForPath === 'function')
+          ? (WU.schemaItemRequiredForPath(outputSchema, String(itf.path || '')) || []).indexOf(String(itf.field)) !== -1
+          : true));
+      if ((Array.isArray(detectors.relativeTimestamps) && detectors.relativeTimestamps.length) || emptyTimeRequired130.length || implausibleRequired241.length) {
         // Eighty-seventh log: the census was structurally blind — it scanned
         // only THIS run's events, so research-tab probe.timestamp receipts
         // were invisible (the model could never unlock the documented
@@ -2579,14 +2595,34 @@
             }
             const candidates237 = (Array.isArray(detectors.relativeTimestamps) ? detectors.relativeTimestamps : [])
               .map((e) => e && { path: e.path || e.field, field: e.field, rel: e.relativeCount || 0, part: e.partialAbsoluteCount || 0, total: e.totalRecords || 0, sample: e.sampleValue })
-              .concat(emptyTimeRequired130.map((pe) => ({ path: pe.path, field: pe.field, rel: 0, part: 0, total: 0, empty: true })));
+              .concat(emptyTimeRequired130.map((pe) => ({ path: pe.path, field: pe.field, rel: 0, part: 0, total: 0, empty: true })))
+              // 241st log: postTime shipped 'Ad','Ad','Ad' — a decoy read (the
+              // ad-account label where the time element lives). Implausible
+              // (non-date) values on a required time field are neither
+              // relative nor empty, so they rode through Gate B with only the
+              // report-only implausible lane while the requirement's popover
+              // source was never bound. They are candidates of the same
+              // violation: the designated source was dropped for a decoy.
+              .concat((Array.isArray(detectors.implausibleTimeFields) ? detectors.implausibleTimeFields : [])
+                .filter((itf) => !itf || !emptyTimeRequired130.some((pe) => pe.path === itf.path))
+                .map((itf) => {
+                  let itfRequired241 = null;
+                  if (typeof WU.schemaItemRequiredForPath === 'function') {
+                    itfRequired241 = WU.schemaItemRequiredForPath(outputSchema, String(itf.path || ''));
+                  }
+                  if (!itfRequired241 || itfRequired241.indexOf(String(itf.field)) === -1) return null;
+                  return { path: itf.path, field: itf.field, rel: 1, part: 0, total: 1, sample: itf.sampleValue, impl: true };
+                })
+                .filter(Boolean));
             for (const c of candidates237) {
               if (!c || !c.path) continue;
               const full237 = (c.total || 0) - c.rel - c.part;
               const mixed237 = full237 > 0 && (c.rel > 0 || c.part > 0);
               const captureProof237 = !!capturedAbs237 || !!(sessionEv && sessionEv.lastFullAbsolute);
-              if ((c.rel > 0 || c.part > 0 || c.empty) && (mixed237 || captureProof237)) {
-                const detail237 = c.empty
+              if ((c.rel > 0 || c.part > 0 || c.empty || c.impl) && (mixed237 || captureProof237 || c.impl)) {
+                const detail237 = c.impl
+                  ? c.path + ' ships NON-DATE values (e.g. ' + JSON.stringify(String(c.sample || '').slice(0, 24)) + ') — a decoy read on the wrong element; the popover time source was never bound'
+                  : c.empty
                   ? c.path + ' is EMPTY in every record'
                   : c.path + ' ships ' + c.rel + ' relative + ' + c.part + ' partial-no-year record(s) (e.g. ' +
                     JSON.stringify(String(c.sample || '').slice(0, 24)) + ')' +
@@ -2884,8 +2920,12 @@
       // veto — one 90s verify cycle per defect. When a veto already fired,
       // the OTHER required-field violation classes append a one-line ALSO
       // RED cross-reference so a single verify teaches everything to fix.
+      // 241st log: the outer "message has no ALSO RED yet" skip is GONE —
+      // the TIME_SHAPE composition appends ALSO RED first, and the skip let
+      // the remaining classes (duplicate id, required-empty) ride NOTHING.
+      // The per-lane !/GATE/ guards below dedupe against the message.
       try {
-        if (error && typeof error.message === 'string' && error.message.indexOf('ALSO RED') === -1) {
+        if (error && typeof error.message === 'string') {
           const also227 = [];
           const isReq227 = (path) => {
             try {
@@ -2909,7 +2949,11 @@
             if (hitE) also227.push(hitE.path + ' is empty in ' + (hitE.emptyCount || '?') + '/' + (hitE.totalCount || '?') + ' records');
           }
           if (also227.length) {
-            error.message += ' ALSO RED — fix together, not one verify at a time: ' + also227.join('; ') + '.';
+            // 241st: compose under an existing ALSO RED instead of skipping.
+            const sep227 = error.message.indexOf('ALSO RED') === -1
+              ? ' ALSO RED — fix together, not one verify at a time: '
+              : ' AND ALSO RED: ';
+            error.message += sep227 + also227.join('; ') + '.';
           }
         }
       } catch (e227) { /* the cross-reference must never break the report */ }

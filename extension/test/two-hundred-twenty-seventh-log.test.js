@@ -59,7 +59,10 @@ describe('227th round — one verify teaches ALL required-field vetoes', () => {
     assert.equal(out.report.ok, false);
     assert.match(out.report.error.message, /DUPLICATE_ID_REQUIRED/);
     assert.match(out.report.error.message, /ALSO RED — fix together/);
-    assert.match(out.report.error.message, /posts\.postTime 6\/6 values carry no date shape/);
+    // 241st round: the implausible-time cross-reference now rides as the
+    // composed TIME_SHAPE_VIOLATION gate (full decoy-read teaching) instead
+    // of the old one-line census — same class coverage, richer exit.
+    assert.match(out.report.error.message, /TIME_SHAPE_VIOLATION: posts\.postTime/);
     assert.match(out.report.error.message, /"Ad"/);
   });
   it('when the time veto fires first, the duplicate id rides the cross-reference', async () => {
