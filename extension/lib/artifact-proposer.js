@@ -35,4 +35,148 @@ function parseRequirementClauses(requirementText) {
   };
 }
 
-module.exports = { parseRequirementClauses };
+// Web-generic bootstrap containers (ARIA conventions only — tried in order
+// by the sweep until one counts 3..200 cards).
+const BOOTSTRAP_CONTAINERS_246 = ['[role=article]', 'div[role=feed] > div', 'article', 'li'];
+const VOCAB_SLOT_246 = [
+  ['like', 'likeCount'], ['comment', 'commentCount'], ['share', 'shareCount'],
+  ['forward', 'shareCount'], ['time', 'postTime'], ['date', 'postTime'],
+  ['url', 'postUrl'], ['link', 'postUrl'], ['content', 'content'], ['text', 'content'],
+  ['media', 'mediaUrls'], ['image', 'mediaUrls'], ['photo', 'mediaUrls'], ['video', 'mediaUrls'],
+  ['html', 'htmlSnippet'], ['snippet', 'htmlSnippet'], ['id', 'postId']
+];
+
+function schemaItemFields_246(outputSchema) {
+  try {
+    const props = (outputSchema && outputSchema.properties) || {};
+    for (const k of Object.keys(props)) {
+      const p = props[k];
+      if (p && p.type === 'array' && p.items && p.items.properties) {
+        return { arrayKey: k, fields: Object.keys(p.items.properties), required: (p.items.required || []) };
+      }
+    }
+  } catch (e) { /* best-effort */ }
+  return null;
+}
+
+function laneTop_246(lanes, type) {
+  try {
+    const arr = (lanes && Array.isArray(lanes[type])) ? lanes[type] : [];
+    return arr.length ? arr[0] : null; // lanes arrive coverage-sorted
+  } catch (e) { return null; }
+}
+
+function escRe_246(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+function synthesizeFromEvidence(pack, requirementText, outputSchema) {
+  const clauses = parseRequirementClauses(requirementText);
+  const census = (pack && pack.census) || null;
+  const unfilled = [];
+  const urlLane = census ? laneTop_246(census.lanes, 'url') : null;
+  const timeLane = census ? laneTop_246(census.lanes, 'time') : null;
+  const countLane = census ? laneTop_246(census.lanes, 'count') : null;
+  const textLane = census ? laneTop_246(census.lanes, 'text') : null;
+  const hrefTokens = (census && Array.isArray(census.hrefIdentity)) ? census.hrefIdentity.map((h) => h.token) : [];
+
+  const baseCard = (census && census.containerSel) || BOOTSTRAP_CONTAINERS_246[0];
+  const identitySel = urlLane ? urlLane.selector : null;
+  const CARD = identitySel ? baseCard + ':has(' + identitySel + ')' : baseCard;
+  if (!identitySel) unfilled.push({ slot: 'postUrl', reason: 'no url-like census lane — the population filter and the link field have no measured selector; run probe.census or hand-bind' });
+
+  // Identity regex DERIVED from the page's own href-identity tokens (red line:
+  // no vendor tokens — the page census names the id parameter). The emitted
+  // string must carry ONE backslash before w so the generated script's regex
+  // reads \w (word chars), matching the single-level fallback form below.
+  const idRe = hrefTokens.length
+    ? '/(?:' + hrefTokens.map(escRe_246).join('=|') + '=)(\\w{3,})/'
+    : '/[?&]([A-Za-z0-9_-]{6,})/';
+
+  const steps = [];
+  steps.push({ id: 'wait', name: 'wait for cards', script: 'await $wait(' + JSON.stringify(CARD) + ', 3000);\nreturn { done: true };', onSuccess: clauses.scroll ? 'collect' : 'extract', onFailure: 'TERMINATE', maxIterations: 1 });
+  if (clauses.scroll) {
+    steps.push({
+      id: 'collect', name: 'scroll until enough cards', maxIterations: 15,
+      script: 'const CARD = ' + JSON.stringify(CARD) + ';\nconst r = await $collectUntil(CARD, { targetCount: __input__.count || 5, idAttr: \'href\' });\nreturn { done: true, count: r.count, certified: r.certified || null };',
+      onSuccess: 'extract', onFailure: 'extract'
+    });
+  }
+  if (clauses.expand) {
+    steps.push({
+      id: 'expand', name: 'expand collapsed text', maxIterations: 1,
+      script: 'await $clickInList(' + JSON.stringify(CARD) + ', \'div[role=button], span[role=button]\', { textFilter: /see more|展开/i, delayMs: 400 }).catch(function () {});\nawait new Promise(function (r) { setTimeout(r, 1200); });\nreturn { done: true };',
+      onSuccess: 'extract', onFailure: 'extract'
+    });
+  }
+
+  const item = schemaItemFields_246(outputSchema);
+  const schemaFields = item ? item.fields : [];
+  const slotFor = (laneKind) => {
+    for (const pair of VOCAB_SLOT_246) { if (pair[0] === laneKind && schemaFields.indexOf(pair[1]) > -1) return pair[1]; }
+    return null;
+  };
+  const urlSlot = slotFor('url') || 'postUrl';
+  const fm = [];
+  if (identitySel) fm.push(urlSlot + ': { selector: ' + JSON.stringify(identitySel) + ', attr: \'href\' }');
+  const timeFm = [];
+  if (timeLane) {
+    timeFm.push('tsAria: { selector: ' + JSON.stringify(timeLane.selector) + ', attr: \'aria-label\' }');
+    timeFm.push('tsLabel: { selector: ' + JSON.stringify(timeLane.selector) + ', labelledby: true }');
+    timeFm.push('tsHover: { selector: ' + JSON.stringify(timeLane.selector) + ', read: \'hoverPopover\', match: /(19|20)\\d{2}/ }');
+  } else {
+    unfilled.push({ slot: 'postTime', reason: 'no time-like census lane — run probe.census {hover:true} or bind the timestamp anchor by hand' });
+  }
+  if (countLane) {
+    fm.push('labels: { selector: \'[aria-label]\', attr: \'aria-label\', multi: true }');
+  } else {
+    for (const s of ['likeCount', 'commentCount', 'shareCount']) {
+      if (schemaFields.indexOf(s) > -1) unfilled.push({ slot: s, reason: 'no count-like census lane on this page — renegotiate via io.confirm or bind the count carrier by hand' });
+    }
+  }
+  if (textLane) {
+    fm.push('content: { selector: ' + JSON.stringify(textLane.selector) + ' }');
+    fm.push('htmlSnippet: { selector: ' + JSON.stringify(textLane.selector) + ', attr: \'outerHTML\' }');
+  } else if (schemaFields.indexOf('content') > -1) {
+    unfilled.push({ slot: 'content', reason: 'no text-like census lane — bind the content container by hand' });
+  }
+  fm.push('mediaUrls: { selector: \'img, video\', attr: \'src\', multi: true }');
+  const anchorSel = identitySel ? identitySel + ', h3 a' : 'h3 a';
+
+  const markerGuards = clauses.exclusionMarkers.length
+    ? '  if (' + JSON.stringify(clauses.exclusionMarkers) + '.some(function (m) { return String(r.tsAria || \'\').trim().toLowerCase() === m; })) continue;\n'
+    : '';
+  const extractScript = [
+    'const CARD = ' + JSON.stringify(CARD) + ';',
+    'const rs = await $extractWithHover(CARD, {',
+    '  ' + fm.concat(timeFm).join(',\n  '),
+    '}, { hover: { anchorSel: ' + JSON.stringify(anchorSel) + ' }, maxContainers: Math.min(__input__.count || 10, 50) });',
+    'const num = function (s) { const m = String(s || \'\').match(/[\\d.,]+[KM]?/); return m ? m[0] : \'\'; };',
+    'const posts = [];',
+    'for (const r of rs) {',
+    '  if (!r.' + urlSlot + ') continue;',
+    markerGuards +
+    '  const idm = String(r.' + urlSlot + ').match(' + idRe + ');',
+    '  const times = [r.tsAria, r.tsLabel, r.tsHover].map(function (t) { return String(t || \'\').trim(); }).filter(Boolean);',
+    '  const abs = times.find(function (t) { return /(19|20)\\d{2}/.test(t); });',
+    '  const labs = (r.labels || []).map(function (x) { return String(x || \'\').trim(); });',
+    '  const like = (labs.find(function (l) { return /^like\\s*:/i.test(l); }) || \'\').replace(/^like\\s*:\\s*/i, \'\').replace(/\\s+people.*$/i, \'\');',
+    '  const commL = labs.find(function (l) { return /comment/i.test(l) && /\\d/.test(l); }) || \'\';',
+    '  const shrL = labs.find(function (l) { return /share/i.test(l) && /\\d/.test(l); }) || \'\';',
+    '  posts.push({',
+    '    postId: idm ? idm[1] : \'\',',
+    '    ' + urlSlot + ': r.' + urlSlot + ',',
+    '    postTime: abs || times[0] || \'\',',
+    '    content: r.content || \'\',',
+    '    likeCount: like, commentCount: num(commL), shareCount: num(shrL),',
+    '    mediaUrls: (r.mediaUrls || []).filter(function (u) { return /^https?:/.test(String(u)); }),',
+    '    htmlSnippet: String(r.htmlSnippet || \'\').slice(0, 5000)',
+    '  });',
+    '  if (posts.length >= (__input__.count || 5)) break;',
+    '}',
+    'return { posts: posts };'
+  ].join('\n');
+  steps.push({ id: 'extract', name: 'extract cards with hover', script: extractScript, onSuccess: 'TERMINATE', onFailure: 'TERMINATE', maxIterations: 1 });
+  if (!census) unfilled.push({ slot: 'census', reason: 'no census evidence in this session — selectors fell back to web-generic ARIA conventions; re-run artifact.propose after probe.census for measured lanes' });
+  return { steps: steps, unfilled: unfilled };
+}
+
+module.exports = { parseRequirementClauses, synthesizeFromEvidence, BOOTSTRAP_CONTAINERS: BOOTSTRAP_CONTAINERS_246 };

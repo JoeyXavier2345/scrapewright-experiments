@@ -34,3 +34,61 @@ describe('joint solver — parseRequirementClauses', () => {
     assert.deepEqual(c.exclusionMarkers, ['recommendations', 'advertisements']);
   });
 });
+
+describe('joint solver — synthesizeFromEvidence (pure)', () => {
+  const CENSUS_FIX = {
+    containerSel: '[role=article]',
+    total: 12,
+    sampled: [{}],
+    lanes: {
+      url: [{ selector: 'a[href*="/posts/"], a[href*="story"]', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['link1', 'link2'] }],
+      time: [{ selector: 'span[aria-label]', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025', '2 days ago'] }],
+      count: [{ selector: '[aria-label]', tag: 'div', strength: 'medium', coverage: '5/5', texts: ['Like: 185 people', '9 comments'] }],
+      id: [],
+      text: [{ selector: 'div[data-ad-comet-preview="message"]', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['California Road Trip Seq… See more'] }]
+    },
+    hrefIdentity: [{ token: 'story_fbid', coverage: '5/5', samples: ['101a', '202b'] }]
+  };
+  const SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
+    type: 'object', required: ['postId', 'postUrl', 'postTime', 'content'], properties: {
+      postId: { type: 'string' }, postUrl: { type: 'string' }, postTime: { type: 'string' },
+      content: { type: 'string' }, likeCount: { type: 'string' }, commentCount: { type: 'string' },
+      shareCount: { type: 'string' }, mediaUrls: { type: 'array', items: { type: 'string' } },
+      htmlSnippet: { type: 'string' } } } } } };
+
+  it('emits wait/collect/expand/extract with evidence-derived selectors and :has() population filter', () => {
+    const out = AP.synthesizeFromEvidence(
+      { census: CENSUS_FIX, currentArtifact: null },
+      REQ_FULL, SCHEMA);
+    assert.ok(Array.isArray(out.steps) && out.steps.length === 4, 'wait+collect+expand+extract');
+    assert.deepEqual(out.steps.map((s) => s.id), ['wait', 'collect', 'expand', 'extract']);
+    // `\\?` tolerates the JSON.stringify quote-escaping inside the emitted
+    // script's string literals — the lane selector itself rides verbatim.
+    assert.match(out.steps[3].script, /\[role=article\]:has\(a\[href\*=\\?"\/posts\/\\?"\], a\[href\*=\\?"story\\?"\]\)/);
+    assert.match(out.steps[2].script, /\$clickInList\(/);
+    assert.match(out.steps[2].script, /see more|展开/);
+    assert.match(out.steps[1].script, /\$collectUntil\(/);
+    assert.match(out.steps[3].script, /\$extractWithHover\(/);
+    assert.match(out.steps[3].script, /read: 'hoverPopover'/);
+    assert.match(out.steps[3].script, /story_fbid/);
+    assert.doesNotMatch(out.steps[3].script, /facebook|fbcdn/);
+  });
+  it('unfilled slots are named with evidence gaps — never hardcoded empties', () => {
+    const noCount = JSON.parse(JSON.stringify(CENSUS_FIX));
+    noCount.lanes.count = [];
+    const out = AP.synthesizeFromEvidence({ census: noCount }, REQ_FULL, SCHEMA);
+    const slots = out.unfilled.map((u) => u.slot);
+    assert.ok(slots.indexOf('likeCount') > -1, 'count lanes absent → likeCount unfilled');
+    assert.ok(out.unfilled.every((u) => u.reason && u.reason.length > 10), 'every gap names its reason');
+    assert.doesNotMatch(out.steps[3].script, /likeCount: ''/);
+  });
+  it('clauses gate the steps: no scroll clause → no collect step', () => {
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_FIX }, '提取帖子正文与悬浮窗时间。', SCHEMA);
+    assert.deepEqual(out.steps.map((s) => s.id), ['wait', 'extract']);
+  });
+  it('no census → honest unfilled, steps still emitted with generic fallbacks', () => {
+    const out = AP.synthesizeFromEvidence({ census: null }, REQ_FULL, SCHEMA);
+    assert.ok(out.steps.length >= 2, 'wait+extract still emitted');
+    assert.ok(out.unfilled.some((u) => /census/i.test(u.reason)), 'census absence disclosed');
+  });
+});
