@@ -1749,9 +1749,11 @@
           const reqText237 = (o.sessionEvidence && typeof o.sessionEvidence.requirementText === 'string')
             ? o.sessionEvidence.requirementText : null;
           if (reqText237) {
-            const extras237 = [];
             // Gate A — requirement-named fields shipped as hardcoded
-            // literals. Vendor-neutral bilingual data-category lexicon:
+            // literals. (Gate B — the popover time source — lives beside the
+            // tooltip-route gate below, where the capture-proof variables
+            // fullAbsoluteSeen/allSamples are in scope.)
+            const extras237 = [];
             // field-name token → the CJK/English vocabulary a requirement
             // uses to name that category. A category the requirement text
             // itself waives (地点（可能有）) is pre-authorized absent.
@@ -1816,27 +1818,8 @@
                   'Fix: bind each field in a fieldMap or compute it — count-family values usually live in aria-label / aria-labelledby carriers (probe.census {hover:true} names the lane and sample selectors); or renegotiate the contract via io.confirm if the user has knowingly accepted dropping them.');
               }
             }
-            // Gate B — the requirement designates the hover-popover
-            // timestamp as the time source, yet the shipped population is
-            // MIXED: full absolutes prove the tooltip route works on this
-            // page, so the relative/partial stragglers are per-record
-            // capture failures, not page truth. Disclosure alone is not a
-            // sanctioned exit when the requirement names the source.
-            const rel237 = Array.isArray(detectors.relativeTimestamps)
-              ? detectors.relativeTimestamps.find((e) => {
-                  if (!e) return false;
-                  const full = (e.totalRecords || 0) - (e.relativeCount || 0) - (e.partialAbsoluteCount || 0);
-                  return full > 0 && ((e.relativeCount || 0) > 0 || (e.partialAbsoluteCount || 0) > 0);
-                }) : null;
-            if (rel237 && /悬浮窗|悬浮|悬停|hover|tooltip|popover/i.test(reqText237)
-              && /时间戳|发帖时间|时间|日期|timestamp|date/i.test(reqText237)) {
-              const full237 = (rel237.totalRecords || 0) - (rel237.relativeCount || 0) - (rel237.partialAbsoluteCount || 0);
-              extras237.push('REQUIREMENT_TIME_SOURCE_DROPPED: the requirement designates the hover-popover timestamp as the time source (时间戳悬浮窗 → 发帖时间), but ' +
-                (rel237.path || rel237.field) + ' ships a MIXED population: ' + full237 + ' record(s) carry FULL absolutes (the tooltip route works on this page) while ' +
-                (rel237.relativeCount || 0) + ' relative + ' + (rel237.partialAbsoluteCount || 0) + ' partial-no-year record(s) are capture failures, not page truth (e.g. ' +
-                JSON.stringify(String(rel237.sampleValue || '').slice(0, 24)) + '). Disclosure alone is not a sanctioned exit when the requirement names the source. ' +
-                'Fix: re-run $timestamp with anchorSel narrowed to the failing card (or read:\'hoverPopover\' with a year-carrying match) until every record carries a full absolute, or renegotiate via io.confirm.');
-            }
+            // Gate B (REQUIREMENT_TIME_SOURCE_DROPPED) moved beside the
+            // tooltip-route gate below — it needs fullAbsoluteSeen/allSamples.
             if (extras237.length) {
               const joined237 = extras237.join(' ');
               if (error) {
@@ -2553,6 +2536,62 @@
           for (const pe of emptyTimeRequired130) pushAbsRow(pe.field, pe.path, null);
           if (absRows.length) detectors.timeAbsoluteCapturedUnbound = absRows;
         }
+
+        // 237th log Gate B — REQUIREMENT_TIME_SOURCE_DROPPED. The incident:
+        // the requirement designates the 时间戳悬浮窗 as the postTime
+        // source, yet the green verify shipped 2 relative + 2 partial-no-year
+        // records while the run's OWN rejected-mount harvest carried a full
+        // absolute ("November 3, 2025" sat in rejectedAddedTexts — the time
+        // tooltip mounts as a low-score aria strip the popover picker rightly
+        // does not select; its text is harvested and reachable ONLY via
+        // read:'hoverPopover' / $timestamp, which the model never used — it
+        // hand-rolled a format regex this page never produces and fell back
+        // to the visible relative label). Capture proof (mixed field values
+        // OR a full absolute in any captured sample) + requirement-designated
+        // source → the disclosed-relative ladder exit is NOT sanctioned.
+        try {
+          const reqText237b = (o.sessionEvidence && typeof o.sessionEvidence.requirementText === 'string')
+            ? o.sessionEvidence.requirementText : null;
+          if (reqText237b && /悬浮窗|悬浮|悬停|hover|tooltip|popover/i.test(reqText237b)
+            && /时间戳|发帖时间|时间|日期|timestamp|date/i.test(reqText237b)) {
+            let capturedAbs237 = null;
+            for (const s of allSamples) {
+              const subs = (typeof WU.extractDateSubstrings === 'function')
+                ? (WU.extractDateSubstrings(String(s)) || []) : [];
+              const hit = subs.find((x) => (typeof WU.hasYearToken === 'function')
+                ? WU.hasYearToken(x) : /(?:19|20)\d{2}/.test(x));
+              if (hit) { capturedAbs237 = String(hit).slice(0, 40); break; }
+            }
+            const candidates237 = (Array.isArray(detectors.relativeTimestamps) ? detectors.relativeTimestamps : [])
+              .map((e) => e && { path: e.path || e.field, field: e.field, rel: e.relativeCount || 0, part: e.partialAbsoluteCount || 0, total: e.totalRecords || 0, sample: e.sampleValue })
+              .concat(emptyTimeRequired130.map((pe) => ({ path: pe.path, field: pe.field, rel: 0, part: 0, total: 0, empty: true })));
+            for (const c of candidates237) {
+              if (!c || !c.path) continue;
+              const full237 = (c.total || 0) - c.rel - c.part;
+              const mixed237 = full237 > 0 && (c.rel > 0 || c.part > 0);
+              const captureProof237 = !!capturedAbs237 || !!(sessionEv && sessionEv.lastFullAbsolute);
+              if ((c.rel > 0 || c.part > 0 || c.empty) && (mixed237 || captureProof237)) {
+                const detail237 = c.empty
+                  ? c.path + ' is EMPTY in every record'
+                  : c.path + ' ships ' + c.rel + ' relative + ' + c.part + ' partial-no-year record(s) (e.g. ' +
+                    JSON.stringify(String(c.sample || '').slice(0, 24)) + ')' +
+                    (mixed237 ? ' while ' + full237 + ' record(s) carry FULL absolutes — the stragglers are capture failures, not page truth' : '');
+                const fix237 = capturedAbs237
+                  ? 'Your own hover captures ALREADY contain a full absolute ("' + capturedAbs237 + '" — picked popovers and rejectedAddedTexts alike): bind the field in the SAME $extractWithHover call via read:\'hoverPopover\' with a year-carrying match regex — no new hovers needed.'
+                  : 'Re-run $timestamp with anchorSel narrowed to the failing card (or read:\'hoverPopover\' with a year-carrying match) until every record carries a full absolute.';
+                const gateMsg237 = 'REQUIREMENT_TIME_SOURCE_DROPPED: the requirement designates the hover-popover timestamp as the time source (时间戳悬浮窗 → 发帖时间), but ' +
+                  detail237 + '. Disclosure alone is not a sanctioned exit when the requirement names the source. Fix: ' + fix237 +
+                  ' Or renegotiate via io.confirm.';
+                if (!error) {
+                  error = new Error(gateMsg237);
+                } else if (!/REQUIREMENT_TIME_SOURCE_DROPPED/.test(String(error.message))) {
+                  error = new Error(error.message + ' ALSO RED — fix together, not one verify at a time: ' + gateMsg237);
+                }
+                break; // one gate names the field; the census rows carry the rest
+              }
+            }
+          }
+        } catch (e237b) { /* the time-source requirement gate must never break the report */ }
       }
 
       const oc = (result ? WU.validateOutputAgainstSchema(finalData, outputSchema) : { ok: true, missing: [] }) || { ok: true, missing: [] };

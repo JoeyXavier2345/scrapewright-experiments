@@ -104,6 +104,20 @@ describe('237th round — requirement-mandated fields and time source', () => {
     assert.match(out.report.error.message, /2 relative \+ 2 partial/);
     assert.match(out.report.error.message, /\$timestamp/);
   });
+  it('B2: ALL-relative population + a captured full absolute in sessionEvidence → RED, cheapest exit first', async () => {
+    // The 237th-incident shape exactly: the run's rejected-mount harvest
+    // carried "November 3, 2025" while every shipped postTime was relative —
+    // the absolute was already captured; only the binding was missing.
+    const out = await makeRunner(STEP(EXTRACT_LITERALS), RECORDS_E, {
+      requirementText: REQ_POPTIME,
+      popoverSamples: ['November 3, 2025']
+    });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /REQUIREMENT_TIME_SOURCE_DROPPED/);
+    assert.match(out.report.error.message, /ALREADY contain a full absolute \("November 3, 2025"/);
+    assert.match(out.report.error.message, /read:'hoverPopover'/);
+    assert.match(out.report.error.message, /no new hovers needed/);
+  });
   it('C: no requirementText keeps both lanes advisory (legacy callers)', async () => {
     const outA = await makeRunner(STEP(EXTRACT_LITERALS), RECORDS_A, {});
     assert.equal(outA.report.ok, true, 'A-shape: ' + JSON.stringify(outA.report.error || {}));
