@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '237-requirement-fields';
+  const SW_BUILD_TAG = '238-aria-tooltip-tier';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -2420,6 +2420,45 @@
   // never materializes) while its text is fully readable — the same
   // reads-are-not-visibility-gated asymmetry the twenty-third log fixed for
   // $exists. Reads the textContent out of nodes the visual filter rejected.
+    // 238th log (user adjudication): a tooltip that mounts as a narrow or
+  // zero-height strip IS a popover — many sites expose field extension
+  // info exactly that way — and the ARIA reference chain is the page
+  // author's own declaration that "this node describes this anchor". The
+  // hover cascade used to weight that declaration zero: a linked strip
+  // never entered the candidate pool (not MutationObserver-added; a
+  // zero-size element is invisible to elementsFromPoint sampling), and
+  // when a linked strip did compete as an added mount, the cascade's
+  // final area tiebreak let unrelated sized furniture (a video caption
+  // mounted by the same hover) win. This collector is payload-agnostic:
+  // it walks the anchor's aria-labelledby / aria-describedby / aria-owns
+  // tokens — on the anchor AND its descendants (the reference often
+  // lives on an inner span) — so any ARIA-declared tooltip/description
+  // target becomes a pool candidate regardless of how it renders.
+  function collectAnchorAriaRefIds238(anchorEl) {
+    const ids = new Set();
+    if (!anchorEl || anchorEl.nodeType !== 1) return ids;
+    try {
+      const hosts = [anchorEl];
+      try {
+        const inner = anchorEl.querySelectorAll('[aria-labelledby],[aria-describedby],[aria-owns]');
+        for (let i = 0; i < inner.length && i < 24; i++) hosts.push(inner[i]);
+      } catch (err) { /* best-effort descendant walk */ }
+      const ATTRS = ['aria-labelledby', 'aria-describedby', 'aria-owns'];
+      for (const host of hosts) {
+        for (const attr of ATTRS) {
+          let v = null;
+          try { v = host.getAttribute(attr); } catch (err) { v = null; }
+          if (typeof v !== 'string' || !v.trim()) continue;
+          const toks = v.trim().split(/\s+/);
+          for (let t = 0; t < toks.length && t < 16; t++) {
+            if (toks[t]) ids.add(toks[t]);
+          }
+        }
+      }
+    } catch (err) { /* best-effort: linkage degrades to empty set */ }
+    return ids;
+  }
+
   function collectRejectedAddedTexts(nodes) {
     const out = [];
     if (!Array.isArray(nodes)) return out;
@@ -4559,6 +4598,10 @@
     // late-starting observer silently misses the popover.
     var htmlSnippet = null;
     var matchedSel = null;
+    // 238th log: which tier won the pick — 'ariaRef' (the anchor's own
+    // ARIA-referenced tooltip/description target), 'role-tooltip' (a fresh
+    // role=tooltip mount), or 'overlay' (the legacy visual cascade).
+    var pickedVia238 = null;
     var autoDiscovered = false;
     // RC47: set when the polling loop breaks early because no hover signal
     // was observed past NO_SIGNAL_EARLY_EXIT_MS. Drives the result.reason
@@ -4738,6 +4781,27 @@
     var candidateSource = new Map();
     var seenEls = new Set();
     var addedNodesCursor = 0;
+    // 238th log: the anchor's ARIA-declared tooltip/description targets.
+    // Pushed each tick (a tooltip may MOUNT mid-dwell carrying the very id
+    // the anchor references) with source 'ariaRef'; pushCandidate dedupes.
+    var ariaLinkedIds238 = (typeof collectAnchorAriaRefIds238 === 'function')
+      ? collectAnchorAriaRefIds238(anchor) : new Set();
+    function pushAriaRefCandidates238() {
+      if (!ariaLinkedIds238.size) return;
+      ariaLinkedIds238.forEach(function (id) {
+        var el = null;
+        try { el = document.getElementById(id); } catch (e238) { el = null; }
+        // A reference target INSIDE the anchor is anchor content, not a
+        // popover of its own.
+        if (el && el.nodeType === 1 && el !== anchor && !anchor.contains(el)) {
+          pushCandidate(el, 'ariaRef');
+        }
+      });
+    }
+    function isAriaLinked238(node) {
+      return !!(node && node.nodeType === 1 && ariaLinkedIds238.size > 0
+        && node.id && ariaLinkedIds238.has(String(node.id)));
+    }
     function pushCandidate(el, source) {
       if (!el || el.nodeType !== 1) return;
       if (seenEls.has(el)) return;
@@ -4903,7 +4967,27 @@
             earlyPathAMatch = !!(earlyProbe && isElementVisible(earlyProbe.element));
           } catch (e) { earlyPathAMatch = false; }
         }
-        if (!earlyPathAMatch) {
+        // 238th log: a live ARIA-referenced tooltip target is ALSO signal —
+        // a pre-mounted zero-height strip never fires the observer, and the
+        // early exit used to kill the dwell before the ariaRef pool push
+        // could ever score it.
+        var earlyAriaRefLive238 = false;
+        if (!earlyPathAMatch && ariaLinkedIds238.size) {
+          ariaLinkedIds238.forEach(function (id238) {
+            if (earlyAriaRefLive238) return;
+            var el238 = null;
+            try { el238 = document.getElementById(id238); } catch (e238) { el238 = null; }
+            if (!el238 || el238.nodeType !== 1 || anchor.contains(el238)) return;
+            var hasPayload238 = false;
+            try {
+              var t238 = String(el238.textContent || '').replace(/\s+/g, ' ').trim();
+              var al238 = String(el238.getAttribute('aria-label') || '').trim();
+              hasPayload238 = t238.length > 0 || al238.length > 0 || el238.hasAttribute('aria-labelledby') || el238.hasAttribute('aria-describedby');
+            } catch (e238p) { hasPayload238 = false; }
+            if (hasPayload238) earlyAriaRefLive238 = true;
+          });
+        }
+        if (!earlyPathAMatch && !earlyAriaRefLive238) {
           earlyExited = true;
           sendDebugLog('info', 'content-script', 'domHover no-signal early-exit', {
             selector: selectorForLog, dwellMs: Math.round(dwellMs),
@@ -4924,6 +5008,11 @@
         collectVisibleDescendantsFromInvisibleAdded(addedNodes[k]);
       }
       addedNodesCursor = addedNodes.length;
+      // 238th log: ARIA-declared tooltip targets enter the pool every tick —
+      // pre-mounted zero-height strips are invisible to the observer and to
+      // elementsFromPoint alike; the anchor's own reference chain is the
+      // only signal that finds them.
+      pushAriaRefCandidates238();
       // Path (c): elementsFromPoint sampling. Sample at cursor and
       // cardinal offsets (~120px) to catch hovercards appearing beside
       // the anchor rather than overlapping it. Wraps in try/catch since
@@ -5022,6 +5111,15 @@
           }
         }
         var nr = node.getBoundingClientRect();
+        // 238th log: linkage classification — is this candidate a target the
+        // ANCHOR's own ARIA references declare as its tooltip/description,
+        // or a fresh role=tooltip mount? Both tiers outrank the visual
+        // cascade below (the page author's declaration beats geometry).
+        var linkedRef238 = isAriaLinked238(node);
+        var roleTooltip238 = false;
+        try {
+          roleTooltip238 = (nsource === 'added' && node.getAttribute('role') === 'tooltip');
+        } catch (e238r) { roleTooltip238 = false; }
         if (nr.width < 50 || nr.height < 50) {
           // Hundred-third-round C (user-adjudicated): a TEXT-BEARING added
           // candidate is never "too small" — one-line tooltip strips ARE the
@@ -5043,7 +5141,7 @@
               }
             } catch (e) { exemptTinyText = false; }
           }
-          if (!exemptTinyText) {
+          if (!exemptTinyText && !linkedRef238 && !roleTooltip238) {
             rememberRejectedAdded(node, true);
             if (rejectedSummary.length < 5) rejectedSummary.push({
               tag: node.tagName,
@@ -5138,7 +5236,7 @@
         } catch (e212v) { /* best-effort rejection */ }
         passingCandidates.push({
           node: node, posAbsolute: posAbsolute, posOverlay: posOverlay, z: nz, dist: ndist, area: narea,
-          source: nsource
+          source: nsource, linkedRef: linkedRef238, roleTooltip: roleTooltip238
         });
       }
       // F3: a mid-tick bail means the DOM outran the budget — stop polling
@@ -5168,6 +5266,15 @@
       // posAbsolute in the cascade — transform-positioned portals must win
       // the positioning stage over static in-card wrappers.
       passingCandidates.sort(function (a, b) {
+        // 238th log: the anchor's OWN ARIA references outrank everything —
+        // the page author declared the relationship, so a linked narrow
+        // strip is this anchor's popover by definition, while an unlinked
+        // mount (a video caption, feed furniture) is at best adjacent. A
+        // fresh role=tooltip mount sits between linkage and the legacy
+        // cascade (role=tooltip is the standard semantics but carries no
+        // per-anchor declaration).
+        if (a.linkedRef !== b.linkedRef) return a.linkedRef ? -1 : 1;
+        if (a.roleTooltip !== b.roleTooltip) return a.roleTooltip ? -1 : 1;
         if (a.source !== b.source) return a.source === 'added' ? -1 : 1;
         if (a.posOverlay !== b.posOverlay) return a.posOverlay ? -1 : 1;
         if (a.z !== b.z) return b.z - a.z;
@@ -5192,7 +5299,9 @@
           z: c.z,
           dist: Math.round(c.dist),
           area: Math.round(c.area),
-          source: c.source
+          source: c.source,
+          linkedRef: !!c.linkedRef,
+          roleTooltip: !!c.roleTooltip
         };
       }
       var consideredTop = passingCandidates.slice(0, 3).map(summarizeCandidate);
@@ -5212,6 +5321,8 @@
           matchedSel = '[auto-discovered popover]';
           autoDiscovered = true;
           capturedEl = bestEl;
+          pickedVia238 = bestCandidate.linkedRef ? 'ariaRef'
+            : (bestCandidate.roleTooltip ? 'role-tooltip' : 'overlay');
         }
         // Sixth-log followup (2026-09-01): remember the best candidate the
         // cascade has seen even when it never stabilizes into a capture. A
@@ -5352,6 +5463,13 @@
       hoverDispatched: !!(hoverResp && hoverResp.dispatched),
       hoverReason: hoverResp ? hoverResp.reason : null
     };
+    // 238th log: disclose the winning tier + the anchor's ARIA reference
+    // count — an 'ariaRef' pick is a narrow/zero-height strip whose payload
+    // lives in the accessible layer, not in paint.
+    if (pickedVia238) {
+      result.pickedVia = pickedVia238;
+      if (ariaLinkedIds238.size) result.ariaRefCandidates = ariaLinkedIds238.size;
+    }
     // Forty-second log: attach the anchor-label harvest. Success shape
     // (text + attr) and falsification shape (attr present, note why it
     // resolved nothing) — the model reads the value without regexing the

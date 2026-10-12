@@ -49,7 +49,10 @@ function sliceSortBlock(body) {
   const marker = 'passingCandidates.sort';
   const idx = body.indexOf(marker);
   assert.ok(idx > -1, 'passingCandidates.sort must exist in domHover');
-  return body.slice(idx, idx + 800);
+  // 238th log: two ARIA tiers (linkedRef, roleTooltip) now sit ABOVE the
+  // source tier inside the same sort block — the window must cover the
+  // whole cascade down past the z/area tiebreaks.
+  return body.slice(idx, idx + 2400);
 }
 
 describe('RC46: domHover scoring cascade checks source BEFORE posAbsolute', () => {

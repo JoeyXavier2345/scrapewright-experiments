@@ -64,7 +64,9 @@ describe('P1: domHover keeps the observed candidate (source audit)', () => {
   // past 56000 — the window is a scoping heuristic, not a size contract.
   // Hundred-fifty-third round: the hover ENTRY activation block (+~1.5k
   // before the result assembly) pushed observedPopover past 64000.
-  const fnBody = CS_SRC.slice(fnStart, fnStart + 66000);
+  // 238th log: the ARIA-tier insertions grew domHover past 66K chars — the
+  // body window must still reach the observedPopover assembly at the tail.
+  const fnBody = CS_SRC.slice(fnStart, fnStart + 78000);
 
   it('tracks the best scoring-cascade pick across auto-discover ticks', () => {
     assert.ok(/observedBest/.test(fnBody),
@@ -86,7 +88,9 @@ describe('P1: domHover keeps the observed candidate (source audit)', () => {
     assert.ok(/result\.observedPopover/.test(fnBody),
       'failed hovers must expose observedPopover');
     const asmIdx = fnBody.indexOf('result.observedPopover');
-    const asmChunk = fnBody.slice(asmIdx - 900, asmIdx + 1400);
+    // 238th log: the pickedVia disclosure rides between the result literal and
+    // the observedPopover assembly — the pin window covers it.
+    const asmChunk = fnBody.slice(asmIdx - 1600, asmIdx + 2200);
     assert.ok(/!htmlSnippet/.test(asmChunk),
       'the failure branch keeps its !htmlSnippet guard (no capture = failure evidence)');
     // The identity fields live in the shared popoverIdentityOf helper —
@@ -109,7 +113,9 @@ describe('P1: domHover keeps the observed candidate (source audit)', () => {
   // sessions shipped hovercards:[] with the hover layer working end to end.
   it('attaches observedPopover to SUCCESSFUL captures too (the harvest gate must be satisfiable)', () => {
     const asmIdx = fnBody.indexOf('result.observedPopover');
-    const asmChunk = fnBody.slice(asmIdx - 900, asmIdx + 1400);
+    // 238th log: the pickedVia disclosure rides between the result literal and
+    // the observedPopover assembly — the pin window covers it.
+    const asmChunk = fnBody.slice(asmIdx - 1600, asmIdx + 2200);
     assert.ok(/capturedEl/.test(asmChunk),
       'the success branch keys off the element htmlSnippet was captured from');
     assert.ok(/popoverIdentityOf\(capturedEl/.test(asmChunk),
