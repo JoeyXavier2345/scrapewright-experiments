@@ -329,3 +329,13 @@ describe('joint solver — red→propose nudge', () => {
     assert.ok(notes.length <= 1);
   });
 });
+
+describe('joint solver — universality red line', () => {
+  it('no vendor tokens in the proposer module', () => {
+    const fs = require('node:fs');
+    const src = fs.readFileSync(require('path').join(__dirname, '..', 'lib', 'artifact-proposer.js'), 'utf8');
+    for (const v of ['facebook', 'fbid', 'fbcdn', 'twitter', 'instagram']) {
+      assert.doesNotMatch(src, new RegExp(v, 'i'), 'vendor token: ' + v);
+    }
+  });
+});
