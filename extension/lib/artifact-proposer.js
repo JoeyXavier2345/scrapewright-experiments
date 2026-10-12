@@ -192,4 +192,58 @@ function renderExclusionGuardFragment(fieldName, marker) {
   return '.filter(function (p) { return String(p.' + fieldName + ' || \'\').toLowerCase() !== \'' + String(marker).toLowerCase() + '\'; })';
 }
 
-module.exports = { parseRequirementClauses, synthesizeFromEvidence, renderExpandStepFragment, renderHoverPopoverFragment, renderExclusionGuardFragment, BOOTSTRAP_CONTAINERS: BOOTSTRAP_CONTAINERS_246 };
+// Sweep: bootstrap the container by counting generic families, then ONE
+// census (hover:true). Every hop is try/catch — a failed hop is an evidence
+// gap, never a crash. Synthesis is pure (above); application goes through
+// ctx.applyArtifact so EVERY update gate (chain validation, syntax
+// construction, schema checks) still applies — the joint solver never
+// bypasses the same gates service.update faces.
+async function proposeArtifact(ctx) {
+  const t0 = Date.now();
+  const probes = (ctx && ctx.probes) || {};
+  let containerSel = null;
+  for (const cand of BOOTSTRAP_CONTAINERS_246) {
+    try {
+      const c = await probes.count({ sel: cand });
+      const n = c && typeof c.count === 'number' ? c.count : 0;
+      if (n >= 3 && n <= 200) { containerSel = cand; break; }
+    } catch (e) { /* next candidate */ }
+  }
+  let census = null;
+  if (containerSel) {
+    try { census = await probes.census({ containerSel: containerSel, samples: 5, hover: true }); }
+    catch (e) { census = { error: String((e && e.message) || e) }; }
+  }
+  const pack = { census: census, currentArtifact: (ctx && ctx.currentArtifact) || null };
+  const synth = synthesizeFromEvidence(pack, (ctx && ctx.requirementText) || '', (ctx && ctx.outputSchema) || null);
+  try {
+    const applied = await ctx.applyArtifact({ steps: synth.steps });
+    return {
+      applied: true,
+      version: (applied && applied.version) || null,
+      unfilled: synth.unfilled,
+      replaced: synth.replaced || [],
+      sweepCostMs: Date.now() - t0,
+      next: 'verify.run'
+    };
+  } catch (eApply) {
+    return {
+      applied: false,
+      error: String((eApply && eApply.message) || eApply),
+      unfilled: synth.unfilled,
+      sweepCostMs: Date.now() - t0,
+      next: 'fix the rejection or call artifact.propose again after probe.census'
+    };
+  }
+}
+
+const JT_API_246 = {
+  parseRequirementClauses, synthesizeFromEvidence, proposeArtifact,
+  renderExpandStepFragment, renderHoverPopoverFragment, renderExclusionGuardFragment,
+  BOOTSTRAP_CONTAINERS: BOOTSTRAP_CONTAINERS_246
+};
+// Dual export (probe-tools pattern): Node tests use require, the wizard
+// page loads this as a plain script tag — session-tools.js resolves it via
+// the __artifactProposerModuleMarker__ global (check wizard.html load order).
+if (typeof module !== 'undefined' && module.exports) module.exports = JT_API_246;
+else (typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self)).__artifactProposerModuleMarker__ = JT_API_246;

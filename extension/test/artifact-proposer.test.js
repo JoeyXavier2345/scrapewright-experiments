@@ -144,3 +144,73 @@ describe('joint solver — red-receipt fragment renderers', () => {
     assert.match(frag, /\.filter\(function \(p\) \{ return String\(p\.postTime \|\| ''\)\.toLowerCase\(\) !== 'ad'; \}\)/);
   });
 });
+
+describe('joint solver — proposeArtifact (stubbed sweep)', () => {
+  function CENSUS_SHALLOW() {
+    return {
+      containerSel: '[role=article]', total: 12, sampled: [{}],
+      lanes: {
+        url: [{ selector: 'a[href*="/p/"]', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }],
+        time: [{ selector: 'span[aria-label]', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }],
+        count: [], id: [],
+        text: [{ selector: 'div.msg', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['body'] }]
+      },
+      hrefIdentity: [{ token: 'id', coverage: '5/5', samples: ['a1', 'b2'] }]
+    };
+  }
+  function SCHEMA_FIX() {
+    return { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
+      type: 'object', required: ['postUrl', 'postTime', 'content'], properties: {
+        postId: { type: 'string' }, postUrl: { type: 'string' }, postTime: { type: 'string' },
+        content: { type: 'string' }, likeCount: { type: 'string' }, commentCount: { type: 'string' },
+        shareCount: { type: 'string' }, mediaUrls: { type: 'array', items: { type: 'string' } },
+        htmlSnippet: { type: 'string' } } } } } };
+  }
+  it('sweeps via probes, synthesizes, applies through applyArtifact, returns decision-key receipt', async () => {
+    const applied = [];
+    const probes = {
+      count: async (args) => ({ count: args.sel === '[role=article]' ? 12 : 0 }),
+      census: async () => CENSUS_SHALLOW(),
+      sample: async () => ({ element: { textContent: 'x' } })
+    };
+    const out = await AP.proposeArtifact({
+      probes: probes,
+      requirementText: REQ_FULL,
+      outputSchema: SCHEMA_FIX(),
+      currentArtifact: null,
+      applyArtifact: async (a) => { applied.push(a); return { version: 1 }; }
+    });
+    assert.equal(applied.length, 1, 'applied exactly once');
+    assert.equal(out.applied, true);
+    assert.equal(out.version, 1);
+    assert.ok(Array.isArray(out.unfilled));
+    assert.equal(out.next, 'verify.run');
+    assert.ok(typeof out.sweepCostMs === 'number');
+    assert.ok(out.unfilled.some((u) => u.slot === 'likeCount'));
+  });
+  it('applyArtifact rejection is returned verbatim, applied:false, gates never bypassed', async () => {
+    const out = await AP.proposeArtifact({
+      probes: { count: async () => ({ count: 5 }), census: async () => CENSUS_SHALLOW(), sample: async () => ({}) },
+      requirementText: REQ_FULL, outputSchema: SCHEMA_FIX(), currentArtifact: null,
+      applyArtifact: async () => { throw new Error('SYNTAX_ERROR: unexpected token'); }
+    });
+    assert.equal(out.applied, false);
+    assert.match(out.error, /SYNTAX_ERROR/);
+  });
+});
+
+describe('joint solver — session-tools registration', () => {
+  it('the tool is registered with a compact spec and calls proposeArtifact', () => {
+    const fs = require('node:fs');
+    const src = fs.readFileSync(require('path').join(__dirname, '..', 'lib', 'session-tools.js'), 'utf8');
+    assert.match(src, /'artifact\.propose': \(async/, 'handler registered');
+    assert.match(src, /artifact\.propose \{\} — the joint solver/, 'spec text present');
+    assert.match(src, /proposeArtifact\(\{/, 'wired to the proposer');
+  });
+  it('toolSpec budget stays under 6500 chars', () => {
+    const { createSessionTools } = require('../lib/session-tools');
+    const t = createSessionTools({ rail: { executeDsl: async () => ({}) }, runVerify: async () => ({}), probeFactory: () => ({}), getDraftService: () => null, applyArtifact: async () => ({}), getTestInput: () => ({}), getOutputSchema: () => ({}), getSteps: () => [] });
+    const total = t.toolSpecs.reduce((a, s) => a + (s.spec || '').length, 0);
+    assert.ok(total <= 6500, 'toolSpec total ' + total + ' <= 6500');
+  });
+});

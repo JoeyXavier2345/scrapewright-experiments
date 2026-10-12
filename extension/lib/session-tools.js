@@ -71,6 +71,10 @@
   }
 
   const ProbeTools = resolveLib('./probe-tools', 'ProbeTools');
+  // Joint solver (2026-10-13 spec): artifact.propose delegates to
+  // lib/artifact-proposer.js. Resolved at load time like ProbeTools —
+  // the wizard page must load artifact-proposer.js BEFORE session-tools.js.
+  const ArtifactProposer = resolveLib('./artifact-proposer', '__artifactProposerModuleMarker__');
 
   const DEFAULT_DIAG_CAP = 4000;
 
@@ -2601,6 +2605,34 @@
         return r;
       }),
       'probe.scroll': wrapProbe(probes.scroll, 'probe.scroll'),
+      // Joint solver (2026-10-13 spec): ONE call sweeps evidence (population
+      // counts over bootstrap containers → census{hover:true}), synthesizes
+      // the FULL step graph, and applies it through d.applyArtifact — the
+      // SAME gates service.update faces. The model reviews the verify
+      // result, never hand-authors code from scratch.
+      'artifact.propose': (async (_args, ctx) => {
+        const proposeArtifact = (ArtifactProposer && typeof ArtifactProposer.proposeArtifact === 'function')
+          ? ArtifactProposer.proposeArtifact : null;
+        if (!proposeArtifact) {
+          return { error: 'artifact-proposer lib unresolved — check script load order in wizard.html' };
+        }
+        // 236th-round requirementText passthrough shape: the requirement is
+        // the user's own operation list; the clause parser reads it.
+        let requirement = '';
+        try {
+          const st = ctx && ctx.session && typeof ctx.session.state === 'function' ? ctx.session.state() : null;
+          requirement = (st && st.session && typeof st.session.requirement === 'string') ? st.session.requirement : '';
+        } catch (e) { /* best-effort */ }
+        let currentSteps = [];
+        try { currentSteps = (typeof d.getSteps === 'function' ? d.getSteps() : []) || []; } catch (e) { currentSteps = []; }
+        return await proposeArtifact({
+          probes: probes,
+          requirementText: requirement,
+          outputSchema: (typeof d.getOutputSchema === 'function' ? d.getOutputSchema() : null),
+          currentArtifact: currentSteps.length ? { steps: currentSteps } : null,
+          applyArtifact: d.applyArtifact
+        });
+      }),
       'probe.scrollUntil': wrapProbe(probes.scrollUntil, 'probe.scrollUntil'),
       'probe.extract': wrapProbe(probes.extract, 'probe.extract'),
       'probe.timestamp': (async (args2, ctx2) => {
@@ -2641,11 +2673,15 @@
       { name: 'page.settle', args: '{sel?,timeoutMs?}', returns: '{settled,sel,chars,waitedMs,textHead?,note?} — polls until content stops changing (default sel body). Settle before concluding a JS-heavy page is empty' },
       { name: 'probe.count', args: '{sel}', returns: '{count}' },
       { name: 'probe.text', args: '{sel}', returns: '{total,items[]}' },
-      { name: 'probe.attrStats', args: '{containerSel, attr}', returns: '{totalItems,values[{value,items,pct}],absentPct,note?} — attr is read on the matched ELEMENTS; note appears at absentPct 100 telling you to census the descendant form containerSel + " [attr]" (what a :not()/:has() clause actually filters)' },
+      { name: 'probe.attrStats', args: '{containerSel, attr}', returns: '{totalItems,values[{value,items,pct}],absentPct,note?} — attr is read on the matched ELEMENTS; note appears at absentPct 100 — census the descendant form containerSel + " [attr]"' },
       { name: 'probe.labelledby', args: '{sel, attr?}', returns: '{text,attr,refCount,missingIds?,note?,viaDescendant?} — ARIA-reference text (default aria-labelledby); descendant fallback disclosed via viaDescendant. Use when a tooltip value never renders visually' },
       { name: 'probe.sample', args: '{sel, opts:{index,wantHtml,clean,samples}}', returns: '{match,total,element,html?,samples?[{index,text}],diversityTip?} — clean:true strips noise; samples:3 returns first/middle/last TEXT previews as samples[] (pass it before writing selectors fitted to one shape)' },
       { name: 'probe.hover', args: '{anchorSel, popoverSel?, opts:{index,timeoutMs}}', returns: '{hovered,htmlSnippet,popoverSelector,reason,observedPopover?,rejectedAddedTexts?,rejectedAddedHtml?,budgetNote?,timeoutMs?} — rejectedAddedHtml/Texts carry hover-mounted nodes the visual filter rejected (often the payload; read:hoverPopover fields search them). On reason:popover_timeout, retry with a bigger opts.timeoutMs before concluding the popover never renders' },
-      { name: 'probe.census', args: '{containerSel, samples?, maxPerLane?, hover?, anchorSel?, timeoutMs?}', returns: '{total, sampled[indices], lanes{time,count,url,id,text,aria}[[{selector,tag,strength,coverage,texts}]], hrefIdentity[{token,coverage,samples}], timeHover?, truncatedSamples?, boundedRead?, note} — PAGE-LEVEL FIELD CENSUS: evenly spaced sample containers (default 5), every leaf classified into lanes, each candidate selector WITH cross-sample coverage (k/n generalized, 1/n positional). hover:true runs the one-card timestamp dance as timeHover. timeoutMs applies PER LEG (default 30000, max 90000). Author the WHOLE fieldMap from the lanes, then ONE probe.extract dry-run — per-field probes only for empty/ambiguous lanes' },
+      { name: 'probe.census', args: '{containerSel, samples?, maxPerLane?, hover?, anchorSel?, timeoutMs?}', returns: '{total, sampled[indices], lanes{time,count,url,id,text,aria}[[{selector,tag,strength,coverage,texts}]], hrefIdentity[{token,coverage,samples}], timeHover?, truncatedSamples?, boundedRead?, note} — PAGE-LEVEL FIELD CENSUS: evenly spaced samples (default 5), every leaf classed into lanes with cross-sample coverage (k/n vs 1/n); hover:true adds the one-card timestamp dance; timeoutMs PER LEG (default 30000, max 90000)' },
+      // Joint solver (2026-10-13 spec): entry text begins with the exact
+      // 'artifact.propose {}' form so the source pin (and the rendered
+      // catalog line) name the call shape verbatim.
+      { name: 'artifact.propose', args: '{}', returns: 'artifact.propose {} — the joint solver: sweeps evidence, synthesizes the FULL step graph (clauses + measured lanes), applies via the SAME gates as service.update → {applied, version, unfilled[]}. Call FIRST, again after any red; unfilled slots name their gaps.' },
       { name: 'probe.scroll', args: "{mode?:'bottom'|'by', sel?, by?}", returns: '{scrolled,prevY,newY} — mode:"by" takes a SIGNED pixel count (negative scrolls UP)' },
       { name: 'probe.scrollUntil', args: '{sel, targetCount, maxRounds?, settleMs?, by?, scrollSel?}', returns: '{satisfied,finalCount,rounds,trace,reason,note?} — scroll→settle→count loop stopping the MOMENT sel reaches targetCount. reason=count_frozen: sel matches static chrome, re-target it; reason=at_bottom: the SCROLL ROOT tested is exhausted — retry with scrollSel at the feed\'s inner scrollable container; reason=max_rounds: still growing, re-run' },
       { name: 'probe.extract', args: '{containerSel, fieldMap, multi?, allowEmpty?}', returns: '{total,records[3],emptyFields{field:emptyCount}}' },

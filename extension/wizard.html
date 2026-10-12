@@ -326,6 +326,11 @@
   <script src="lib/session-persistence.js"></script>
   <script src="lib/live-rail.js"></script>
   <script src="lib/verify-runner.js"></script>
+  <!-- Load-order dependency (joint solver, 2026-10-13 spec): session-tools.js
+       resolves the artifact-proposer lib at IIFE load time — it must precede
+       session-tools.js or artifact.propose degrades to a lib-unresolved
+       error receipt. -->
+  <script src="lib/artifact-proposer.js"></script>
   <script src="lib/session-tools.js"></script>
   <script src="lib/dom-cleaner.js"></script>
   <script src="lib/url-template.js"></script>
