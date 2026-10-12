@@ -5,7 +5,7 @@
 // version of what the 245th-round post-mortem did by hand. Three layers:
 //   parseRequirementClauses   — pure: requirement text → step directives
 //   synthesizeFromEvidence   — pure: evidence pack → full step graph
-//   proposeArtifact          — sweep (drives existing probes) + synthesize + apply
+//   proposeArtifact          — (Task 4) sweep + synthesize + apply
 // Red line: every selector comes from MEASURED evidence (census lanes,
 // hrefIdentity tokens) or web-generic ARIA fallbacks — never vendor tokens.
 
@@ -66,7 +66,7 @@ function laneTop_246(lanes, type) {
   } catch (e) { return null; }
 }
 
-function escRe_246(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function escRe_246(s) { return String(s).replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'); }
 
 function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   const clauses = parseRequirementClauses(requirementText);
@@ -103,7 +103,7 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   if (clauses.expand) {
     steps.push({
       id: 'expand', name: 'expand collapsed text', maxIterations: 1,
-      script: 'await $clickInList(' + JSON.stringify(CARD) + ', \'div[role=button], span[role=button]\', { textFilter: /see more|展开/i, delayMs: 400 }).catch(function () {});\nawait new Promise(function (r) { setTimeout(r, 1200); });\nreturn { done: true };',
+      script: 'await $clickInList(' + JSON.stringify(CARD) + ', \'div[role=button], span[role=button]\', { textFilter: \'~see more|展开\', delayMs: 400 }).catch(function () {});\nawait new Promise(function (r) { setTimeout(r, 1200); });\nreturn { done: true };',
       onSuccess: 'extract', onFailure: 'extract'
     });
   }
@@ -149,7 +149,7 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
     'const rs = await $extractWithHover(CARD, {',
     '  ' + fm.concat(timeFm).join(',\n  '),
     '}, { hover: { anchorSel: ' + JSON.stringify(anchorSel) + ' }, maxContainers: Math.min(__input__.count || 10, 50) });',
-    'const num = function (s) { const m = String(s || \'\').match(/[\\d.,]+[KM]?/); return m ? m[0] : \'\'; };',
+    'const num = function (s) { const m = String(s || \'\').match(/[\\d.,]+[KMkm]?/); return m ? m[0] : \'\'; };',
     'const posts = [];',
     'for (const r of rs) {',
     '  if (!r.' + urlSlot + ') continue;',

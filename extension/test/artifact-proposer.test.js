@@ -101,4 +101,26 @@ describe('joint solver — synthesizeFromEvidence (pure)', () => {
     assert.ok(out.steps.length >= 2, 'wait+extract still emitted');
     assert.ok(out.unfilled.some((u) => /census/i.test(u.reason)), 'census absence disclosed');
   });
+  it('textFilter uses the string ~regex contract (a regex literal silently no-ops in $clickInList)', () => {
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_FIX }, '若有"展开"操作点击展开。', SCHEMA);
+    const ex = out.steps.find((s) => s.id === 'expand');
+    assert.match(ex.script, /textFilter: '~see more\|展开'/);
+    assert.doesNotMatch(ex.script, /textFilter: \//);
+  });
+  // NOTE (adapted from review): step scripts are async-function BODIES by
+  // DSL contract (top-level await is the documented form), so the construct
+  // check uses the AsyncFunction constructor — plain `new Function` rejects
+  // every correct step script with "await is only valid in async functions",
+  // masking the regex-literal error this test exists to catch. Likewise the
+  // token match must include the escape backslash: inside the emitted regex
+  // literal the token can only ever appear as `posts\/id`.
+  it('hrefIdentity tokens with regex metachars (incl. /) escape safely — generated script compiles', () => {
+    const census = JSON.parse(JSON.stringify(CENSUS_FIX));
+    census.hrefIdentity = [{ token: 'posts/id', coverage: '5/5', samples: ['a', 'b'] }];
+    const out = AP.synthesizeFromEvidence({ census }, '滚动加载。悬浮窗。', SCHEMA);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    assert.doesNotThrow(() => new AsyncFunction('__input__', ex.script), 'emitted script must construct');
+    assert.match(ex.script, /posts\\\/id/);
+  });
 });
