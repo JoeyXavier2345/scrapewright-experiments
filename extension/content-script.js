@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '234-llm-hang-watchdog';
+  const SW_BUILD_TAG = '235-census5-subtab-diags';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -1891,12 +1891,21 @@
           );
           break;
         }
-        case 'openTab':
+        case 'openTab': {
           // 199th log: args[2] is the step input object — it rides the relay
           // so the sub-tab execution gets __input__ (the fn is serialized by
           // source; outer closures are invisible in the sub-tab).
-          result = await domOpenTab(data.args[0], data.args[1], data.args[2], data.args[3]); // 231st: opts.timeoutMs
+          const __ot235 = await domOpenTab(data.args[0], data.args[1], data.args[2], data.args[3]); // 231st: opts.timeoutMs
+          result = (__ot235 && typeof __ot235 === 'object' && '__otResult235' in __ot235) ? __ot235.__otResult235 : __ot235;
+          // 235th (user directive): the sub-tab's selectorDiagnostics ride as
+          // _diagnostics so verify detectors (FAMILY_MISS/BLIND/census) see
+          // $openTab-internal work — they used to die in background's
+          // TAB_RESULT unwrap.
+          if (__ot235 && Array.isArray(__ot235.__otDiags235) && __ot235.__otDiags235.length) {
+            _diagnostics = (_diagnostics || []).concat(__ot235.__otDiags235);
+          }
           break;
+        }
         case 'exists': {
           const __t0 = Date.now();
           result = await domExists(data.selector, data.args[0]);
@@ -5952,7 +5961,11 @@
   async function domOpenTab(url, fnStr, input, timeoutMs) {
     const budget = (typeof timeoutMs === 'number' && timeoutMs > 0)
       ? Math.min(timeoutMs, 300000) : OPEN_TAB_LOCAL_TIMEOUT_MS;
-    return new Promise((resolve, reject) => {
+    // 235th: resolve {result, subTabDiagnostics} — the ONLY caller (the
+    // openTab DOM case) unwraps; the sub-tab diagnostics ride _diagnostics
+    // into the verify events.
+    let resolveOpenTab235 = null;
+    const p = new Promise((resolve, reject) => { resolveOpenTab235 = resolve;
       const reqId = ++openTabCounter;
       const timer = setTimeout(() => {
         if (openTabPending.delete(reqId)) {
@@ -5968,7 +5981,13 @@
       // Wrap so the TAB_RESULT handler's plain resolve/reject clears the
       // timer and the map entry on the normal path too.
       openTabPending.set(reqId, {
-        resolve: (v) => { clearTimeout(timer); openTabPending.delete(reqId); resolve(v); },
+        resolve: (payload) => {
+          clearTimeout(timer); openTabPending.delete(reqId);
+          // 235th: unwrap the message envelope — the public resolution is an
+          // openTab-internal shape consumed ONLY by the DOM case handler.
+          const msg = (payload && payload.__openTabMsg235) || null;
+          resolveOpenTab235({ __otResult235: msg ? msg.result : payload, __otDiags235: (msg && msg.selectorDiagnostics) || [] });
+        },
         reject: (e) => { clearTimeout(timer); openTabPending.delete(reqId); reject(e); }
       });
       try {
@@ -5989,6 +6008,7 @@
         reject(e);
       }
     });
+    return p;
   }
 
   // ===== Script Execution =====
@@ -6131,7 +6151,11 @@
           if (message.subTabSnapshot) err.subTabSnapshot = message.subTabSnapshot;
           pending.reject(err);
         } else {
-          pending.resolve(message.result);
+          // 235th: resolve the WHOLE message — domOpenTab unwraps and
+          // exposes the sub-tab diagnostics alongside the result (its only
+          // caller, the openTab DOM case, attaches them as _diagnostics so
+          // verify detectors see $openTab-internal work).
+          pending.resolve({ __openTabMsg235: message });
         }
       }
       sendResponse({ ack: true });

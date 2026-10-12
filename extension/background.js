@@ -1917,7 +1917,14 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId, input) {
       chrome.tabs.sendMessage(parentTabId, {
         type: 'TAB_RESULT',
         reqId,
-        result: envelope.result
+        result: envelope.result,
+        // 235th round (user directive: relay the sub-tab diagnostics ALL
+        // the way): the sub-tab executor's selectorDiagnostics used to die
+        // HERE — verify's FAMILY_MISS/BLIND/census detectors never saw
+        // $openTab-internal work (the 232nd round taught around it; this
+        // fixes the channel).
+        selectorDiagnostics: (envelope && Array.isArray(envelope.selectorDiagnostics) && envelope.selectorDiagnostics.length)
+          ? envelope.selectorDiagnostics : undefined
       });
     }
   } catch (error) {

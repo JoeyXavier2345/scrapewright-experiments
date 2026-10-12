@@ -48,10 +48,13 @@ describe('B9: $openTab local timeout', () => {
     const p = fn('https://example.com/item', 'return 1;', null, 200);
     setTimeout(() => {
       const entry = [...openTabPending.values()][0];
-      entry.resolve({ title: 'ok' });
+      // 235th: the TAB_RESULT handler resolves the message ENVELOPE; the
+      // wrapper unwraps to {__otResult235, __otDiags235}.
+      entry.resolve({ __openTabMsg235: { type: 'TAB_RESULT', reqId: 1, result: { title: 'ok' }, selectorDiagnostics: [] } });
     }, 5);
     const r = await p;
-    assert.deepEqual(r, { title: 'ok' });
+    assert.deepEqual(r.__otResult235, { title: 'ok' });
+    assert.deepEqual(r.__otDiags235, []);
     assert.equal(openTabPending.size, 0);
   });
 });

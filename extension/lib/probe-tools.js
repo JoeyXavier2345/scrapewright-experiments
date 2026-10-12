@@ -1216,7 +1216,11 @@
       if (!engine || typeof engine.buildLanes !== 'function' || !ParserProbe) {
         return { error: 'census unavailable in this context (DOMParser or census-lanes not wired) — fall back to probe.sample opts.samples:3 plus per-lane probes' };
       }
-      const samples = (typeof a.samples === 'number' && a.samples >= 1) ? Math.min(5, Math.floor(a.samples)) : 3;
+      // 235th round (user directive): default 5 — feeds whose top cards are
+      // recommendation modules starved the samples:3 census (top/middle/last
+      // of a short window saw mostly recommendations and misinformed the
+      // population read). Cap stays 5.
+      const samples = (typeof a.samples === 'number' && a.samples >= 1) ? Math.min(5, Math.floor(a.samples)) : 5;
       const maxPerLane = (typeof a.maxPerLane === 'number' && a.maxPerLane >= 1) ? Math.min(12, Math.floor(a.maxPerLane)) : 6;
       // Sixty-eighth-log parity: the census is one $extractList over the whole
       // population — a pathological feed can outrun the rail's budget, and the

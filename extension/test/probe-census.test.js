@@ -93,12 +93,12 @@ describe('probe.census', () => {
     assert.deepEqual(q.samples, ['1001', '1002', '1003']);
   });
 
-  it('samples evenly across the population (first/middle/last)', async () => {
+  it('samples evenly across the population (default 5 — 235th)', async () => {
     const records = [];
     for (let i = 0; i < 7; i++) records.push(cardHtml(i + 1));
     const { tools } = makeCensusTools(records);
     const r = await tools.census({ containerSel: 'div.card' });
-    assert.deepEqual(r.sampled, [0, 3, 6]);
+    assert.deepEqual(r.sampled, [0, 2, 3, 5, 6]);
   });
 
   it('hover:true folds the one-card timestamp dance into timeHover', async () => {
@@ -383,11 +383,11 @@ describe('probe.census A+B batch (175th round): bounded reads, coverage fidelity
     const { tools, calls } = makeBoundedTools(50);
     const r = await tools.census({ containerSel: 'div.card' });
     assert.equal(r.total, 50);
-    assert.deepEqual(r.sampled, [0, 25, 49], 'even sampling over the live count');
+    assert.deepEqual(r.sampled, [0, 12, 25, 37, 49], 'even sampling over the live count (235th: default samples 5)');
     assert.equal(r.boundedRead, true);
     assert.match(r.note, /bounded range reads/);
     const rangeCalls = calls.filter((s) => /containerRange/.test(s));
-    assert.equal(rangeCalls.length, 3, 'three per-index reads — the relay never carries all 50');
+    assert.equal(rangeCalls.length, 5, 'five per-index reads — the relay never carries all 50');
     assert.ok(r.lanes.time && r.lanes.time.length, 'lanes still built from the sampled containers');
   });
 
