@@ -124,3 +124,23 @@ describe('joint solver — synthesizeFromEvidence (pure)', () => {
     assert.match(ex.script, /posts\\\/id/);
   });
 });
+
+describe('joint solver — red-receipt fragment renderers', () => {
+  it('expand step fragment interpolates the artifact card selector', () => {
+    const frag = AP.renderExpandStepFragment('[role=article]:has(a[href*="/posts/"])');
+    // `\\?` tolerates the JSON.stringify quote-escaping inside the emitted
+    // string literal (same contract as the :has() assertion above) — the
+    // selector itself rides verbatim.
+    assert.match(frag, /\$clickInList\("\[role=article\]:has\(a\[href\*=\\?"\/posts\/\\?"\]\)"/);
+    assert.match(frag, /textFilter: '~see more\|展开'/);
+  });
+  it('hoverPopover fieldMap fragment carries the anchor + year match', () => {
+    const frag = AP.renderHoverPopoverFragment('postTime', 'a[href*="/posts/"] span');
+    assert.match(frag, /read: 'hoverPopover'/);
+    assert.match(frag, /\(19\|20\)\\d\{2\}/);
+  });
+  it('exclusion guard fragment renders an assembly filter on the marker', () => {
+    const frag = AP.renderExclusionGuardFragment('postTime', 'Ad');
+    assert.match(frag, /\.filter\(function \(p\) \{ return String\(p\.postTime \|\| ''\)\.toLowerCase\(\) !== 'ad'; \}\)/);
+  });
+});

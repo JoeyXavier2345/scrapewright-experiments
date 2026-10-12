@@ -179,4 +179,17 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   return { steps: steps, unfilled: unfilled };
 }
 
-module.exports = { parseRequirementClauses, synthesizeFromEvidence, BOOTSTRAP_CONTAINERS: BOOTSTRAP_CONTAINERS_246 };
+// Phase-3 renderers: decisive red receipts carry COPY-READY fix fragments —
+// the model pastes instead of composing (every composition slip costs a
+// 90s verify). Pure string builders, unit-testable.
+function renderExpandStepFragment(cardSel) {
+  return 'await $clickInList(' + JSON.stringify(String(cardSel)) + ', \'div[role=button], span[role=button]\', { textFilter: \'~see more|展开\', delayMs: 400 });';
+}
+function renderHoverPopoverFragment(fieldName, anchorSel) {
+  return fieldName + ': { selector: ' + JSON.stringify(String(anchorSel)) + ', read: \'hoverPopover\', match: /(19|20)\\d{2}/ },';
+}
+function renderExclusionGuardFragment(fieldName, marker) {
+  return '.filter(function (p) { return String(p.' + fieldName + ' || \'\').toLowerCase() !== \'' + String(marker).toLowerCase() + '\'; })';
+}
+
+module.exports = { parseRequirementClauses, synthesizeFromEvidence, renderExpandStepFragment, renderHoverPopoverFragment, renderExclusionGuardFragment, BOOTSTRAP_CONTAINERS: BOOTSTRAP_CONTAINERS_246 };
