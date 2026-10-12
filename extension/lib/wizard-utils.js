@@ -865,13 +865,47 @@ function hoverAwareTimeoutMs(steps, baseMs) {
   // three calls at 25s floor each plus per-anchor dwell exceeded the flat
   // 120s and died SANDBOX_DEADLINE. Scale by call count, capped at the
   // relay-side 300s.
-  let calls233 = 0;
+  // 240th log: the sizing counted ONLY $extractWithHover call sites — the
+  // incident script's per-record `await $timestamp(...)` inside a for-loop
+  // (one syntactic call site, N run-time sweeps, 5-10s of hover dwell
+  // each) sized the budget as if ONE hover ran, and the step died
+  // SANDBOX_DEADLINE mid-extraction with the PER_RECORD_TIMESTAMP lint
+  // warning ignored (advisories get ignored; the budget must defend for
+  // the script AS WRITTEN). All hover-family wall drivers now count, and
+  // a call lexically inside a loop body costs ten seats — the lint's own
+  // arithmetic ("a 10-record loop burns the entire step budget").
+  const HOVER_COST_240 = { extractWithHover: 90000, timestamp: 30000, hover: 10000 };
+  const LOOP_MULTIPLIER_240 = 10;
+  let budget240 = 0;
   for (const s of (steps || [])) {
-    const m = String((s && s.script) || '').match(/\$extractWithHover\s*\(/g);
-    if (m) calls233 += m.length;
+    let src = String((s && s.script) || '');
+    try { src = stripJSComments(src); } catch (e240) { /* best-effort */ }
+    const loopSpans240 = [];
+    const reLoop240 = /\b(?:for|while)\s*\(/g;
+    let lm240;
+    while ((lm240 = reLoop240.exec(src)) !== null) {
+      const open240 = src.indexOf('{', lm240.index);
+      if (open240 === -1) continue;
+      let depth240 = 0;
+      for (let k240 = open240; k240 < src.length; k240++) {
+        if (src[k240] === '{') depth240 += 1;
+        else if (src[k240] === '}') {
+          depth240 -= 1;
+          if (depth240 === 0) { loopSpans240.push([open240, k240]); break; }
+        }
+      }
+    }
+    const inLoop240 = (idx) => loopSpans240.some((sp) => idx > sp[0] && idx < sp[1]);
+    for (const fam240 of Object.keys(HOVER_COST_240)) {
+      const re240 = new RegExp('\\$' + fam240 + '\\s*\\(', 'g');
+      let m240;
+      while ((m240 = re240.exec(src)) !== null) {
+        budget240 += HOVER_COST_240[fam240] * (inLoop240(m240.index) ? LOOP_MULTIPLIER_240 : 1);
+      }
+    }
   }
-  if (!calls233) return base;
-  return Math.min(300000, Math.max(base, 120000, calls233 * 90000));
+  if (!budget240) return base;
+  return Math.min(300000, Math.max(base, 120000, budget240));
 }
 
 // console.log 2026-08-23 (search-feed site): step 3's $clickInList clicked 0,

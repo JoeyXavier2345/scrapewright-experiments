@@ -786,6 +786,21 @@
           error = new Error(String(orchestrationError.message));
           error.stepId = orchestrationError.stepId || null;
         }
+        // 240th log: the step died SANDBOX_DEADLINE on per-record hover
+        // sweeps sized as ONE hover (the budget counted syntactic
+        // $extractWithHover sites only). The bare deadline text names no
+        // exit; append the arithmetic and the batch alternatives so the
+        // next artifact splits or batches instead of dying the same way.
+        try {
+          if (error && /SANDBOX_DEADLINE/.test(String(error.message))) {
+            const budgetMs240 = (service && service.config && Number.isFinite(service.config.timeoutMs))
+              ? service.config.timeoutMs : null;
+            error = new Error(String(error.message) +
+              ' [BUDGET — this step ran under a ' + (budgetMs240 != null ? budgetMs240 + 'ms' : 'default') +
+              ' budget (hover-aware sizing scales with hover-family call sites; a call inside a loop body now costs ten seats). Per-record hover work does not fit one step: batch instead — bind read:\'hoverPopover\' on the $extractWithHover call (the sweep captures popover text in the same pass), or collect the anchor values in ONE extract and map them in the assembly; or split the sweep across steps with containerRange:]');
+            error.stepId = orchestrationError.stepId || null;
+          }
+        } catch (e240) { /* the budget note is best-effort */ }
       }
       const finalData = result ? ((result.finalResult && result.finalResult.data) || result.finalResult) : null;
 

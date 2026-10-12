@@ -91,6 +91,8 @@ describe('C. hoverAwareTimeoutMs scales with the call count (233rd log)', () => 
     const src = fs.readFileSync(require('path').join(__dirname, '..', 'lib', 'wizard-utils.js'), 'utf8');
     const i = src.indexOf('233rd log: sequential $extractWithHover calls ADD');
     assert.ok(i > -1, 'the marker exists');
-    assert.match(src, /calls233 \* 90000/, '90s per call');
+    // 240th log: the sizing grew from calls233*90000 to the family ladder —
+    // extractWithHover keeps its 90s seat verbatim inside HOVER_COST_240.
+    assert.match(src, /extractWithHover: 90000/, '90s per extractWithHover call (HOVER_COST_240)');
   });
 });
