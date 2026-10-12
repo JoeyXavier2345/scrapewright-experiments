@@ -29,4 +29,8 @@ describe('joint solver — parseRequirementClauses', () => {
     const c = AP.parseRequirementClauses(null);
     assert.deepEqual(c, { scroll: false, expand: false, hover: false, exclusionMarkers: [] });
   });
+  it('long exclusion words are captured whole, never fragmented', () => {
+    const c = AP.parseRequirementClauses('Exclude recommendations and advertisements entries.');
+    assert.deepEqual(c.exclusionMarkers, ['recommendations', 'advertisements']);
+  });
 });

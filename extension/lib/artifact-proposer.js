@@ -20,7 +20,7 @@ function parseRequirementClauses(requirementText) {
   const exclusionMarkers = [];
   for (const seg of req.split(/[。；;.\n]/)) {
     if (!RE_EXCL_SEG_246.test(seg)) continue;
-    const toks = String(seg).match(/[A-Za-z][A-Za-z0-9]{1,11}/g) || [];
+    const toks = String(seg).match(/[A-Za-z][A-Za-z0-9]+/g) || [];
     for (const t of toks) {
       const low = t.toLowerCase();
       if (STOP_TOKENS_246.has(low)) continue;
