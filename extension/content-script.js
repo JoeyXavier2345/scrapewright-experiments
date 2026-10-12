@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '243-low-turn-budget-note';
+  const SW_BUILD_TAG = '244-container-subset-census';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -731,8 +731,23 @@
             }
           }
         }
+        // 244th log: a field matching ZERO inside every processed container
+        // while the same selector matches elements ELSEWHERE on the page is
+        // the CONTAINER-SUBSET fingerprint (the verify incident: the
+        // container selector took the feed's leading recommendation modules
+        // while the real posts — carrying the field's family — sat deeper).
+        // Bounded page-wide count at source; the verify census turns it into
+        // the decisive container-rebinding teaching.
+        let pageWideMatches = null;
+        if (matchCount === 0 && subSelector) {
+          try {
+            const pageMatches244 = document.querySelectorAll(subSelector);
+            pageWideMatches = pageMatches244.length > 50 ? 50 : pageMatches244.length;
+          } catch (e244) { pageWideMatches = null; }
+        }
         return Object.assign(
           { field, subSelector, attr, labelledby: refAttr, matchCount, refResolved, missingIds: missingIds || [], sampleTexts, sampleHrefs, sampleValues },
+          pageWideMatches != null ? { pageWideMatches } : null,
           fieldMulti ? { multi: true } : null
         );
       });

@@ -1004,8 +1004,19 @@ function computeExtractListDiagnostics(containers, fieldMap, containerSelector, 
         }
       }
     }
+    // 244th log (mirror of content-script computeExtractListDiagnostics):
+    // zero-in-containers + nonzero page-wide = the CONTAINER-SUBSET
+    // fingerprint. Bounded page-wide count at source.
+    let pageWideMatches = null;
+    if (matchCount === 0 && subSelector) {
+      try {
+        const pageMatches244 = document.querySelectorAll(subSelector);
+        pageWideMatches = pageMatches244.length > 50 ? 50 : pageMatches244.length;
+      } catch (e244) { pageWideMatches = null; }
+    }
     return Object.assign(
       { field, subSelector, attr, labelledby: refAttr, matchCount, refResolved, missingIds: missingIds || [], sampleTexts, sampleHrefs, sampleValues },
+      pageWideMatches != null ? { pageWideMatches } : null,
       fieldMulti ? { multi: true } : null
     );
   });

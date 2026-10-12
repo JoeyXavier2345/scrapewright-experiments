@@ -2900,11 +2900,17 @@ function detectFieldMatchZero(events) {
         const key = evt.stepId + '\u0000' + f.field;
         let e = agg.get(key);
         if (!e) {
-          e = { stepId: evt.stepId, field: f.field, subSelector: f.subSelector, api: d.api || 'extractList', calls: 0, zeroCalls: 0, containerMatches: 0 };
+          e = { stepId: evt.stepId, field: f.field, subSelector: f.subSelector, api: d.api || 'extractList', calls: 0, zeroCalls: 0, containerMatches: 0, pageWideMatches: 0 };
           agg.set(key, e);
         }
         e.calls += 1;
         e.containerMatches = Math.max(e.containerMatches, containers);
+        // 244th log: the source's bounded page-wide count rides the row —
+        // zero-in-containers + nonzero page-wide is the container-subset
+        // fingerprint the census teaching turns into a rebinding order.
+        if (typeof f.pageWideMatches === 'number' && f.pageWideMatches > (e.pageWideMatches || 0)) {
+          e.pageWideMatches = f.pageWideMatches;
+        }
         if ((f.matchCount || 0) === 0) e.zeroCalls += 1;
       }
     }

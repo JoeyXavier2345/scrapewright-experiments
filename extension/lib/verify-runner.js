@@ -1159,9 +1159,20 @@
                 const stepDefC = stepsDefs.find((s) => String(s.id) === String(c.stepId));
                 return 'step "' + (stepDefC ? stepDefC.name : c.stepId) + '" (' + c.api + '): field "' + c.field + '" (sub-selector ' + JSON.stringify(c.subSelector) + ') matched 0 of ' + c.containerMatches + ' container(s) on every call';
               });
+              // 244th log: the source now counts the sub-selector PAGE-WIDE.
+              // Zero-in-containers + nonzero-page-wide is the CONTAINER-SUBSET
+              // fingerprint: the container selector is processing the wrong
+              // subset (the verify incident: it took the feed's leading
+              // recommendation modules while the user's own observation said
+              // the real posts sit deeper). Turn the evidence into a rebinding
+              // order — the field selector itself names the :has() filter.
+              const subset244 = census.filter((c) => typeof c.pageWideMatches === 'number' && c.pageWideMatches > 0);
+              const subsetLine244 = subset244.length
+                ? ' (c) CONTAINER SUBSET — ' + subset244.map((c) => 'the sub-selector for "' + c.field + '" matches ' + c.pageWideMatches + (c.pageWideMatches >= 50 ? '+' : '') + ' element(s) ELSEWHERE on this page but 0 inside every processed container: the container selector is processing the wrong subset of the feed (leading recommendation/group modules while the target cards sit deeper). Constrain the container with :has(' + String(c.subSelector) + ') so only cards carrying the family are processed, or skip past the leading modules — the requirement\'s own exclusion list applies').join('; ') + '.'
+                : '';
               msg = 'FIELD_MATCH_ZERO / EMPTY_EXTRACTION: required field(s) [' + emptyFields.join(', ') + '] are present but every extracted item has only empty values, or no items were extracted at all. Field census from SELECTOR DIAGNOSTICS — ' + lines.join('; ') + '. The containers themselves DID match, so the page has the repeating items but this field\'s sub-selector found nothing on them. Two likely mechanisms: ' +
                 '(a) POPULATION DIVERGENCE — your selectors were grounded on the research page, and a different verify INPUT (different query values) can change the result-card population entirely; first re-verify with the SAME input values that drove the research page before touching selectors; ' +
-                '(b) your own step JS filters records on this field (e.g. .filter(p => p.' + census[0].field + ' && ...)) and silently dropped every extracted record — a filtered-to-0 result with containers present is NOT extraction success: keep a RAW fallback count (records.length before filtering / $count(containerSel)) and treat filtered-to-0 as not-ready or an error, never as {done:true}.' + openTabBlind232;
+                '(b) your own step JS filters records on this field (e.g. .filter(p => p.' + census[0].field + ' && ...)) and silently dropped every extracted record — a filtered-to-0 result with containers present is NOT extraction success: keep a RAW fallback count (records.length before filtering / $count(containerSel)) and treat filtered-to-0 as not-ready or an error, never as {done:true}.' + subsetLine244 + openTabBlind232;
             } else if (containerZero && containerZero.length) {
               // Twenty-fifth log: when a census hit carries a live selector
               // differential whose stripped-base count is >0, the page HAS
