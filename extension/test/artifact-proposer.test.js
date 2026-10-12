@@ -62,6 +62,16 @@ describe('joint solver — synthesizeFromEvidence (pure)', () => {
       REQ_FULL, SCHEMA);
     assert.ok(Array.isArray(out.steps) && out.steps.length === 4, 'wait+collect+expand+extract');
     assert.deepEqual(out.steps.map((s) => s.id), ['wait', 'collect', 'expand', 'extract']);
+    // Edges: the chain must route THROUGH expand when the clause fires
+    // (spec §4.1 step order wait→collect→expand→extract).
+    const byId = {}; for (const s of out.steps) byId[s.id] = s;
+    assert.equal(byId.wait.onSuccess, 'collect');
+    assert.equal(byId.collect.onSuccess, 'expand');
+    assert.equal(byId.expand.onSuccess, 'extract');
+    const noScroll = AP.synthesizeFromEvidence({ census: CENSUS_FIX }, '提取帖子正文，若有"展开"操作点击展开。悬浮窗时间戳作为发帖时间。', SCHEMA);
+    const byId2 = {}; for (const s of noScroll.steps) byId2[s.id] = s;
+    assert.deepEqual(noScroll.steps.map((s) => s.id), ['wait', 'expand', 'extract']);
+    assert.equal(byId2.wait.onSuccess, 'expand');
     // `\\?` tolerates the JSON.stringify quote-escaping inside the emitted
     // script's string literals — the lane selector itself rides verbatim.
     assert.match(out.steps[3].script, /\[role=article\]:has\(a\[href\*=\\?"\/posts\/\\?"\], a\[href\*=\\?"story\\?"\]\)/);

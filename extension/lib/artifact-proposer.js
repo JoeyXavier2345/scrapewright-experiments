@@ -92,12 +92,12 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
     : '/[?&]([A-Za-z0-9_-]{6,})/';
 
   const steps = [];
-  steps.push({ id: 'wait', name: 'wait for cards', script: 'await $wait(' + JSON.stringify(CARD) + ', 3000);\nreturn { done: true };', onSuccess: clauses.scroll ? 'collect' : 'extract', onFailure: 'TERMINATE', maxIterations: 1 });
+  steps.push({ id: 'wait', name: 'wait for cards', script: 'await $wait(' + JSON.stringify(CARD) + ', 3000);\nreturn { done: true };', onSuccess: clauses.scroll ? 'collect' : (clauses.expand ? 'expand' : 'extract'), onFailure: 'TERMINATE', maxIterations: 1 });
   if (clauses.scroll) {
     steps.push({
       id: 'collect', name: 'scroll until enough cards', maxIterations: 15,
       script: 'const CARD = ' + JSON.stringify(CARD) + ';\nconst r = await $collectUntil(CARD, { targetCount: __input__.count || 5, idAttr: \'href\' });\nreturn { done: true, count: r.count, certified: r.certified || null };',
-      onSuccess: 'extract', onFailure: 'extract'
+      onSuccess: clauses.expand ? 'expand' : 'extract', onFailure: 'extract'
     });
   }
   if (clauses.expand) {
