@@ -1699,6 +1699,39 @@
           // harness fallback list.
           const smu = WU.detectSeeMoreUnexpanded(finalData, outputSchema, service && service.pageVocab);
           if (smu) detectors.seeMoreUnexpanded = smu;
+          // 236th log: the detector FIRED in the incident's green verify
+          // (6/6 records carried "See more" tails) yet stayed report-only —
+          // the model shipped green while the user's requirement clause
+          // EXPLICITLY demands 点击展开加载完整正文. When the requirement
+          // carries expand intent AND the shipped content carries the
+          // truncation fingerprint AND no step clicks, that is the
+          // requirement's own operation dropped: RED. (A click step present
+          // = the operation was attempted; pageVocab-registered tolerance
+          // without requirement intent stays report-only.)
+          try {
+            const reqText236 = (o.sessionEvidence && typeof o.sessionEvidence.requirementText === 'string')
+              ? o.sessionEvidence.requirementText : null;
+            if (smu && reqText236 && !error) {
+              const expandIntent236 = /展开|see\s*more|expand|read\s*more|显示更多|查看更多/i.test(reqText236);
+              const clickStep236 = (service && Array.isArray(service.steps) ? service.steps : [])
+                .some((st) => st && typeof st.script === 'string' && /\$(click|clickInList)\s*\(/.test(typeof WU.stripJSComments === 'function' ? WU.stripJSComments(st.script) : st.script));
+              if (expandIntent236 && !clickStep236) {
+                // smu.field is a DOTTED path ("posts.content") — resolve the
+                // first affected record through it for the inline sample.
+                const segs236 = String(smu.field).split('.');
+                const arr236 = (segs236.length > 1 && Array.isArray(finalData[segs236[0]])) ? finalData[segs236[0]]
+                  : (Array.isArray(finalData[Object.keys(finalData)[0]]) ? finalData[Object.keys(finalData)[0]] : []);
+                const rec236 = arr236[((smu.samples || [1])[0] || 1) - 1] || {};
+                const val236 = segs236.length > 1 ? rec236[segs236[segs236.length - 1]] : rec236[smu.field];
+                error = new Error(
+                  'REQUIREMENT_EXPAND_DROPPED: the requirement explicitly demands expanding collapsed text (点击展开/加载完整正文), but ' + smu.field +
+                    ' shipped the truncation affordance at the tail of ' + smu.affectedCount + ' record(s) (e.g. ' + JSON.stringify(String(val236 == null ? '' : val236).slice(0, 40)) +
+                    ') and NO step in the artifact clicks anything. The full text was never loaded — this is the requirement\'s own operation dropped, not a data-quality nuance. ' +
+                    'Fix: add an expand step BEFORE extraction — $clickInList(containerSel, \'div[role=button]\', {textFilter:\'See more\'}) (or the page\'s registered affordance wording) then re-extract; or, if the user has knowingly accepted truncated content, renegotiate the contract via io.confirm first — never ship silently.'
+                );
+              }
+            }
+          } catch (e236) { /* the expand gate must never break the report */ }
         }
         if (typeof WU.detectHovercardUnparsed === 'function') {
           const hcu = WU.detectHovercardUnparsed(finalData, outputSchema);

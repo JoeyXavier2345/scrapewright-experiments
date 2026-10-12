@@ -1226,7 +1226,18 @@
         lastFullAbsolute: tooltipRoute.lastFullAbsolute,
         popoverSamples: popoverCaptureLru
           .map((e) => (e && typeof e.text === 'string') ? e.text : '')
-          .filter(Boolean)
+          .filter(Boolean),
+        // 236th log: the REQUIREMENT text is the user's own operation list —
+        // the verify gates consult it (expand intent vs shipped truncated
+        // content). Best-effort: absent state degrades to the report-only
+        // lanes.
+        requirementText: (() => {
+          try {
+            const st = ctx && ctx.session && typeof ctx.session.state === 'function' ? ctx.session.state() : null;
+            const req = st && st.session && typeof st.session.requirement === 'string' ? st.session.requirement : null;
+            return req || null;
+          } catch (_) { return null; }
+        })()
       };
       // 116th round (speed spec track B): OPTIONAL warm preflight — dry-run
       // the artifact's EXTRACT step on the RESEARCH tab before the cold
