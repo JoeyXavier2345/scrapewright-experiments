@@ -200,6 +200,7 @@ function renderExclusionGuardFragment(fieldName, marker) {
 // bypasses the same gates service.update faces.
 async function proposeArtifact(ctx) {
   const t0 = Date.now();
+  const mergeNote = (ctx && ctx.currentArtifact) ? 'regenerated-from-fresh-sweep (hand-tuned slots are NOT preserved — re-check any slot you had fixed by hand)' : 'fresh';
   const probes = (ctx && ctx.probes) || {};
   let containerSel = null;
   for (const cand of BOOTSTRAP_CONTAINERS_246) {
@@ -221,9 +222,8 @@ async function proposeArtifact(ctx) {
     return {
       applied: true,
       version: (applied && applied.version) || null,
-      merge: (ctx && ctx.currentArtifact) ? 'regenerated-from-fresh-sweep (hand-tuned slots are NOT preserved — re-check any slot you had fixed by hand)' : 'fresh',
+      merge: mergeNote,
       unfilled: synth.unfilled,
-      replaced: synth.replaced || [],
       sweepCostMs: Date.now() - t0,
       next: 'verify.run'
     };
@@ -231,7 +231,7 @@ async function proposeArtifact(ctx) {
     return {
       applied: false,
       error: String((eApply && eApply.message) || eApply),
-      merge: (ctx && ctx.currentArtifact) ? 'regenerated-from-fresh-sweep (hand-tuned slots are NOT preserved — re-check any slot you had fixed by hand)' : 'fresh',
+      merge: mergeNote,
       unfilled: synth.unfilled,
       sweepCostMs: Date.now() - t0,
       next: 'fix the rejection or call artifact.propose again after probe.census'
