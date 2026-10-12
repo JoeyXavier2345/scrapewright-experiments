@@ -1681,10 +1681,55 @@
       if (name === 'knowledge.query') return sanitizeToolResult(handleKnowledgeQuery(args));
       if (name === 'ledger.add') return sanitizeToolResult(handleLedgerAdd(args));
       if (name === 'service.update') return sanitizeToolResult(await handleServiceUpdate(args));
-      // 246th (joint solver, task 6): the moment the joint solver
-      // dispatches, the armed red→propose routing nudge is discharged —
-      // the routing already succeeded, a pending note would be noise.
-      if (name === 'artifact.propose') state.redNudgePending246 = null;
+      // 246th C1 (final review): artifact.propose applies through the SAME
+      // pipeline as service.update — never a bare applyArtifact setter. The
+      // tool handler runs the evidence sweep and returns the synthesis
+      // UNAPPLIED (applied:'engine-pending'); this branch routes those steps
+      // through handleServiceUpdate: engine grounding gates +
+      // artifactVersions lineage + rebuildStepPlan + the artifact_version
+      // event, then the handler's staticLint/syntax/validateForExecution/
+      // chain gates + applySessionArtifact. Without this, the first green
+      // verify after a propose stamped a stale executedArtifactVersion and
+      // corrupted rollback/green-tracking/dossier lineage.
+      if (name === 'artifact.propose') {
+        // 246th (joint solver, task 6): the moment the joint solver
+        // dispatches, the armed red→propose routing nudge is discharged —
+        // the routing already succeeded, a pending note would be noise.
+        state.redNudgePending246 = null;
+        const fnP = tools['artifact.propose'];
+        if (typeof fnP !== 'function') return { error: 'artifact.propose not wired' };
+        let proposed = null;
+        try {
+          proposed = await fnP(args, { observationLog: observationLog, ledger: ledger, session: publicApi });
+        } catch (err) {
+          return { error: String((err && err.message) || err) };
+        }
+        if (!proposed || typeof proposed !== 'object' || proposed.applied !== 'engine-pending' ||
+            !Array.isArray(proposed.steps) || !proposed.steps.length) {
+          // lib-unresolved / sweep-failure receipts pass through untouched.
+          return sanitizeToolResult(proposed);
+        }
+        let updateReceipt = null;
+        try {
+          updateReceipt = await handleServiceUpdate({ steps: proposed.steps });
+        } catch (errUp) {
+          updateReceipt = { error: 'engine apply failed: ' + String((errUp && errUp.message) || errUp) };
+        }
+        // Applied iff the pipeline actually recorded an artifact
+        // (updated:true on the apply path). A grounding rejection or a gate
+        // error carries no version — the propose receipt reports
+        // applied:false with the update receipt's own teaching attached.
+        const applied246 = !!(updateReceipt && typeof updateReceipt === 'object' &&
+          updateReceipt.updated === true && typeof updateReceipt.error !== 'string');
+        const merged246 = Object.assign({}, proposed, {
+          applied: applied246,
+          version: (applied246 && typeof updateReceipt.version === 'number') ? updateReceipt.version : null,
+          updateReceipt: updateReceipt,
+          steps: undefined
+        });
+        delete merged246.steps;
+        return sanitizeToolResult(merged246);
+      }
       // Probe tools (probe-tools.js) take POSITIONAL args; the protocol carries
       // one args object — probe-tools accepts BOTH shapes (object-first or
       // positional), so dispatch every user tool uniformly as fn(args, ctx).

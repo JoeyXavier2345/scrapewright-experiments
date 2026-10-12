@@ -2606,10 +2606,14 @@
       }),
       'probe.scroll': wrapProbe(probes.scroll, 'probe.scroll'),
       // Joint solver (2026-10-13 spec): ONE call sweeps evidence (population
-      // counts over bootstrap containers → census{hover:true}), synthesizes
-      // the FULL step graph, and applies it through d.applyArtifact — the
-      // SAME gates service.update faces. The model reviews the verify
-      // result, never hand-authors code from scratch.
+      // counts over bootstrap containers → census{hover:true}) and
+      // synthesizes the FULL step graph. C1 (final review): the handler
+      // wires NO applyArtifact — the synthesis returns UNAPPLIED
+      // (applied:'engine-pending') and research-session's dispatchTool
+      // routes it through the EXACT service.update pipeline (grounding
+      // gates, staticLint/syntax/chain gates, applySessionArtifact,
+      // artifactVersions lineage, artifact_version event). The old bare
+      // d.applyArtifact setter skipped every gate and every lineage record.
       'artifact.propose': (async (_args, ctx) => {
         const proposeArtifact = (ArtifactProposer && typeof ArtifactProposer.proposeArtifact === 'function')
           ? ArtifactProposer.proposeArtifact : null;
@@ -2630,7 +2634,7 @@
           requirementText: requirement,
           outputSchema: (typeof d.getOutputSchema === 'function' ? d.getOutputSchema() : null),
           currentArtifact: currentSteps.length ? { steps: currentSteps } : null,
-          applyArtifact: d.applyArtifact
+          applyArtifact: null
         });
       }),
       'probe.scrollUntil': wrapProbe(probes.scrollUntil, 'probe.scrollUntil'),

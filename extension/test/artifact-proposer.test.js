@@ -197,6 +197,20 @@ describe('joint solver — proposeArtifact (stubbed sweep)', () => {
     assert.equal(out.applied, false);
     assert.match(out.error, /SYNTAX_ERROR/);
   });
+  // C1 (final review): in production the tool handler wires NO applyArtifact
+  // — the synthesis comes back UNAPPLIED for the engine's service.update
+  // pipeline (grounding gates, staticLint/syntax/chain gates, version
+  // lineage). The bare-setter apply path had none of those.
+  it('engine-pending mode: no applyArtifact → steps returned for the engine pipeline', async () => {
+    const probes = { count: async () => ({ count: 5 }), census: async () => CENSUS_SHALLOW(), sample: async () => ({}) };
+    const out = await AP.proposeArtifact({ probes, requirementText: REQ_FULL, outputSchema: SCHEMA_FIX(), currentArtifact: null });
+    assert.equal(out.applied, 'engine-pending');
+    assert.ok(Array.isArray(out.steps) && out.steps.length >= 2);
+    assert.ok(Array.isArray(out.unfilled));
+    assert.equal(typeof out.merge, 'string');
+    assert.equal(typeof out.sweepCostMs, 'number');
+    assert.match(out.next, /engine applies/);
+  });
   it('re-propose discloses the regenerate semantics when a current artifact exists', async () => {
     const out = await AP.proposeArtifact({
       probes: { count: async () => ({ count: 5 }), census: async () => CENSUS_SHALLOW(), sample: async () => ({}) },
@@ -314,6 +328,33 @@ describe('joint solver — red→propose nudge', () => {
     const notes = session.state().session.transcript.filter((t) => t.kind === 'system').map((t) => t.text)
       .filter((t) => /RED → artifact\.propose/.test(t));
     assert.equal(notes.length, 2, 'one nudge per red episode');
+  });
+  // C1 (final review): artifact.propose must apply through the EXACT
+  // service.update pipeline — grounding gates, staticLint/syntax/chain
+  // gates, applySessionArtifact, artifactVersions lineage, artifact_version
+  // event, step-plan rebuild. The old bare d.applyArtifact setter skipped
+  // all of them and the first green verify would stamp a stale
+  // executedArtifactVersion.
+  it('artifact.propose flows through the service.update pipeline: version lineage + gates', async () => {
+    const session = makeSession([
+      env('io.confirm', Object.assign({ testInput: { keyword: 'ml', count: 3 } }, SCHEMAS)),
+      env('artifact.propose', {}),
+      fin('done')
+    ], [RED]);
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const st = session.state().session;
+    assert.ok(st.artifactVersions.length >= 1, 'a version was recorded');
+    const v1 = st.artifactVersions[st.artifactVersions.length - 1];
+    assert.ok(Array.isArray(v1.steps) && v1.steps.length >= 2, 'the synthesized steps are the recorded version');
+    // The propose receipt the model saw must carry the update outcome —
+    // applied:true + the recorded version, never a bare-setter receipt.
+    const proposeResult = session.state().session.transcript
+      .filter((t) => t.kind === 'tool' && t.name === 'artifact.propose')
+      .map((t) => t.result).pop();
+    assert.ok(proposeResult && proposeResult.applied === true, 'receipt says applied through the pipeline');
+    assert.equal(proposeResult.version, v1.version, 'receipt version matches the recorded lineage entry');
+    assert.ok(!proposeResult.steps, 'the raw step graph does not leak into the receipt');
   });
   it('no nudge when propose is called before the next note-injection point', async () => {
     const session = makeSession([

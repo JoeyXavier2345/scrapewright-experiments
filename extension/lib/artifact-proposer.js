@@ -194,10 +194,18 @@ function renderExclusionGuardFragment(fieldName, marker) {
 
 // Sweep: bootstrap the container by counting generic families, then ONE
 // census (hover:true). Every hop is try/catch — a failed hop is an evidence
-// gap, never a crash. Synthesis is pure (above); application goes through
-// ctx.applyArtifact so EVERY update gate (chain validation, syntax
-// construction, schema checks) still applies — the joint solver never
-// bypasses the same gates service.update faces.
+// gap, never a crash. Synthesis is pure (above). Application has TWO
+// contracts:
+//   ctx.applyArtifact wired (unit tests / direct callers) — apply directly,
+//     exactly as before.
+//   ctx.applyArtifact absent (production wiring, C1 final review) — return
+//     the synthesis UNAPPLIED as { applied:'engine-pending', steps } for the
+//     ENGINE to route through the exact service.update pipeline (grounding
+//     gates, staticLint/syntax/chain gates, applySessionArtifact,
+//     artifactVersions lineage). The old production path applied through a
+//     BARE setter with no gates and no version lineage — the first green
+//     verify after a propose would stamp a stale executedArtifactVersion and
+//     corrupt rollback/green-tracking/dossier lineage.
 async function proposeArtifact(ctx) {
   const t0 = Date.now();
   const mergeNote = (ctx && ctx.currentArtifact) ? 'regenerated-from-fresh-sweep (hand-tuned slots are NOT preserved — re-check any slot you had fixed by hand)' : 'fresh';
@@ -217,6 +225,16 @@ async function proposeArtifact(ctx) {
   }
   const pack = { census: census, currentArtifact: (ctx && ctx.currentArtifact) || null };
   const synth = synthesizeFromEvidence(pack, (ctx && ctx.requirementText) || '', (ctx && ctx.outputSchema) || null);
+  if (!(ctx && typeof ctx.applyArtifact === 'function')) {
+    return {
+      applied: 'engine-pending',
+      steps: synth.steps,
+      unfilled: synth.unfilled,
+      merge: mergeNote,
+      sweepCostMs: Date.now() - t0,
+      next: 'engine applies + verify.run'
+    };
+  }
   try {
     const applied = await ctx.applyArtifact({ steps: synth.steps });
     return {
