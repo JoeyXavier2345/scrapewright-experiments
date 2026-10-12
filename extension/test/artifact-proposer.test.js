@@ -197,6 +197,17 @@ describe('joint solver — proposeArtifact (stubbed sweep)', () => {
     assert.equal(out.applied, false);
     assert.match(out.error, /SYNTAX_ERROR/);
   });
+  it('re-propose discloses the regenerate semantics when a current artifact exists', async () => {
+    const out = await AP.proposeArtifact({
+      probes: { count: async () => ({ count: 5 }), census: async () => CENSUS_SHALLOW(), sample: async () => ({}) },
+      requirementText: REQ_FULL, outputSchema: SCHEMA_FIX(),
+      currentArtifact: { steps: [{ id: 'old', script: 'return 1;', onSuccess: 'TERMINATE' }] },
+      applyArtifact: async () => ({ version: 2 })
+    });
+    assert.equal(out.applied, true);
+    assert.match(out.merge, /regenerated-from-fresh-sweep/);
+    assert.match(out.merge, /NOT preserved/);
+  });
 });
 
 describe('joint solver — session-tools registration', () => {
@@ -207,10 +218,10 @@ describe('joint solver — session-tools registration', () => {
     assert.match(src, /artifact\.propose \{\} — the joint solver/, 'spec text present');
     assert.match(src, /proposeArtifact\(\{/, 'wired to the proposer');
   });
-  it('toolSpec budget stays under 6500 chars', () => {
+  it('toolSpec budget stays under 6500 chars (real {name,args,returns} shape)', () => {
     const { createSessionTools } = require('../lib/session-tools');
     const t = createSessionTools({ rail: { executeDsl: async () => ({}) }, runVerify: async () => ({}), probeFactory: () => ({}), getDraftService: () => null, applyArtifact: async () => ({}), getTestInput: () => ({}), getOutputSchema: () => ({}), getSteps: () => [] });
-    const total = t.toolSpecs.reduce((a, s) => a + (s.spec || '').length, 0);
+    const total = t.toolSpecs.reduce((a, s) => a + (s.args || '').length + (s.returns || '').length, 0);
     assert.ok(total <= 6500, 'toolSpec total ' + total + ' <= 6500');
   });
 });

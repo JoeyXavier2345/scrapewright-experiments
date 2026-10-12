@@ -221,6 +221,7 @@ async function proposeArtifact(ctx) {
     return {
       applied: true,
       version: (applied && applied.version) || null,
+      merge: (ctx && ctx.currentArtifact) ? 'regenerated-from-fresh-sweep (hand-tuned slots are NOT preserved — re-check any slot you had fixed by hand)' : 'fresh',
       unfilled: synth.unfilled,
       replaced: synth.replaced || [],
       sweepCostMs: Date.now() - t0,
@@ -230,6 +231,7 @@ async function proposeArtifact(ctx) {
     return {
       applied: false,
       error: String((eApply && eApply.message) || eApply),
+      merge: (ctx && ctx.currentArtifact) ? 'regenerated-from-fresh-sweep (hand-tuned slots are NOT preserved — re-check any slot you had fixed by hand)' : 'fresh',
       unfilled: synth.unfilled,
       sweepCostMs: Date.now() - t0,
       next: 'fix the rejection or call artifact.propose again after probe.census'
