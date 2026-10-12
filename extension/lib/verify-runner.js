@@ -1835,6 +1835,63 @@
             }
             // Gate B (REQUIREMENT_TIME_SOURCE_DROPPED) moved beside the
             // tooltip-route gate below — it needs fullAbsoluteSeen/allSamples.
+            // Gate C — 242nd log: the requirement's exclusion clause NAMES the
+            // class to remove (发帖账号为Ad（广告…）), and the shipped v4 carried
+            // postTime 'Ad','Ad','Ad' — the excluded class itself, SELECTED BY
+            // the population filter (the container/id binding matched the ad
+            // fingerprint a[href^="?__cft"] instead of organic permalinks).
+            // No gate connected the requirement's own exclusion vocabulary to
+            // the shipped values. Match the clause's Latin marker tokens
+            // against near-exact field values: when the excluded marker ships
+            // AS a value, the discrimination was inverted, not imperfect.
+            const exclSegs242 = reqText237.split(/[。；;.\n]/)
+              .filter((seg242) => seg242 && /剔除|排除|过滤|不含|去掉|exclude|filter\s+out|remove/i.test(seg242));
+            const STOP242 = new Set(['exclude', 'filter', 'out', 'remove', 'and', 'or', 'the', 'a', 'an', 'of', 'with', 'without', 'entries', 'entry', 'items', 'item', 'posts', 'post', 'cards', 'card', 'dom']);
+            const markers242 = [];
+            for (const seg242 of exclSegs242) {
+              const toks242 = String(seg242).match(/[A-Za-z][A-Za-z0-9]{1,11}/g) || [];
+              for (const t242 of toks242) {
+                const low242 = t242.toLowerCase();
+                if (STOP242.has(low242)) continue;
+                if (markers242.indexOf(low242) === -1) markers242.push(low242);
+              }
+            }
+            if (markers242.length) {
+              const leaks242 = [];
+              const walk242 = (node242, path242) => {
+                if (!node242 || typeof node242 !== 'object') return;
+                if (Array.isArray(node242)) {
+                  for (let k242 = 0; k242 < node242.length; k242++) walk242(node242[k242], path242 + '[]');
+                  return;
+                }
+                for (const key242 of Object.keys(node242)) {
+                  const v242 = node242[key242];
+                  const p242 = path242 ? path242 + '.' + key242 : key242;
+                  if (typeof v242 === 'string' && v242.trim() && v242.trim().length <= 14) {
+                    const lowV242 = v242.trim().toLowerCase();
+                    const hit242 = markers242.find((mk242) => lowV242 === mk242 || lowV242 === mk242 + 's' || mk242 === lowV242 + 's');
+                    if (hit242) leaks242.push({ path: p242, value: v242.trim(), marker: hit242 });
+                  } else if (v242 && typeof v242 === 'object') {
+                    walk242(v242, p242);
+                  }
+                }
+              };
+              walk242(finalData, '');
+              const dedup242 = [];
+              const seen242 = new Set();
+              for (const lk242 of leaks242) {
+                const k242 = lk242.path + '|' + lk242.marker;
+                if (seen242.has(k242)) continue;
+                seen242.add(k242);
+                dedup242.push(lk242);
+              }
+              if (dedup242.length) {
+                extras237.push('REQUIREMENT_EXCLUSION_LEAKED: the requirement\'s exclusion clause names "' + dedup242[0].marker + '"-class entries to REMOVE, but ' +
+                  dedup242.map((d242) => d242.path + ' ships exactly "' + d242.value + '"').join(', ') +
+                  ' — the excluded class was SELECTED by the extraction, not filtered (the container/id binding matched the excluded class\'s fingerprint instead of the organic population). ' +
+                  'Fix: re-bind the container and identity to the organic population (probe the permalink family the census/receipts named — the ad-marker polarity note in this report lists the artifact\'s ad-marker selectors), and exclude the marker class with the negation form (:not() / :has()-negation over the marker), never a positive match on it.');
+              }
+            }
             if (extras237.length) {
               const joined237 = extras237.join(' ');
               if (error) {
