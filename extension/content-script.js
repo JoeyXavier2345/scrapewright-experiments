@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '233-zero-delivered-red';
+  const SW_BUILD_TAG = '234-llm-hang-watchdog';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back

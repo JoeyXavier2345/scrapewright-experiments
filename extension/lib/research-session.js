@@ -1816,13 +1816,41 @@
           emit('turn_start', { turn: state.spend.turns + 1 });
           const messages = assembleMessages();
           let content;
+          // 234th log: a single LLM dispatch hung FOREVER — the request
+          // body logged at 03:34:55 and nothing followed for 8 hours (the
+          // client's 300s fetch timeout never fired; a frozen/suspended
+          // environment freezes the abort timer too). The engine sat
+          // status 'running' with no stop event, wedging the wizard's
+          // double-start guard and leaving the journal without a terminal
+          // marker. The hang watchdog bounds ONE dispatch; the 54th-round
+          // in-loop wall guard covers BETWEEN-attempt spirals, and
+          // llmWait stays excluded from wallClock — this is purely the
+          // never-resolves class.
+          const LLM_HANG_WATCHDOG_MS = 35 * 60 * 1000;
+          let llmHung234 = false;
+          let hangTimer234 = null;
           try {
-            content = await callLlm(messages);
+            content = await new Promise((resolve234, reject234) => {
+              hangTimer234 = setTimeout(() => {
+                llmHung234 = true;
+                reject234(new Error('LLM_HANG: a single LLM dispatch exceeded ' + (LLM_HANG_WATCHDOG_MS / 60000) + ' minutes without resolving'));
+              }, LLM_HANG_WATCHDOG_MS);
+              Promise.resolve(callLlm(messages)).then(resolve234, reject234);
+            });
           } catch (err) {
+            if (hangTimer234) clearTimeout(hangTimer234);
+            if (llmHung234) {
+              report = await stop('llm:error',
+                'a single LLM dispatch ran over ' + (LLM_HANG_WATCHDOG_MS / 60000) +
+                ' minutes without resolving — the provider connection hung and the client-level fetch timeout did not fire (a suspended/frozen environment freezes the abort timer). ' +
+                'Resume with a fresh engine; the last turn never completed, so the transcript is intact to that point.');
+              break;
+            }
             const s = llmStopFromError(err);
             report = await stop(s[0], s[1]);
             break;
           }
+          if (hangTimer234) clearTimeout(hangTimer234);
           let parsed = Protocol.parseAssistantTurn(content);
           if (!parsed.ok) {
             emit('protocol_violation', { violation: parsed.violation, detail: parsed.detail || null });
