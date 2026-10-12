@@ -210,6 +210,57 @@ describe('joint solver — proposeArtifact (stubbed sweep)', () => {
   });
 });
 
+describe('joint solver — red receipts carry fragments', () => {
+  const { createVerifyRunner } = require('../lib/verify-runner');
+  const SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
+    type: 'object', required: ['content', 'postTime'], properties: { content: { type: 'string' }, postTime: { type: 'string' } } } } } };
+  function run(records, sessionEvidence, diagRow) {
+    const runner = createVerifyRunner({
+      ensureLock: async () => {}, releaseLock: async () => {},
+      createTab: async () => ({ id: 1 }), removeTab: async () => {}, waitForTabLoad: async () => {},
+      sendMessage: async () => ({ pong: true }), executeScript: async () => ({ result: 'ok', selectorDiagnostics: [] }),
+      captureSnapshot: async () => ({ html: '<html></html>' }), evaluateCondition: async () => true,
+      getSignal: () => null, log: () => {}, onEvent: () => {},
+      orchestrate: async (svc, input, d, opts) => {
+        await d.createTab(svc.targetUrl);
+        opts.onEvent({ type: 'EXECUTION_START' });
+        if (diagRow) opts.onEvent({ type: 'STEP_ITERATION', stepId: 's1', selectorDiagnostics: [diagRow] });
+        return { finalResult: { posts: records }, steps: [], pages: [], pagesTruncated: false };
+      }
+    });
+    return runner({ service: { targetUrl: 'https://e.com', steps: [{ id: 's1', name: 's', script: 'return 1;', onSuccess: 'TERMINATE' }], config: {} }, input: { count: 3 }, outputSchema: SCHEMA, sessionEvidence: sessionEvidence });
+  }
+  it('REQUIREMENT_EXPAND_DROPPED carries the paste-ready $clickInList step', async () => {
+    const out = await run(
+      [{ content: 'body #' + Math.random().toString(36).slice(2, 8) + ' … See more', postTime: 'November 3, 2025' },
+       { content: 'body2 … See more', postTime: 'November 3, 2025' }],
+      { requirementText: '若有"展开"操作，点击展开加载完整正文。' },
+      { api: 'extractWithHover', containerSelector: '[role=article]' });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /REQUIREMENT_EXPAND_DROPPED/);
+    assert.match(out.report.error.message, /PASTE-READY: await \$clickInList\("\[role=article\]"/);
+  });
+  it('REQUIREMENT_EXCLUSION_LEAKED carries the assembly guard fragment', async () => {
+    const out = await run(
+      [{ content: 'x #' + Math.random().toString(36).slice(2, 8), postTime: 'Ad' },
+       { content: 'y #' + Math.random().toString(36).slice(2, 8), postTime: 'Ad' }],
+      { requirementText: '剔除发帖账号为Ad的条目。悬浮窗时间戳作为发帖时间。' }, null);
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /REQUIREMENT_EXCLUSION_LEAKED/);
+    assert.match(out.report.error.message, /PASTE-READY guard: \.filter\(function \(p\) \{ return String\(p\.postTime/);
+  });
+  it('REQUIREMENT_TIME_SOURCE_DROPPED carries the hoverPopover fieldMap fragment', async () => {
+    const out = await run(
+      [{ content: 'x #' + Math.random().toString(36).slice(2, 8), postTime: 'November 3, 2025' },
+       { content: 'y #' + Math.random().toString(36).slice(2, 8), postTime: '2 days ago' }],
+      { requirementText: '悬浮窗的时间戳信息作为发帖时间，提取帖子正文。', lastFullAbsolute: 'November 3, 2025' }, null);
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /REQUIREMENT_TIME_SOURCE_DROPPED/);
+    assert.match(out.report.error.message, /PASTE-READY fieldMap:/);
+    assert.match(out.report.error.message, /read: 'hoverPopover'/);
+  });
+});
+
 describe('joint solver — session-tools registration', () => {
   it('the tool is registered with a compact spec and calls proposeArtifact', () => {
     const fs = require('node:fs');

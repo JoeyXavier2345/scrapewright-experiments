@@ -115,6 +115,45 @@
     try { return JSON.parse(String(p)); } catch (e) { return null; }
   }
 
+  // 246th joint solver: the three requirement red gates (236/237/242) append
+  // COPY-READY fix fragments rendered by lib/artifact-proposer — the model
+  // pastes instead of composing (every composition slip costs a 90s verify).
+  // Pure selector sourcing, shared by the gate sites: the fragment must
+  // interpolate the container THIS run actually extracted. Preferred source
+  // is the run's own events (the LAST extractWithHover/extractList
+  // diagnostics row names the container that matched), then the artifact's
+  // `const CARD = '…'` literal, else the web-generic ARIA bootstrap. Never
+  // site tokens.
+  function lastContainerSel246(events) {
+    try {
+      for (let i = (events || []).length - 1; i >= 0; i--) {
+        const e = events[i];
+        if (!e || !Array.isArray(e.selectorDiagnostics)) continue;
+        for (let j = e.selectorDiagnostics.length - 1; j >= 0; j--) {
+          const row = e.selectorDiagnostics[j];
+          if (row && (row.api === 'extractWithHover' || row.api === 'extractList') &&
+              typeof row.containerSelector === 'string' && row.containerSelector.trim()) {
+            return row.containerSelector;
+          }
+        }
+      }
+    } catch (e246cs) { /* best-effort — fragment degrades to the fallback */ }
+    return null;
+  }
+  function cardSel246(events, service) {
+    const fromEvents = lastContainerSel246(events);
+    if (fromEvents) return fromEvents;
+    try {
+      const steps246 = (service && Array.isArray(service.steps)) ? service.steps : [];
+      for (const st246 of steps246) {
+        if (!st246 || typeof st246.script !== 'string') continue;
+        const m246 = st246.script.match(/const CARD = '([^']+)'/);
+        if (m246) return m246[1];
+      }
+    } catch (e246st) { /* best-effort */ }
+    return '[role=article]';
+  }
+
   // Tenth-log N2: junk-value census over the extracted records. REPORT-ONLY —
   // structural green (score/schema ok) can hide junk VALUES: bare
   // redirect-query fragments posing as ids, inline data: URIs polluting
@@ -551,6 +590,14 @@
       : resolveWU();
     const wuMissing = (Array.isArray(WU.__missing) && WU.__missing.length) ? WU.__missing : null;
     const RSD = resolveLib('./record-shape-distribution', 'RecordShapeDistribution');
+    // 246th joint solver: the artifact-proposer fragment renderers. Resolved
+    // HERE (createVerifyRunner call time), NOT at IIFE load — wizard.html
+    // loads verify-runner.js BEFORE artifact-proposer.js, so an IIFE-scope
+    // resolution would capture null in the page; the only browser caller
+    // (wizard.js) runs after every script tag. Node/tests go through
+    // require(). Every use is guarded — an unresolved proposer means the red
+    // message ships WITHOUT its fragment, never without the message.
+    const AP246 = resolveLib('./artifact-proposer', '__artifactProposerModuleMarker__');
     const log = typeof d.log === 'function' ? d.log : function () {};
     const onEventCb = typeof d.onEvent === 'function' ? d.onEvent : function () {};
     const ensureLock = typeof d.ensureLock === 'function' ? d.ensureLock : async function () {};
@@ -1760,11 +1807,21 @@
                   : (Array.isArray(finalData[Object.keys(finalData)[0]]) ? finalData[Object.keys(finalData)[0]] : []);
                 const rec236 = arr236[((smu.samples || [1])[0] || 1) - 1] || {};
                 const val236 = segs236.length > 1 ? rec236[segs236[segs236.length - 1]] : rec236[smu.field];
+                // 246th: the paste-ready fragment interpolates the CARD
+                // selector this run actually extracted (events > artifact
+                // CARD literal > ARIA bootstrap).
+                let paste236 = '';
+                try {
+                  if (AP246 && typeof AP246.renderExpandStepFragment === 'function') {
+                    paste236 = ' PASTE-READY: ' + AP246.renderExpandStepFragment(cardSel246(events, service));
+                  }
+                } catch (eFrag236) { /* the fragment is additive — the red message must survive without it */ }
                 error = new Error(
                   'REQUIREMENT_EXPAND_DROPPED: the requirement explicitly demands expanding collapsed text (点击展开/加载完整正文), but ' + smu.field +
                     ' shipped the truncation affordance at the tail of ' + smu.affectedCount + ' record(s) (e.g. ' + JSON.stringify(String(val236 == null ? '' : val236).slice(0, 40)) +
                     ') and NO step in the artifact clicks anything. The full text was never loaded — this is the requirement\'s own operation dropped, not a data-quality nuance. ' +
-                    'Fix: add an expand step BEFORE extraction — $clickInList(containerSel, \'div[role=button]\', {textFilter:\'See more\'}) (or the page\'s registered affordance wording) then re-extract; or, if the user has knowingly accepted truncated content, renegotiate the contract via io.confirm first — never ship silently.'
+                    'Fix: add an expand step BEFORE extraction — $clickInList(containerSel, \'div[role=button]\', {textFilter:\'See more\'}) (or the page\'s registered affordance wording) then re-extract; or, if the user has knowingly accepted truncated content, renegotiate the contract via io.confirm first — never ship silently.' +
+                    paste236
                 );
               }
             }
@@ -1907,10 +1964,22 @@
                 dedup242.push(lk242);
               }
               if (dedup242.length) {
+                // 246th: paste-ready ASSEMBLY guard on the leaked field's
+                // leaf name + the requirement's own marker — belt to the
+                // selector re-bind (the guard alone keeps the class out of
+                // the shipped records even while the binding is re-bound).
+                let paste242 = '';
+                try {
+                  if (AP246 && typeof AP246.renderExclusionGuardFragment === 'function') {
+                    const leaf242 = String(dedup242[0].path).split('.').pop();
+                    paste242 = ' PASTE-READY guard: ' + AP246.renderExclusionGuardFragment(leaf242, dedup242[0].marker);
+                  }
+                } catch (eFrag242) { /* additive — the red message must survive without it */ }
                 extras237.push('REQUIREMENT_EXCLUSION_LEAKED: the requirement\'s exclusion clause names "' + dedup242[0].marker + '"-class entries to REMOVE, but ' +
                   dedup242.map((d242) => d242.path + ' ships exactly "' + d242.value + '"').join(', ') +
                   ' — the excluded class was SELECTED by the extraction, not filtered (the container/id binding matched the excluded class\'s fingerprint instead of the organic population). ' +
-                  'Fix: re-bind the container and identity to the organic population (probe the permalink family the census/receipts named — the ad-marker polarity note in this report lists the artifact\'s ad-marker selectors), and exclude the marker class with the negation form (:not() / :has()-negation over the marker), never a positive match on it.');
+                  'Fix: re-bind the container and identity to the organic population (probe the permalink family the census/receipts named — the ad-marker polarity note in this report lists the artifact\'s ad-marker selectors), and exclude the marker class with the negation form (:not() / :has()-negation over the marker), never a positive match on it.' +
+                  paste242);
               }
             }
             if (extras237.length) {
@@ -2718,9 +2787,28 @@
                 ((!capturedAbs237 && inRunCaptured > 0 && !allSamples.some(sampleDateShape))
                   ? ' None of this run\'s ' + inRunCaptured + ' captured hovercard(s) carries ANY date-shaped text — the anchorSel hovers no TIME anchor at all (author/card anchors only): ADD the time-anchor family to the union (the anchor census in the HOVER_ANCHORS_BLIND receipt / probe.census {hover:true} names the families present — mind the descendant direction: the carrier may be the labelled span itself, not a wrapping link).'
                   : '');
+                // 246th: paste-ready fieldMap line for the designated source.
+                // anchorSel source: the artifact's own hover anchorSel literal
+                // if any step declares one, else the container this run
+                // extracted (cardSel246) — the fragment is a starting point
+                // the model narrows, never a guessed page-specific anchor.
+                let paste237b = '';
+                try {
+                  if (AP246 && typeof AP246.renderHoverPopoverFragment === 'function') {
+                    let anchor237 = null;
+                    const steps237b = (service && Array.isArray(service.steps)) ? service.steps : [];
+                    for (const st237 of steps237b) {
+                      if (!st237 || typeof st237.script !== 'string') continue;
+                      const m237 = st237.script.match(/anchorSel:\s*'([^']+)'/);
+                      if (m237) { anchor237 = m237[1]; break; }
+                    }
+                    if (!anchor237) anchor237 = cardSel246(events, service);
+                    paste237b = ' PASTE-READY fieldMap: ' + AP246.renderHoverPopoverFragment(c.field, anchor237);
+                  }
+                } catch (eFrag237b) { /* additive — the red message must survive without it */ }
                 const gateMsg237 = 'REQUIREMENT_TIME_SOURCE_DROPPED: the requirement designates the hover-popover timestamp as the time source (时间戳悬浮窗 → 发帖时间), but ' +
                   detail237 + '. Disclosure alone is not a sanctioned exit when the requirement names the source. Fix: ' + fix237 +
-                  ' Or renegotiate via io.confirm.';
+                  ' Or renegotiate via io.confirm.' + paste237b;
                 if (!error) {
                   error = new Error(gateMsg237);
                 } else if (!/REQUIREMENT_TIME_SOURCE_DROPPED/.test(String(error.message))) {
