@@ -37,7 +37,7 @@ describe('244th round — page-wide field cross-check (container-subset fingerpr
   });
   it('B: detectFieldMatchZero carries pageWideMatches (max over calls)', () => {
     const events = [
-      { type: 'STEP_ITERATION', stepId: 'extract', selectorDiagnostics: [{ api: 'extractWithHover', containerMatches: 3, perField: [{ field: 'postUrl', subSelector: 'a[href*="/posts/"]', matchCount: 0, pageWideMatches: 7 }] }] },
+      { type: 'STEP_ITERATION', stepId: 'extract', selectorDiagnostics: [{ api: 'extractWithHover', containerSelector: '[role="article"]', containerMatches: 3, perField: [{ field: 'postUrl', subSelector: 'a[href*="/posts/"]', matchCount: 0, pageWideMatches: 7 }] }] },
       { type: 'STEP_ITERATION', stepId: 'extract', selectorDiagnostics: [{ api: 'extractWithHover', containerMatches: 3, perField: [{ field: 'postUrl', subSelector: 'a[href*="/posts/"]', matchCount: 0, pageWideMatches: 4 }] }] }
     ];
     const hits = WU.detectFieldMatchZero(events) || [];
@@ -56,7 +56,7 @@ describe('244th round — page-wide field cross-check (container-subset fingerpr
       orchestrate: async (svc, input, d, opts) => {
         await d.createTab(svc.targetUrl);
         opts.onEvent({ type: 'EXECUTION_START' });
-        opts.onEvent({ type: 'STEP_ITERATION', stepId: 'extract', selectorDiagnostics: [{ api: 'extractWithHover', containerMatches: 3, perField: [{ field: 'postUrl', subSelector: 'a[href*="/posts/"]', matchCount: 0, pageWideMatches: 7 }] }] });
+        opts.onEvent({ type: 'STEP_ITERATION', stepId: 'extract', selectorDiagnostics: [{ api: 'extractWithHover', containerSelector: '[role="article"]', containerMatches: 3, perField: [{ field: 'postUrl', subSelector: 'a[href*="/posts/"]', matchCount: 0, pageWideMatches: 7 }] }] });
         return { finalResult: { posts: [] }, steps: [], pages: [], pagesTruncated: false };
       }
     });
@@ -69,8 +69,8 @@ describe('244th round — page-wide field cross-check (container-subset fingerpr
     assert.match(msg, /FIELD_MATCH_ZERO/);
     assert.match(msg, /\(c\) CONTAINER SUBSET/);
     assert.match(msg, /matches 7 element\(s\) ELSEWHERE on this page/);
-    assert.match(msg, /:has\(a\[href\*="\/posts\/"\]\)/);
-    assert.match(msg, /requirement's own exclusion list applies/);
+    assert.match(msg, /COPY-READY container: \[role="article"\]:has\(a\[href\*="\/posts\/"\]\)/);
+    assert.match(msg, /apply it to EVERY step referencing this list/);
   });
   it('D: without page-wide evidence the census text stays on the two legacy mechanisms', async () => {
     const SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {

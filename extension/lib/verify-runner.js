@@ -1168,7 +1168,17 @@
               // order — the field selector itself names the :has() filter.
               const subset244 = census.filter((c) => typeof c.pageWideMatches === 'number' && c.pageWideMatches > 0);
               const subsetLine244 = subset244.length
-                ? ' (c) CONTAINER SUBSET — ' + subset244.map((c) => 'the sub-selector for "' + c.field + '" matches ' + c.pageWideMatches + (c.pageWideMatches >= 50 ? '+' : '') + ' element(s) ELSEWHERE on this page but 0 inside every processed container: the container selector is processing the wrong subset of the feed (leading recommendation/group modules while the target cards sit deeper). Constrain the container with :has(' + String(c.subSelector) + ') so only cards carrying the family are processed, or skip past the leading modules — the requirement\'s own exclusion list applies').join('; ') + '.'
+                ? ' (c) CONTAINER SUBSET — ' + subset244.map((c) => {
+                    // 245th: render the COPY-READY selector — the model
+                    // composes composition errors when it must merge the
+                    // :has() itself (each slip costs a 90s verify); a
+                    // ready-to-apply string turns the diagnosis into a
+                    // one-turn fix.
+                    const readySel244 = c.containerSelector
+                      ? String(c.containerSelector) + ':has(' + String(c.subSelector) + ')'
+                      : ':has(' + String(c.subSelector) + ')';
+                    return 'the sub-selector for "' + c.field + '" matches ' + c.pageWideMatches + (c.pageWideMatches >= 50 ? '+' : '') + ' element(s) ELSEWHERE on this page but 0 inside every processed container: the container selector is processing the wrong subset of the feed (leading recommendation/group modules while the target cards sit deeper). COPY-READY container: ' + readySel244 + ' — apply it to EVERY step referencing this list';
+                  }).join('; ') + '.'
                 : '';
               msg = 'FIELD_MATCH_ZERO / EMPTY_EXTRACTION: required field(s) [' + emptyFields.join(', ') + '] are present but every extracted item has only empty values, or no items were extracted at all. Field census from SELECTOR DIAGNOSTICS — ' + lines.join('; ') + '. The containers themselves DID match, so the page has the repeating items but this field\'s sub-selector found nothing on them. Two likely mechanisms: ' +
                 '(a) POPULATION DIVERGENCE — your selectors were grounded on the research page, and a different verify INPUT (different query values) can change the result-card population entirely; first re-verify with the SAME input values that drove the research page before touching selectors; ' +

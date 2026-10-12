@@ -2900,11 +2900,12 @@ function detectFieldMatchZero(events) {
         const key = evt.stepId + '\u0000' + f.field;
         let e = agg.get(key);
         if (!e) {
-          e = { stepId: evt.stepId, field: f.field, subSelector: f.subSelector, api: d.api || 'extractList', calls: 0, zeroCalls: 0, containerMatches: 0, pageWideMatches: 0 };
+          e = { stepId: evt.stepId, field: f.field, subSelector: f.subSelector, containerSelector: d.containerSelector || null, api: d.api || 'extractList', calls: 0, zeroCalls: 0, containerMatches: 0, pageWideMatches: 0 };
           agg.set(key, e);
         }
         e.calls += 1;
         e.containerMatches = Math.max(e.containerMatches, containers);
+        if (!e.containerSelector && d.containerSelector) e.containerSelector = d.containerSelector;
         // 244th log: the source's bounded page-wide count rides the row —
         // zero-in-containers + nonzero page-wide is the container-subset
         // fingerprint the census teaching turns into a rebinding order.
