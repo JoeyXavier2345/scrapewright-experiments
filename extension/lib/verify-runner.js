@@ -81,6 +81,7 @@
       detectHardcodedNestedRoles: w.detectHardcodedNestedRoles,
       detectHoverEntityCoverage: w.detectHoverEntityCoverage,
       detectRelativeTimestamps: w.detectRelativeTimestamps,
+      detectNeverExtractedFields: w.detectNeverExtractedFields,
       extractDateSubstrings: w.extractDateSubstrings,
       hasYearToken: w.hasYearToken,
       looksLikeDate: w.looksLikeDate,
@@ -1733,6 +1734,119 @@
             }
           } catch (e236) { /* the expand gate must never break the report */ }
         }
+        // 237th log: the popovers opened on the page (time + author cards
+        // visible) yet the green verify shipped postTime "2 days ago" for
+        // 4/6 records and likeCount/commentCount/shareCount as hardcoded ''
+        // in 6/6 — the requirement text EXPLICITLY lists the counts among
+        // the fields to return and designates the 时间戳悬浮窗 as the
+        // postTime source, but every gate that saw it (staticLint at update
+        // time, PARTIAL_EMPTY_FIELDS census, RELATIVE_TIMESTAMP with its own
+        // "capture failures, not page truth" note) was advisory-only: red
+        // vetoes get fixed, advisories get ignored. Same family as the
+        // 236th: when the requirement itself mandates the data/source, an
+        // advisory lane is not a sanctioned exit.
+        try {
+          const reqText237 = (o.sessionEvidence && typeof o.sessionEvidence.requirementText === 'string')
+            ? o.sessionEvidence.requirementText : null;
+          if (reqText237) {
+            const extras237 = [];
+            // Gate A — requirement-named fields shipped as hardcoded
+            // literals. Vendor-neutral bilingual data-category lexicon:
+            // field-name token → the CJK/English vocabulary a requirement
+            // uses to name that category. A category the requirement text
+            // itself waives (地点（可能有）) is pre-authorized absent.
+            const VOCAB237 = [
+              ['like', ['点赞']], ['comment', ['评论']], ['share', ['转发', '分享']],
+              ['forward', ['转发']], ['retweet', ['转发']], ['author', ['作者', '账号']],
+              ['account', ['账号']], ['group', ['小组', '群组']], ['location', ['地点', '位置']],
+              ['place', ['地点']], ['time', ['时间']], ['date', ['时间', '日期']],
+              ['content', ['正文', '内容']], ['text', ['正文', '文本']], ['media', ['媒体', '插图']],
+              ['image', ['图片', '插图']], ['photo', ['图片', '照片']], ['video', ['视频']],
+              ['url', ['链接']], ['link', ['链接']]
+            ];
+            const WAIVER237 = /可能有|可能为空|可能没有|optional/i;
+            const matchVocab237 = (fieldName, reqText) => {
+              const fl = String(fieldName || '').toLowerCase();
+              if (!fl) return null;
+              for (const pair of VOCAB237) {
+                if (fl.indexOf(pair[0]) === -1) continue;
+                if (reqText.toLowerCase().indexOf(pair[0]) > -1) return { term: pair[0], self: true };
+                for (const term of pair[1]) {
+                  const idx = reqText.indexOf(term);
+                  if (idx > -1) {
+                    if (WAIVER237.test(reqText.slice(idx, idx + 12))) continue; // waived in-line
+                    return { term: term, self: false };
+                  }
+                }
+              }
+              return null;
+            };
+            const isEmpty237 = (v) => v == null || (typeof v === 'string' && !v.trim());
+            const collectLeaf237 = (root, segs) => {
+              let cur = [root];
+              for (let k = 0; k < segs.length; k++) {
+                const seg = String(segs[k]).replace(/\[\]$/, '');
+                const last = k === segs.length - 1;
+                const next = [];
+                for (const node of cur) {
+                  const v = node == null ? undefined : node[seg];
+                  if (last) next.push(v);
+                  else if (Array.isArray(v)) { for (const x of v) next.push(x); }
+                  else if (v != null) next.push(v);
+                }
+                cur = next;
+                if (!cur.length) break;
+              }
+              return cur;
+            };
+            if (typeof WU.detectNeverExtractedFields === 'function' && service && Array.isArray(service.steps) && service.steps.length) {
+              const dropped237 = [];
+              for (const f of (WU.detectNeverExtractedFields(service.steps, outputSchema) || [])) {
+                if (!f || !f.path) continue;
+                const vals = collectLeaf237(finalData, String(f.path).split('.'));
+                if (!vals.length || !vals.every(isEmpty237)) continue;
+                const cat = matchVocab237(f.field || String(f.path).split('.').pop(), reqText237);
+                if (cat) dropped237.push({ path: f.path, term: cat.term, total: vals.length });
+              }
+              if (dropped237.length) {
+                extras237.push('REQUIREMENT_FIELD_DROPPED: the requirement\'s own field list names ' +
+                  dropped237.map((d) => d.term).join('/') + ', but ' +
+                  dropped237.map((d) => d.path + ' (empty in ' + d.total + '/' + d.total + ' records)').join(', ') +
+                  ' appear ONLY as hardcoded string literals — no step extracts them (the update-time staticLint flagged the same). A literal verifies green while carrying no data. ' +
+                  'Fix: bind each field in a fieldMap or compute it — count-family values usually live in aria-label / aria-labelledby carriers (probe.census {hover:true} names the lane and sample selectors); or renegotiate the contract via io.confirm if the user has knowingly accepted dropping them.');
+              }
+            }
+            // Gate B — the requirement designates the hover-popover
+            // timestamp as the time source, yet the shipped population is
+            // MIXED: full absolutes prove the tooltip route works on this
+            // page, so the relative/partial stragglers are per-record
+            // capture failures, not page truth. Disclosure alone is not a
+            // sanctioned exit when the requirement names the source.
+            const rel237 = Array.isArray(detectors.relativeTimestamps)
+              ? detectors.relativeTimestamps.find((e) => {
+                  if (!e) return false;
+                  const full = (e.totalRecords || 0) - (e.relativeCount || 0) - (e.partialAbsoluteCount || 0);
+                  return full > 0 && ((e.relativeCount || 0) > 0 || (e.partialAbsoluteCount || 0) > 0);
+                }) : null;
+            if (rel237 && /悬浮窗|悬浮|悬停|hover|tooltip|popover/i.test(reqText237)
+              && /时间戳|发帖时间|时间|日期|timestamp|date/i.test(reqText237)) {
+              const full237 = (rel237.totalRecords || 0) - (rel237.relativeCount || 0) - (rel237.partialAbsoluteCount || 0);
+              extras237.push('REQUIREMENT_TIME_SOURCE_DROPPED: the requirement designates the hover-popover timestamp as the time source (时间戳悬浮窗 → 发帖时间), but ' +
+                (rel237.path || rel237.field) + ' ships a MIXED population: ' + full237 + ' record(s) carry FULL absolutes (the tooltip route works on this page) while ' +
+                (rel237.relativeCount || 0) + ' relative + ' + (rel237.partialAbsoluteCount || 0) + ' partial-no-year record(s) are capture failures, not page truth (e.g. ' +
+                JSON.stringify(String(rel237.sampleValue || '').slice(0, 24)) + '). Disclosure alone is not a sanctioned exit when the requirement names the source. ' +
+                'Fix: re-run $timestamp with anchorSel narrowed to the failing card (or read:\'hoverPopover\' with a year-carrying match) until every record carries a full absolute, or renegotiate via io.confirm.');
+            }
+            if (extras237.length) {
+              const joined237 = extras237.join(' ');
+              if (error) {
+                error = new Error(error.message + ' ALSO RED — fix together, not one verify at a time: ' + joined237);
+              } else {
+                error = new Error(joined237);
+              }
+            }
+          }
+        } catch (e237) { /* the requirement-field gates must never break the report */ }
         if (typeof WU.detectHovercardUnparsed === 'function') {
           const hcu = WU.detectHovercardUnparsed(finalData, outputSchema);
           if (hcu) detectors.hovercardUnparsed = hcu;
