@@ -504,7 +504,13 @@
       // trigger). The 172nd live bug: this key was only initialized in
       // the resume branch — fresh sessions ran with undefined and the
       // ledger check silently skipped forever.
-      fieldFailLedger: {}
+      fieldFailLedger: {},
+      // 246th (joint solver, task 6): armed by a RED verify report, discharged
+      // by the routing note at the next turn-top injection point (or by an
+      // artifact.propose dispatch, whichever comes first). Holds the red's
+      // error-text slice so the delivered note can be audited against the
+      // episode that armed it.
+      redNudgePending246: null
     };
     if (cfg.seed && cfg.seed.session) {
       state = JSON.parse(JSON.stringify(cfg.seed.session));
@@ -513,6 +519,7 @@
       state.stopped = null;
       if (!Array.isArray(state.waivedSelectors)) state.waivedSelectors = []; // legacy seeds predate sticky waivers
       if (!Array.isArray(state.stepPlan)) state.stepPlan = []; // legacy seeds predate the step plan (§3.C)
+      if (typeof state.redNudgePending246 !== 'string' && state.redNudgePending246 !== null) state.redNudgePending246 = null; // legacy seeds predate the 246th nudge
     }
 
     let abortFlag = false, abortReason = 'user';
@@ -1674,6 +1681,10 @@
       if (name === 'knowledge.query') return sanitizeToolResult(handleKnowledgeQuery(args));
       if (name === 'ledger.add') return sanitizeToolResult(handleLedgerAdd(args));
       if (name === 'service.update') return sanitizeToolResult(await handleServiceUpdate(args));
+      // 246th (joint solver, task 6): the moment the joint solver
+      // dispatches, the armed red→propose routing nudge is discharged —
+      // the routing already succeeded, a pending note would be noise.
+      if (name === 'artifact.propose') state.redNudgePending246 = null;
       // Probe tools (probe-tools.js) take POSITIONAL args; the protocol carries
       // one args object — probe-tools accepts BOTH shapes (object-first or
       // positional), so dispatch every user tool uniformly as fn(args, ctx).
@@ -1831,6 +1842,16 @@
           tickContractDelayAdvisory();
           maybeBudgetAdvisory();
           tickFieldFailLedger();
+          // 246th (joint solver, task 6): deliver the armed red→propose
+          // routing nudge — ONCE per red episode, BEFORE assembleMessages()
+          // so the model reads it on this turn's LLM call. Cleared on
+          // delivery here and again at the artifact.propose dispatch site
+          // (whichever comes first); a second red re-arms it once more.
+          if (state.redNudgePending246) {
+            state.transcript.push({ kind: 'system', text:
+              'RED → artifact.propose: the red\'s evidence is now in the receipt (paste-ready fragments included). Call artifact.propose {} — it re-sweeps with the new evidence (~60-120s) and applies through the same gates, regenerating the artifact from measured lanes — or apply the receipt fragment surgically. Hand-authoring from scratch re-pays the discovery cost.' });
+            state.redNudgePending246 = null;
+          }
 
           emit('turn_start', { turn: state.spend.turns + 1 });
           const messages = assembleMessages();
@@ -2377,6 +2398,22 @@
             // while its own receipts said capture-failure).
             state.lastVerifyErrorText239 = (result && result.error && result.error.message)
               ? String(result.error.message).slice(0, 600) : null;
+            // 246th (joint solver, task 6): arm the bounded red→propose
+            // routing nudge. A RED verify REPORT (result.ok === false — the
+            // 'ok'-keyed report shape, not a bare dispatch failure like
+            // {error:'no artifact yet'}) means the requirement gates just
+            // ran and the receipt now carries paste-ready fragments — the
+            // next artifact move is artifact.propose, not hand-authoring
+            // from scratch. One note per red episode: discharged at the
+            // next turn-top injection point, or the moment the joint
+            // solver dispatches, whichever comes first. A GREEN verify
+            // ends the episode (the routing question is answered).
+            if (result && typeof result === 'object' && !Array.isArray(result) && result.ok === false) {
+              state.redNudgePending246 = (result.error && result.error.message)
+                ? String(result.error.message).slice(0, 600) : '(red verify)';
+            } else if (result && typeof result === 'object' && !Array.isArray(result) && result.ok === true) {
+              state.redNudgePending246 = null;
+            }
             // 129th-round review fix: green-only finalResult snapshot for
             // the same-site seed (see the state defaults). The report's
             // finalResult is the context-diet-sampled copy (3 records,

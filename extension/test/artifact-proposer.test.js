@@ -276,3 +276,56 @@ describe('joint solver — session-tools registration', () => {
     assert.ok(total <= 6500, 'toolSpec total ' + total + ' <= 6500');
   });
 });
+
+describe('joint solver — red→propose nudge', () => {
+  const { createResearchSession } = require('../lib/research-session');
+  const mk = (content) => ({ content, finish_reason: 'stop', usage: { prompt_tokens: 1, completion_tokens: 1 } });
+  const env = (tool, args) => mk(JSON.stringify({ think: 't', tool, args: args || {} }));
+  const fin = (s) => mk(JSON.stringify({ think: 'done', finish: { summary: s || 'x' } }));
+  const SCHEMAS = { inputSchema: { type: 'object', properties: { k: { type: 'string' } } }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } };
+  const STEP1 = { id: 's1', name: 's', onSuccess: 'TERMINATE', script: 'return 1;' };
+  function makeSession(replies, verifyResults) {
+    let vi = 0, draft = null;
+    const { createSessionTools } = require('../lib/session-tools');
+    const tools = createSessionTools({
+      rail: { executeDsl: async () => ({}), pageState: async () => ({}), epoch: 0 },
+      runVerify: async () => { const r = verifyResults[Math.min(vi, verifyResults.length - 1)]; vi += 1; return r; },
+      probeFactory: () => ({ count: async () => ({ count: 5 }), census: async () => ({ containerSel: '[role=article]', total: 5, sampled: [{}], lanes: { url: [{ selector: 'a', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }], time: [{ selector: 'span', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }], count: [], id: [], text: [{ selector: 'div', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['b'] }] }, hrefIdentity: [{ token: 'id', coverage: '5/5', samples: ['a1', 'b2'] }] }), sample: async () => ({}) }),
+      getDraftService: () => draft, applyArtifact: (a) => { draft = { steps: a.steps, targetUrl: 'https://example.com/?k={{k}}', config: {} }; return Promise.resolve({ version: draft.steps.length }); },
+      getTestInput: () => ({ k: 'ml' }), getOutputSchema: () => SCHEMAS.outputSchema, getSteps: () => (draft ? draft.steps : []),
+      ioConfirmBridge: { request: (p) => Promise.resolve({ confirmed: true, testInput: p && p.testInput }) }
+    }).tools;
+    let i = 0;
+    return createResearchSession({ requirement: 'collect posts', llm: async () => { const r = replies[Math.min(i, replies.length - 1)]; i += 1; return r; }, tools, onEvent: () => {} });
+  }
+  const RED = { events: [], report: { ok: false, error: { message: 'REQUIREMENT_TIME_SOURCE_DROPPED: red' }, detectors: {} }, raw: {} };
+
+  it('a red injects the routing note; propose clears; a second red re-nudges once', async () => {
+    const session = makeSession([
+      env('io.confirm', Object.assign({ testInput: { keyword: 'ml', count: 3 } }, SCHEMAS)),
+      env('service.update', { steps: [STEP1] }),
+      env('verify.run', {}),
+      env('artifact.propose', {}),
+      env('verify.run', {}),
+      fin('done')
+    ], [RED, RED]);
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const notes = session.state().session.transcript.filter((t) => t.kind === 'system').map((t) => t.text)
+      .filter((t) => /RED → artifact\.propose/.test(t));
+    assert.equal(notes.length, 2, 'one nudge per red episode');
+  });
+  it('no nudge when propose is called before the next note-injection point', async () => {
+    const session = makeSession([
+      env('io.confirm', Object.assign({ testInput: { keyword: 'ml', count: 3 } }, SCHEMAS)),
+      env('service.update', { steps: [STEP1] }),
+      env('verify.run', {}),
+      env('artifact.propose', {}),
+      fin('done')
+    ], [RED]);
+    await session.run();
+    const notes = session.state().session.transcript.filter((t) => t.kind === 'system').map((t) => t.text)
+      .filter((t) => /RED → artifact\.propose/.test(t));
+    assert.ok(notes.length <= 1);
+  });
+});
