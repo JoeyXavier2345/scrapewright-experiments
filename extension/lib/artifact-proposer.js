@@ -112,7 +112,14 @@ function classAnchoredOnly_248(sel) {
   if (!s) return false;
   return /^[a-z0-9]*\.[a-z0-9_-]+$/i.test(s) || s.indexOf('[') === -1;
 }
-function chooseIdentitySelector_248(census) {
+// 249th round (FIX 2, joint-solver run 3): path-form identity. The incident
+// page's permalinks were PATH-form (/{dir}/{id}) — query-token identity came
+// back empty and the identity selector fell back to the churn-prone class
+// anchor. When the sweep derives a stable path prefix from live href samples
+// (derivePathIdentity_249), the identity selector becomes the churn-proof
+// a[href*="<prefix>"] attribute form with the id regex derived from the SAME
+// prefix. Priority: query tokens > pathIdentity > url-lane.
+function chooseIdentitySelector_249(census, pathIdentity) {
   const urlLane = census ? laneTop_246(census.lanes, 'url') : null;
   const urlLaneSel = urlLane ? urlLane.selector : null;
   const tokens = queryTokensOf_248(census);
@@ -122,7 +129,85 @@ function chooseIdentitySelector_248(census) {
       .join(', ');
     return { selector: union, source: 'hrefIdentity-tokens' };
   }
+  if (pathIdentity && typeof pathIdentity.prefix === 'string' && pathIdentity.prefix) {
+    return {
+      selector: 'a[href*=' + JSON.stringify(pathIdentity.prefix) + ']',
+      source: 'path-prefix',
+      idRegex: (pathIdentity && typeof pathIdentity.idRegex === 'string' && pathIdentity.idRegex) ? pathIdentity.idRegex : null
+    };
+  }
   return { selector: urlLaneSel || null, source: urlLaneSel ? 'url-lane' : 'none' };
+}
+// 249th round (FIX 1): the CARD computation is single-sourced so the sweep's
+// affordance counts and the P2-F attr-grounding hop scope against EXACTLY the
+// card synthesizeFromEvidence emits (a drifting copy here would measure one
+// selector and emit another — the exact P2-F failure shape the 248th round
+// fixed for the token union, re-introduced by any new identity source).
+function computeCard_249(pack) {
+  const census = (pack && pack.census) || null;
+  const baseCard = (census && census.containerSel) || BOOTSTRAP_CONTAINERS_246[0];
+  const identity = chooseIdentitySelector_249(census, (pack && pack.pathIdentity) || null);
+  return identity.selector ? baseCard + ':has(' + identity.selector + ')' : baseCard;
+}
+
+// 249th round (FIX 1, joint-solver run 3): measured affordance selector. The
+// synthesized expand step hardcoded the ARIA fallback family as its
+// $clickInList sub-selector — on a page with NO role=button affordances the
+// verify died CLICK_TARGET_NOT_FOUND every time (the textFilter only narrows
+// matches that exist). The sweep now COUNTS each generic family scoped to the
+// emitted CARD and takes the first that exists; all zero → the caller keeps
+// the ARIA default. Web-generic families only — no vendor tokens.
+const BUTTON_FAMILIES_249 = ['div[role=button], span[role=button]', 'button', '[aria-expanded]', '[tabindex]:not([tabindex="-1"])'];
+function chooseAffordanceSelector_249(counts) {
+  const c = (counts && typeof counts === 'object') ? counts : {};
+  for (const fam of BUTTON_FAMILIES_249) {
+    const n = c[fam];
+    if (typeof n === 'number' && n > 0) return fam;
+  }
+  return null;
+}
+
+// 249th round (FIX 2): pure derivation of the stable path prefix from live
+// href samples (fed by probe.attrStats over the url-lane selector). Longest
+// common DIRECTORY prefix across samples, then the NEXT path segment must
+// VARY across ≥2 samples — that is the per-record id. Returns
+// {prefix:'/dir/', idRegex:'/\\/dir\\/([A-Za-z0-9_-]{3,})/'} (regex built
+// from the escaped prefix so it matches the exact directory spelling), or
+// null when the samples cannot prove a varying id (<2 samples, identical
+// paths, query-only URLs, or a root-scope prefix that would match every
+// link on the page).
+function derivePathIdentity_249(hrefSamples) {
+  const raw = Array.isArray(hrefSamples) ? hrefSamples : [];
+  const paths = [];
+  for (const h of raw) {
+    const s = String(h == null ? '' : h).trim();
+    if (!s) continue;
+    let p = null;
+    const mScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/?#]+([^?#]*)/.exec(s);
+    if (mScheme) p = mScheme[1];
+    else if (s.charCodeAt(0) === 47) p = s.split(/[?#]/)[0]; // root-relative href
+    if (!p || p.charCodeAt(0) !== 47) continue; // opaque/relative junk
+    const segs = p.split('/').filter(Boolean);
+    if (!segs.length) continue;
+    paths.push(segs);
+  }
+  if (paths.length < 2) return null;
+  // Longest common directory prefix (case-insensitive compare; the emitted
+  // prefix keeps the first sample's original casing).
+  const lower = paths.map((segs) => segs.map((x) => String(x).toLowerCase()));
+  const maxCommon = Math.min.apply(null, lower.map((segs) => segs.length));
+  let common = 0;
+  while (common < maxCommon) {
+    const seg = lower[0][common];
+    if (!lower.every((segs) => segs[common] === seg)) break;
+    common += 1;
+  }
+  if (common < 1) return null; // a root-scope '/' prefix matches every link — vacuous
+  const nextVals = [];
+  for (const segs of paths) { if (segs.length > common) nextVals.push(segs[common]); }
+  if (new Set(nextVals).size < 2) return null; // no varying id segment after the shared prefix
+  const prefix = '/' + paths[0].slice(0, common).join('/') + '/';
+  return { prefix: prefix, idRegex: '/' + escRe_246(prefix) + '([A-Za-z0-9_-]{3,})/' };
 }
 
 // Review batch (joint-solver #P2-F): the grounding gate demands an
@@ -162,24 +247,34 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   // query-param binding), and anchor each alternative at a [?&] so it
   // matches real query strings.
   const hrefTokens = queryTokensOf_248(census);
+  // 249th round: pack-carried sweep evidence — the measured affordance
+  // selector (FIX 1) and the derived path-form identity (FIX 2). Both stay
+  // optional; a direct pack caller omitting them keeps the 248 behavior.
+  const pathIdentity = (pack && pack.pathIdentity && typeof pack.pathIdentity.prefix === 'string' && pack.pathIdentity.prefix &&
+    typeof pack.pathIdentity.idRegex === 'string' && pack.pathIdentity.idRegex) ? pack.pathIdentity : null;
+  const affordanceSel = (pack && typeof pack.affordanceSelector === 'string' && pack.affordanceSelector) ? pack.affordanceSelector : null;
 
-  const baseCard = (census && census.containerSel) || BOOTSTRAP_CONTAINERS_246[0];
   // 248th round (FIX 2): the identity selector is the churn-proof token
   // union whenever the url lane is class-anchored only — obfuscated classes
   // (a.x1i10hfl) churn cross-tab; the page's own href-identity tokens do
   // not. Attribute/structural lane selectors are kept as measured.
-  const identityChoice = chooseIdentitySelector_248(census);
+  // 249th round (FIX 2): a derived path prefix outranks the raw url lane for
+  // the same reason — it is measured AND churn-proof.
+  const identityChoice = chooseIdentitySelector_249(census, pathIdentity);
   const identitySel = identityChoice.selector;
-  const CARD = identitySel ? baseCard + ':has(' + identitySel + ')' : baseCard;
+  const CARD = computeCard_249(pack);
   if (!identitySel) unfilled.push({ slot: 'postUrl', reason: 'no url-like census lane — the population filter and the link field have no measured selector; run probe.census or hand-bind' });
 
   // Identity regex DERIVED from the page's own href-identity tokens (red line:
   // no vendor tokens — the page census names the id parameter). The emitted
   // string must carry ONE backslash before w so the generated script's regex
   // reads \w (word chars), matching the single-level fallback form below.
+  // 249th round (FIX 2): the path-prefix form is derived by
+  // derivePathIdentity_249 from live href samples (priority: query tokens >
+  // pathIdentity > generic fallback).
   const idRe = hrefTokens.length
     ? '/(?:' + hrefTokens.map((t) => '[?&]' + escRe_246(t.slice(6)) + '=').join('|') + ')(\\w{3,})/'
-    : '/[?&]([A-Za-z0-9_-]{6,})/';
+    : (identityChoice.idRegex || '/[?&]([A-Za-z0-9_-]{6,})/');
 
   const steps = [];
   steps.push({ id: 'wait', name: 'wait for cards', script: 'await $wait(' + JSON.stringify(CARD) + ', 3000);\nreturn { done: true };', onSuccess: clauses.scroll ? 'collect' : (clauses.expand ? 'expand' : 'extract'), onFailure: 'TERMINATE', maxIterations: 1 });
@@ -198,7 +293,12 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   if (clauses.expand) {
     steps.push({
       id: 'expand', name: 'expand collapsed text', maxIterations: 1,
-      script: 'await $clickInList(' + JSON.stringify(CARD) + ', \'div[role=button], span[role=button]\', { textFilter: \'' + EXPAND_TEXT_FILTER_246 + '\', delayMs: 400 }).catch(function () {});\nawait new Promise(function (r) { setTimeout(r, 1200); });\nreturn { done: true };',
+      // 249th round (FIX 1): the sub-selector is the MEASURED affordance
+      // family when the sweep counted one scoped to the CARD — the hardcoded
+      // ARIA default stays only as the no-evidence fallback (it counted zero
+      // or the sweep never ran). JSON.stringify emits the double-quoted
+      // literal the P1-A quote-style scan expects.
+      script: 'await $clickInList(' + JSON.stringify(CARD) + ', ' + JSON.stringify(affordanceSel || BUTTON_FAMILIES_249[0]) + ', { textFilter: \'' + EXPAND_TEXT_FILTER_246 + '\', delayMs: 400 }).catch(function () {});\nawait new Promise(function (r) { setTimeout(r, 1200); });\nreturn { done: true };',
       onSuccess: 'extract', onFailure: 'extract'
     });
   }
@@ -297,7 +397,12 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   // 248th round (FIX 2): the identity-selector provenance — which selector
   // the CARD :has() filter and the postUrl field bind, and whether it came
   // from the measured url lane or the churn-proof hrefIdentity token union.
-  return { steps: steps, unfilled: unfilled, selectorProvenance: { identitySelector: identitySel, source: identityChoice.source } };
+  // 249th round (FIX 1): when the sweep MEASURED an affordance family, the
+  // receipt names it — the expand step's sub-selector is a claim about the
+  // page and must be auditable like every other selector.
+  const provenance = { identitySelector: identitySel, source: identityChoice.source };
+  if (affordanceSel) provenance.affordanceSelector = affordanceSel;
+  return { steps: steps, unfilled: unfilled, selectorProvenance: provenance };
 }
 
 // Phase-3 renderers: decisive red receipts carry COPY-READY fix fragments —
@@ -378,6 +483,53 @@ async function proposeArtifact(ctx) {
     censusErrorDigest = census.error;
     census = null;
   }
+  // 249th round (FIX 2, joint-solver run 3): path-form identity derivation.
+  // When the census's hrefIdentity carries path: entries but NO query:
+  // tokens, the page's per-record ids live in a PATH segment — sample the
+  // live hrefs (attrStats over the url-lane selector, same arg shape as the
+  // P2-F hop) and derive the stable prefix + id regex. Bounded by the sweep
+  // budget; a failed hop leaves pathIdentity absent (the synthesis falls
+  // back to the url lane exactly as before — an evidence gap, never a
+  // crash).
+  let pathIdentity = null;
+  if (census && typeof probes.attrStats === 'function') {
+    try {
+      const rawTokens = (Array.isArray(census.hrefIdentity) ? census.hrefIdentity.map((h) => h && h.token) : []);
+      const hasQuery = rawTokens.some((t) => typeof t === 'string' && t.indexOf('query:') === 0);
+      const hasPath = rawTokens.some((t) => t === 'path:last');
+      const urlLane = laneTop_246(census.lanes, 'url');
+      if (!hasQuery && hasPath && urlLane && urlLane.selector && elapsedMs() <= budget.hardSkipMs) {
+        const rHref = await probes.attrStats({ containerSel: urlLane.selector, attr: 'href' });
+        if (rHref && typeof rHref.error !== 'string' && Array.isArray(rHref.values)) {
+          pathIdentity = derivePathIdentity_249(rHref.values.map((v) => (v && typeof v.value === 'string') ? v.value : null).filter(Boolean));
+        }
+      }
+    } catch (ePath) { pathIdentity = null; /* evidence gap — url lane fallback */ }
+  }
+  // 249th round (FIX 1): measured affordance selector. Count each generic
+  // button family scoped to the EMITTED card (computeCard_249 — same helper
+  // the synthesis uses) and take the first that exists. Skipped when the
+  // census never landed (nothing measured to scope against) or past the
+  // hard-skip time; a skip is disclosed, never silent.
+  let affordanceSelector = null;
+  let affordanceSkipped = null;
+  if (census && typeof probes.count === 'function') {
+    const affordanceCard = computeCard_249({ census: census, pathIdentity: pathIdentity });
+    const affordanceCounts = {};
+    for (const fam of BUTTON_FAMILIES_249) {
+      if (elapsedMs() > budget.hardSkipMs) {
+        affordanceSkipped = 'sweep budget (>' + budget.hardSkipMs + 'ms elapsed) — the web-generic ARIA default was kept unmeasured';
+        break;
+      }
+      try {
+        const c = await probes.count({ sel: affordanceCard + ' ' + fam });
+        const n = c && typeof c.count === 'number' ? c.count : 0;
+        affordanceCounts[fam] = n;
+        if (n > 0) break; // first existing family wins — no need to count the rest
+      } catch (eCnt) { affordanceCounts[fam] = 0; }
+    }
+    affordanceSelector = chooseAffordanceSelector_249(affordanceCounts);
+  }
   // Review batch (joint-solver #P2-F): produce the attribute-distribution
   // receipts the grounding gate demands for the CARD's :has() filter attrs
   // BEFORE the synthesis is applied. The descendant form (container + '
@@ -389,14 +541,13 @@ async function proposeArtifact(ctx) {
   let attrGrounding = null;
   if (census && containerSel && typeof probes.attrStats === 'function' && GroundingGateRef_246) {
     try {
-      // 248th round (FIX 2): derive the card through the SAME identity
-      // choice the synthesis emits — a class-only lane replaced by the
-      // token union carries a[href*=…] into :has(), and the sweep must
-      // produce the href receipt the gate will demand for the EMITTED
-      // selector (the exact P2-F failure shape, re-introduced by the
-      // replacement if the hop still read the raw lane selector).
-      const identityChoice = chooseIdentitySelector_248(census);
-      const cardSel = identityChoice.selector ? containerSel + ':has(' + identityChoice.selector + ')' : containerSel;
+      // 248th round (FIX 2) + 249th round (FIX 2): derive the card through
+      // the SAME identity choice the synthesis emits — computeCard_249 is
+      // the single source (class-only lanes replaced by the token union, and
+      // path-form pages by the derived prefix, both change what :has()
+      // carries, and the sweep must produce the href receipt the gate will
+      // demand for the EMITTED selector).
+      const cardSel = computeCard_249({ census: census, pathIdentity: pathIdentity });
       const attrList = GroundingGateRef_246.extractFilterAttributes(cardSel) || [];
       const seen = [];
       for (const at of attrList) { if (seen.indexOf(at) === -1) seen.push(at); }
@@ -421,11 +572,16 @@ async function proposeArtifact(ctx) {
       }
     } catch (eHop) { /* attr grounding is best-effort; a rejection teaches */ }
   }
-  const pack = { census: census, currentArtifact: (ctx && ctx.currentArtifact) || null };
+  const pack = { census: census, currentArtifact: (ctx && ctx.currentArtifact) || null, affordanceSelector: affordanceSelector, pathIdentity: pathIdentity };
   const synth = synthesizeFromEvidence(pack, (ctx && ctx.requirementText) || '', (ctx && ctx.outputSchema) || null);
   if (censusErrorDigest) {
     synth.unfilled.push({ slot: 'census', reason: 'census hop failed: ' + censusErrorDigest.slice(0, 140) + ' — selectors fell back to web-generic ARIA conventions; the failing probe error above is the gap' });
   }
+  // 249th round (FIX 3): surface the census mount phase on EVERY receipt
+  // shape — whether the bounded mount (scrollRounds) actually ran is the
+  // first question a mounted-window-bias post-mortem asks, and the old
+  // receipt never answered it.
+  const censusMount = (census && census.mount && typeof census.mount === 'object') ? census.mount : undefined;
   if (!(ctx && typeof ctx.applyArtifact === 'function')) {
     return {
       applied: 'engine-pending',
@@ -436,6 +592,8 @@ async function proposeArtifact(ctx) {
       sweepCostMs: Date.now() - t0,
       bootstrapCapped: bootstrapCapped || undefined,
       attrGrounding: attrGrounding || undefined,
+      censusMount: censusMount,
+      affordanceSkipped: affordanceSkipped || undefined,
       next: 'engine applies + verify.run'
     };
   }
@@ -450,6 +608,8 @@ async function proposeArtifact(ctx) {
       sweepCostMs: Date.now() - t0,
       bootstrapCapped: bootstrapCapped || undefined,
       attrGrounding: attrGrounding || undefined,
+      censusMount: censusMount,
+      affordanceSkipped: affordanceSkipped || undefined,
       next: 'verify.run'
     };
   } catch (eApply) {
@@ -462,6 +622,8 @@ async function proposeArtifact(ctx) {
       sweepCostMs: Date.now() - t0,
       bootstrapCapped: bootstrapCapped || undefined,
       attrGrounding: attrGrounding || undefined,
+      censusMount: censusMount,
+      affordanceSkipped: affordanceSkipped || undefined,
       next: 'fix the rejection or call artifact.propose again after probe.census'
     };
   }
@@ -471,6 +633,8 @@ const JT_API_246 = {
   parseRequirementClauses, synthesizeFromEvidence, proposeArtifact,
   renderExpandStepFragment, renderHoverPopoverFragment, renderExclusionGuardFragment,
   BOOTSTRAP_CONTAINERS: BOOTSTRAP_CONTAINERS_246,
+  BUTTON_FAMILIES: BUTTON_FAMILIES_249,
+  chooseAffordanceSelector_249, derivePathIdentity_249, computeCard_249,
   CLAUSE_RES: CLAUSE_RES_246
 };
 // Dual export (probe-tools pattern): Node tests use require, the wizard

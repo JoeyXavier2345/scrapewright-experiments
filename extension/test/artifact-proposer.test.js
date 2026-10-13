@@ -533,6 +533,199 @@ describe('joint solver — proposeArtifact (stubbed sweep)', () => {
   });
 });
 
+// 249th round (joint-solver run 3): the synthesized expand step's button
+// selector was a HARDCODED ARIA fallback (div[role=button], span[role=button])
+// that does not exist on every page — CLICK_TARGET_NOT_FOUND verify deaths.
+// The path-form identity gap: the incident page's permalinks are PATH-form
+// (/{dir}/{id}), so query-token identity was empty and the identity selector
+// fell back to the churn-prone class anchor. And the propose receipt never
+// surfaced whether the census mount phase ran.
+describe('joint solver — 249 measured affordance + path-prefix identity + censusMount', () => {
+  function CENSUS_249() {
+    return {
+      containerSel: '[role=article]', total: 12, sampled: [{}],
+      lanes: {
+        url: [{ selector: 'a[href*="/p/"]', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }],
+        time: [{ selector: 'span[aria-label]', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }],
+        count: [], id: [],
+        text: [{ selector: 'div.msg', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['body'] }]
+      },
+      hrefIdentity: [{ token: 'query:id', coverage: '5/5', samples: ['a1', 'b2'] }]
+    };
+  }
+  function SCHEMA_249() {
+    return { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
+      type: 'object', required: ['postUrl', 'postTime', 'content'], properties: {
+        postId: { type: 'string' }, postUrl: { type: 'string' }, postTime: { type: 'string' },
+        content: { type: 'string' }, likeCount: { type: 'string' }, commentCount: { type: 'string' },
+        shareCount: { type: 'string' }, mediaUrls: { type: 'array', items: { type: 'string' } },
+        htmlSnippet: { type: 'string' } } } } } };
+  }
+
+  // --- FIX 1: measured affordance selector ---
+  it('249 FIX 1 (pure): chooseAffordanceSelector_249 — first nonzero family in ORDER wins, all-zero → null', () => {
+    const F = AP.BUTTON_FAMILIES;
+    assert.ok(Array.isArray(F) && F.length === 4, 'four ordered families exported');
+    assert.equal(F[0], 'div[role=button], span[role=button]', 'the ARIA default stays the first preference');
+    const counts = {};
+    counts[F[0]] = 0; counts[F[1]] = 2; counts[F[2]] = 5; counts[F[3]] = 1;
+    assert.equal(AP.chooseAffordanceSelector_249(counts), F[1], 'first nonzero wins');
+    const defWins = {}; defWins[F[0]] = 3;
+    assert.equal(AP.chooseAffordanceSelector_249(defWins), F[0], 'the ARIA default wins when it actually counts');
+    const zeros = {}; zeros[F[0]] = 0; zeros[F[1]] = 0; zeros[F[2]] = 0; zeros[F[3]] = 0;
+    assert.equal(AP.chooseAffordanceSelector_249(zeros), null, 'all zero → null (caller keeps the default)');
+    assert.equal(AP.chooseAffordanceSelector_249(null), null, 'no counts object → null');
+  });
+  it('249 FIX 1 (sweep): scoped affordance counts — role=button 0, button 2 → expand clicks "button", provenance discloses it', async () => {
+    const countSels = [];
+    const probes = {
+      count: async (a) => {
+        countSels.push(a.sel);
+        if (a.sel === '[role=article]') return { count: 12 };
+        if (/role=button/.test(a.sel)) return { count: 0 };
+        if (/button/.test(a.sel)) return { count: 2 };
+        return { count: 0 };
+      },
+      census: async () => CENSUS_249(),
+      attrStats: async () => ({ totalItems: 5, values: [{ value: '/p/1', items: 5, pct: 100 }], absentPct: 0 })
+    };
+    const out = await AP.proposeArtifact({ probes, requirementText: REQ_FULL, outputSchema: SCHEMA_249(), currentArtifact: null });
+    assert.equal(out.applied, 'engine-pending');
+    const ex = out.steps.find((s) => s.id === 'expand');
+    assert.ok(ex, 'expand clause → expand step exists');
+    assert.ok(ex.script.includes('"button"'), 'the measured button family rides the $clickInList sub-selector');
+    assert.doesNotMatch(ex.script, /role=button/, 'the ARIA default that counted ZERO never rides');
+    assert.equal(out.selectorProvenance.affordanceSelector, 'button', 'the receipt discloses the measured affordance');
+    const scoped = countSels.filter((s) => s.indexOf(':has(') > -1);
+    assert.ok(scoped.length >= 1, 'affordance counts ran (' + JSON.stringify(countSels) + ')');
+    assert.ok(scoped.every((s) => s.indexOf('[role=article]:has(') === 0), 'counts are scoped to the emitted CARD');
+  });
+  it('249 FIX 1 (sweep): every family counts zero → the ARIA default is retained, no affordance provenance claim', async () => {
+    const probes = {
+      count: async (a) => ({ count: a.sel === '[role=article]' ? 12 : 0 }),
+      census: async () => CENSUS_249(),
+      attrStats: async () => ({ totalItems: 5, values: [{ value: '/p/1', items: 5, pct: 100 }], absentPct: 0 })
+    };
+    const out = await AP.proposeArtifact({ probes, requirementText: REQ_FULL, outputSchema: SCHEMA_249(), currentArtifact: null });
+    const ex = out.steps.find((s) => s.id === 'expand');
+    assert.ok(ex.script.includes('div[role=button], span[role=button]'), 'the web-generic default survives');
+    assert.equal(out.selectorProvenance.affordanceSelector, undefined, 'no measured affordance → no provenance field');
+  });
+
+  // --- FIX 2: path-form identity from a stable prefix ---
+  it('249 FIX 2 (pure): derivePathIdentity_249 — /stories/ samples → prefix + regex; identical/query-only/single → null', () => {
+    const r = AP.derivePathIdentity_249(['https://x/stories/abc?y=1', 'https://x/stories/def']);
+    assert.ok(r, 'derived from two path-form hrefs');
+    assert.equal(r.prefix, '/stories/');
+    assert.equal(r.idRegex, '/\\/stories\\/([A-Za-z0-9_-]{3,})/', 'regex built from the escaped prefix');
+    const re = new RegExp(r.idRegex.slice(1, -1));
+    assert.equal(re.exec('https://x/stories/Zz9_x-1?track=1')[1], 'Zz9_x-1', 'the derived regex extracts the id segment');
+    assert.equal(AP.derivePathIdentity_249(['https://x/stories/abc', 'https://x/stories/abc']), null, 'identical paths → no varying segment');
+    assert.equal(AP.derivePathIdentity_249(['https://x/p?id=1', 'https://x/p?id=2']), null, 'query-only URLs carry no path id');
+    assert.equal(AP.derivePathIdentity_249(['https://x/stories/abc']), null, 'a single sample proves nothing');
+    assert.equal(AP.derivePathIdentity_249('junk'), null, 'non-array input degrades to null');
+  });
+  it('249 FIX 2 (synth): pack.pathIdentity → a[href*="/stories/"] identity, derived id regex, source path-prefix; query tokens still win', () => {
+    const census = {
+      containerSel: '[role=article]', total: 9, sampled: [{}],
+      lanes: {
+        url: [{ selector: 'a.x1i10hfl', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }],
+        time: [{ selector: 'span[aria-label]', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }],
+        count: [], id: [], text: []
+      },
+      hrefIdentity: [{ token: 'path:last', coverage: '5/5', samples: ['abc123', 'def456'] }]
+    };
+    const PATH_ID = { prefix: '/stories/', idRegex: '/\\/stories\\/([A-Za-z0-9_-]{3,})/' };
+    const out = AP.synthesizeFromEvidence({ census, pathIdentity: PATH_ID }, REQ_FULL, SCHEMA_249());
+    assert.equal(out.selectorProvenance.source, 'path-prefix');
+    assert.equal(out.selectorProvenance.identitySelector, 'a[href*="/stories/"]');
+    const ex = out.steps.find((s) => s.id === 'extract');
+    assert.match(ex.script, /:has\(a\[href\*=\\?"\/stories\/\\?"\]\)/, 'the CARD :has() filter binds the path prefix');
+    const mRe = /String\(r\.postUrl\)\.match\(\/(.+)\/\);/.exec(ex.script);
+    assert.ok(mRe, 'identity regex literal present');
+    const idRegex = new RegExp(mRe[1]);
+    assert.equal(idRegex.exec('https://x/stories/abc123')[1], 'abc123', 'behavioral: the derived regex extracts the id');
+    assert.doesNotMatch(ex.script, /x1i10hfl/, 'the churn-prone class never rides');
+    // Priority: query tokens > pathIdentity > url-lane.
+    const withQuery = JSON.parse(JSON.stringify(census));
+    withQuery.hrefIdentity = [{ token: 'query:story_fbid', coverage: '5/5', samples: ['101a', '202b'] }, { token: 'path:last', coverage: '5/5', samples: ['abc', 'def'] }];
+    const out2 = AP.synthesizeFromEvidence({ census: withQuery, pathIdentity: PATH_ID }, '提取帖子。', SCHEMA_249());
+    assert.equal(out2.selectorProvenance.source, 'hrefIdentity-tokens', 'query tokens outrank the path identity');
+  });
+  it('249 FIX 2 (sweep): path:last tokens + no query → the attrStats href hop derives pathIdentity; emitted card + attr grounding follow it', async () => {
+    const attrCalls = [];
+    const census = {
+      containerSel: '[role=article]', total: 8, sampled: [{}],
+      lanes: {
+        url: [{ selector: 'a.x1i10hfl', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }],
+        time: [{ selector: 'span[aria-label]', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }],
+        count: [], id: [], text: []
+      },
+      hrefIdentity: [{ token: 'path:last', coverage: '5/5', samples: ['abc123', 'def456'] }]
+    };
+    const probes = {
+      count: async (a) => ({ count: a.sel === '[role=article]' ? 12 : 0 }),
+      census: async () => census,
+      attrStats: async (a) => {
+        attrCalls.push(a);
+        if (a.attr === 'href' && a.containerSel === 'a.x1i10hfl') {
+          return { totalItems: 5, values: [
+            { value: 'https://x/stories/abc123', items: 3, pct: 60 },
+            { value: 'https://x/stories/def456', items: 2, pct: 40 }
+          ], absentPct: 0 };
+        }
+        return { totalItems: 5, values: [{ value: '/stories/1', items: 5, pct: 100 }], absentPct: 0 };
+      }
+    };
+    const out = await AP.proposeArtifact({ probes, requirementText: REQ_FULL, outputSchema: SCHEMA_249(), currentArtifact: null });
+    assert.equal(out.selectorProvenance.source, 'path-prefix', 'the sweep derived the path identity from live href samples');
+    assert.equal(out.selectorProvenance.identitySelector, 'a[href*="/stories/"]');
+    const wait = out.steps.find((s) => s.id === 'wait');
+    assert.match(wait.script, /:has\(a\[href\*=\\?"\/stories\/\\?"\]\)/, 'the emitted CARD binds the path prefix');
+    assert.ok(attrCalls.some((a) => a.containerSel === '[role=article] [href]' && a.attr === 'href'),
+      'the P2-F attr-grounding hop censuses the EMITTED path-prefix card');
+  });
+  it('249 FIX 2 (sweep): a failed href hop → pathIdentity absent, provenance stays url-lane, never a crash', async () => {
+    const census = {
+      containerSel: '[role=article]', total: 8, sampled: [{}],
+      lanes: {
+        url: [{ selector: 'a.x1i10hfl', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }],
+        time: [], count: [], id: [], text: []
+      },
+      hrefIdentity: [{ token: 'path:last', coverage: '5/5', samples: ['abc123', 'def456'] }]
+    };
+    const probes = {
+      count: async (a) => ({ count: a.sel === '[role=article]' ? 12 : 0 }),
+      census: async () => census,
+      attrStats: async () => { throw new Error('tab gone'); }
+    };
+    const out = await AP.proposeArtifact({ probes, requirementText: REQ_FULL, outputSchema: SCHEMA_249(), currentArtifact: null });
+    assert.equal(out.applied, 'engine-pending', 'a failed hop is an evidence gap, never a crash');
+    assert.equal(out.selectorProvenance.source, 'url-lane');
+    assert.equal(out.selectorProvenance.identitySelector, 'a.x1i10hfl');
+  });
+
+  // --- FIX 3: the propose receipt surfaces census.mount ---
+  it('249 FIX 3: census.mount rides EVERY receipt shape (engine-pending, applied, error)', async () => {
+    const MOUNT = { rounds: 1, countBefore: 3, countAfter: 9, reCensused: true };
+    const census = Object.assign(CENSUS_249(), { mount: MOUNT });
+    const mkProbes = () => ({ count: async () => ({ count: 12 }), census: async () => census, sample: async () => ({}) });
+    const pending = await AP.proposeArtifact({ probes: mkProbes(), requirementText: REQ_FULL, outputSchema: SCHEMA_249(), currentArtifact: null });
+    assert.deepEqual(pending.censusMount, MOUNT, 'engine-pending shape carries censusMount');
+    const applied = await AP.proposeArtifact({ probes: mkProbes(), requirementText: REQ_FULL, outputSchema: SCHEMA_249(), currentArtifact: null, applyArtifact: async () => ({ version: 4 }) });
+    assert.deepEqual(applied.censusMount, MOUNT, 'applied shape carries censusMount');
+    const errored = await AP.proposeArtifact({ probes: mkProbes(), requirementText: REQ_FULL, outputSchema: SCHEMA_249(), currentArtifact: null, applyArtifact: async () => { throw new Error('SYNTAX_ERROR: gate'); } });
+    assert.deepEqual(errored.censusMount, MOUNT, 'error shape carries censusMount');
+  });
+  it('249 FIX 3: no mount on the census → censusMount stays undefined', async () => {
+    const out = await AP.proposeArtifact({
+      probes: { count: async () => ({ count: 12 }), census: async () => CENSUS_249(), sample: async () => ({}) },
+      requirementText: REQ_FULL, outputSchema: SCHEMA_249(), currentArtifact: null
+    });
+    assert.equal(out.censusMount, undefined);
+  });
+});
+
 describe('joint solver — red receipts carry fragments', () => {
   const { createVerifyRunner } = require('../lib/verify-runner');
   const SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
