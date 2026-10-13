@@ -71,6 +71,11 @@ describe('244th round — page-wide field cross-check (container-subset fingerpr
     assert.match(msg, /matches 7 element\(s\) ELSEWHERE on this page/);
     assert.match(msg, /COPY-READY container: \[role="article"\]:has\(a\[href\*="\/posts\/"\]\)/);
     assert.match(msg, /apply it to EVERY step referencing this list/);
+    // 251st round: the subset line gains the annotate exit — when the
+    // family-vs-rec split is uncertain the user can MARK one organic card
+    // instead of the model hand-tuning selectors on a rec-dominated window.
+    assert.match(msg, /family-vs-rec split is uncertain/);
+    assert.match(msg, /annotate\.request/);
   });
   it('D: without page-wide evidence the census text stays on the two legacy mechanisms', async () => {
     const SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {

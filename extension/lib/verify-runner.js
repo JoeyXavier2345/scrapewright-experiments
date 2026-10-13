@@ -1242,7 +1242,13 @@
                     const readySel244 = c.containerSelector
                       ? String(c.containerSelector) + ':has(' + String(c.subSelector) + ')'
                       : ':has(' + String(c.subSelector) + ')';
-                    return 'the sub-selector for "' + c.field + '" matches ' + c.pageWideMatches + (c.pageWideMatches >= 50 ? '+' : '') + ' element(s) ELSEWHERE on this page but 0 inside every processed container: the container selector is processing the wrong subset of the feed (leading recommendation/group modules while the target cards sit deeper). COPY-READY container: ' + readySel244 + ' — apply it to EVERY step referencing this list';
+                    return 'the sub-selector for "' + c.field + '" matches ' + c.pageWideMatches + (c.pageWideMatches >= 50 ? '+' : '') + ' element(s) ELSEWHERE on this page but 0 inside every processed container: the container selector is processing the wrong subset of the feed (leading recommendation/group modules while the target cards sit deeper). COPY-READY container: ' + readySel244 + ' — apply it to EVERY step referencing this list'
+                      // 251st: the annotate exit — when the family-vs-rec
+                      // split is uncertain the user can MARK one organic
+                      // card instead of the model hand-tuning selectors on
+                      // a rec-dominated window (the escalation used to wait
+                      // for consecutive verify failures — see 251).
+                      + '. When the family-vs-rec split is uncertain, ask the user to MARK one organic card: annotate.request (fields omitted, containerSel set) — the user points at the real posts once and the container is grounded.';
                   }).join('; ') + '.'
                 : '';
               msg = 'FIELD_MATCH_ZERO / EMPTY_EXTRACTION: required field(s) [' + emptyFields.join(', ') + '] are present but every extracted item has only empty values, or no items were extracted at all. Field census from SELECTOR DIAGNOSTICS — ' + lines.join('; ') + '. The containers themselves DID match, so the page has the repeating items but this field\'s sub-selector found nothing on them. Two likely mechanisms: ' +

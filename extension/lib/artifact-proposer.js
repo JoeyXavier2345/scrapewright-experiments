@@ -587,6 +587,28 @@ async function proposeArtifact(ctx) {
   // first question a mounted-window-bias post-mortem asks, and the old
   // receipt never answered it.
   const censusMount = (census && census.mount && typeof census.mount === 'object') ? census.mount : undefined;
+  // 251st round: EARLY population-uncertainty hint. The annotate.request
+  // escalation family (208th/230th) fired only on CONSECUTIVE verify
+  // failures — the live session had 2 differently-classed reds and finished
+  // without a third verify, while THIS receipt already knew the population
+  // was not grounded as organic. Weak identity = the CARD's identity filter
+  // came from NEITHER measured hrefIdentity tokens NOR a derived path
+  // prefix (a churn-prone class/url-lane fallback instead) AND (the census
+  // mount never reached an identity-bearing window OR no identity tokens
+  // exist at all) — the rec-dominated-window fingerprint. Route to the
+  // user's two minutes of marking BEFORE selector archaeology.
+  const hrefTokens251 = queryTokensOf_248(census);
+  const weakIdentity251 = !(synth.selectorProvenance && synth.selectorProvenance.source === 'hrefIdentity-tokens')
+    && !(synth.selectorProvenance && synth.selectorProvenance.source === 'path-prefix')
+    && ((censusMount && censusMount.goalMet === false) || (hrefTokens251.length === 0 && !pathIdentity));
+  let populationHint251 = null;
+  if (weakIdentity251) {
+    const cardSel251 = computeCard_249({ census: census, pathIdentity: pathIdentity });
+    populationHint251 = 'the population is NOT grounded as organic (mount '
+      + (censusMount && censusMount.goalMet === false ? 'did not reach an identity-bearing window' : 'found no identity tokens')
+      + ') — before tuning selectors, ask the user to MARK one organic card: annotate.request({containerSel: '
+      + JSON.stringify(cardSel251) + ', why: "mark the real post cards once"}) — two minutes of user marking beats selector archaeology on a rec-dominated window';
+  }
   if (!(ctx && typeof ctx.applyArtifact === 'function')) {
     return {
       applied: 'engine-pending',
@@ -598,6 +620,7 @@ async function proposeArtifact(ctx) {
       bootstrapCapped: bootstrapCapped || undefined,
       attrGrounding: attrGrounding || undefined,
       censusMount: censusMount,
+      populationHint: populationHint251 || undefined,
       affordanceSkipped: affordanceSkipped || undefined,
       next: 'engine applies + verify.run'
     };
@@ -614,6 +637,7 @@ async function proposeArtifact(ctx) {
       bootstrapCapped: bootstrapCapped || undefined,
       attrGrounding: attrGrounding || undefined,
       censusMount: censusMount,
+      populationHint: populationHint251 || undefined,
       affordanceSkipped: affordanceSkipped || undefined,
       next: 'verify.run'
     };
@@ -628,6 +652,7 @@ async function proposeArtifact(ctx) {
       bootstrapCapped: bootstrapCapped || undefined,
       attrGrounding: attrGrounding || undefined,
       censusMount: censusMount,
+      populationHint: populationHint251 || undefined,
       affordanceSkipped: affordanceSkipped || undefined,
       next: 'fix the rejection or call artifact.propose again after probe.census'
     };

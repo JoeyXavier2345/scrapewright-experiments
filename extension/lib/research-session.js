@@ -516,7 +516,14 @@
       // artifact.propose has ever been dispatched (the maiden joint-solver
       // session hand-authored for 40 turns with the solver never called).
       // Set when the note fires OR when artifact.propose dispatches.
-      proposeAdoptionNudged247: false
+      proposeAdoptionNudged247: false,
+      // 251st round: the annotate escalation wired to EARLY population
+      // signals. proposeCount251 counts artifact.propose dispatches (the
+      // nudge is suppressed on a FIRST propose — early research legitimately
+      // starts uncertain); populationAnnotateNudged251 dedupes the
+      // POPULATION UNCERTAIN note to one per session.
+      proposeCount251: 0,
+      populationAnnotateNudged251: false
     };
     if (cfg.seed && cfg.seed.session) {
       state = JSON.parse(JSON.stringify(cfg.seed.session));
@@ -527,6 +534,8 @@
       if (!Array.isArray(state.stepPlan)) state.stepPlan = []; // legacy seeds predate the step plan (§3.C)
       if (typeof state.redNudgePending246 !== 'string' && state.redNudgePending246 !== null) state.redNudgePending246 = null; // legacy seeds predate the 246th nudge
       if (typeof state.proposeAdoptionNudged247 !== 'boolean') state.proposeAdoptionNudged247 = false; // legacy seeds predate the 247th note
+      if (typeof state.proposeCount251 !== 'number') state.proposeCount251 = 0; // legacy seeds predate the 251st nudge
+      if (typeof state.populationAnnotateNudged251 !== 'boolean') state.populationAnnotateNudged251 = false;
     }
 
     let abortFlag = false, abortReason = 'user';
@@ -1717,6 +1726,10 @@
         // 247th (FIX C): adoption observed — the one-time routing note at
         // hand-authored service.update dispatches is moot from here on.
         state.proposeAdoptionNudged247 = true;
+        // 251st: count every propose dispatch — the population nudge below
+        // is suppressed on the FIRST propose (early research legitimately
+        // starts uncertain) and allowed from the 2nd on.
+        state.proposeCount251 = (typeof state.proposeCount251 === 'number' ? state.proposeCount251 : 0) + 1;
         const fnP = tools['artifact.propose'];
         if (typeof fnP !== 'function') return { error: 'artifact.propose not wired' };
         let proposed = null;
@@ -1765,6 +1778,26 @@
             merged246.error = updateReceipt.error;
           }
           if (updateReceipt.grounding === 'rejected') merged246.grounding = 'rejected';
+        }
+        // 251st round: EARLY annotate escalation. The 208th/230th escalation
+        // family fired only on CONSECUTIVE verify failures — the live
+        // session had 2 differently-classed reds and finished without a
+        // third verify, while the propose receipt's populationHint (weak
+        // identity: mount goalMet:false / no identity tokens) already said
+        // the population was not grounded as organic. When a weak-identity
+        // propose lands PAST EARLY RESEARCH (2nd+ propose, a verify has run,
+        // or turns > 12), push ONE transcript note routing to
+        // annotate.request — before more selector archaeology. Note on the
+        // verify condition: lastVerifyOk is undefined-initialized in this
+        // engine (never null), so the literal '!== null' check would always
+        // pass; the intent "a verify has already run" is expressed as the
+        // boolean membership.
+        if (typeof proposed.populationHint === 'string' && proposed.populationHint &&
+            !state.populationAnnotateNudged251 &&
+            (state.proposeCount251 >= 2 || state.spend.turns > 12 ||
+             state.lastVerifyOk === true || state.lastVerifyOk === false)) {
+          state.populationAnnotateNudged251 = true;
+          state.transcript.push({ kind: 'system', text: 'POPULATION UNCERTAIN → ASK THE USER: the joint solver\'s sweep could not ground the organic population (rec-dominated window, no identity tokens). annotate.request with the proposed containerSel lets the user MARK the real cards once — do that before hand-tuning selectors or re-proposing.' });
         }
         delete merged246.steps;
         return sanitizeToolResult(merged246);
