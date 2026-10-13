@@ -510,7 +510,13 @@
       // artifact.propose dispatch, whichever comes first). Holds the red's
       // error-text slice so the delivered note can be audited against the
       // episode that armed it.
-      redNudgePending246: null
+      redNudgePending246: null,
+      // 247th round (FIX C): one-time-per-session propose-adoption note —
+      // fired at the FIRST hand-authored service.update when no
+      // artifact.propose has ever been dispatched (the maiden joint-solver
+      // session hand-authored for 40 turns with the solver never called).
+      // Set when the note fires OR when artifact.propose dispatches.
+      proposeAdoptionNudged247: false
     };
     if (cfg.seed && cfg.seed.session) {
       state = JSON.parse(JSON.stringify(cfg.seed.session));
@@ -520,6 +526,7 @@
       if (!Array.isArray(state.waivedSelectors)) state.waivedSelectors = []; // legacy seeds predate sticky waivers
       if (!Array.isArray(state.stepPlan)) state.stepPlan = []; // legacy seeds predate the step plan (§3.C)
       if (typeof state.redNudgePending246 !== 'string' && state.redNudgePending246 !== null) state.redNudgePending246 = null; // legacy seeds predate the 246th nudge
+      if (typeof state.proposeAdoptionNudged247 !== 'boolean') state.proposeAdoptionNudged247 = false; // legacy seeds predate the 247th note
     }
 
     let abortFlag = false, abortReason = 'user';
@@ -1680,7 +1687,18 @@
     async function dispatchTool(name, args) {
       if (name === 'knowledge.query') return sanitizeToolResult(handleKnowledgeQuery(args));
       if (name === 'ledger.add') return sanitizeToolResult(handleLedgerAdd(args));
-      if (name === 'service.update') return sanitizeToolResult(await handleServiceUpdate(args));
+      if (name === 'service.update') {
+        // 247th round (FIX C): one-time-per-session routing note, pushed
+        // BEFORE the update processes so it rides the same turn's context.
+        // The maiden joint-solver session (build 246) hand-authored for 40
+        // turns while artifact.propose — which sweeps evidence, synthesizes
+        // the full graph, and applies through the SAME gates — sat uncalled.
+        if (!state.proposeAdoptionNudged247) {
+          state.proposeAdoptionNudged247 = true;
+          state.transcript.push({ kind: 'system', text: 'TOOL ROUTING: hand-authored service.update with artifact.propose never called — the joint solver sweeps evidence (bounded scroll included), synthesizes the full step graph from measured lanes, and applies through these SAME gates in one call (~60-120s). Call artifact.propose {} now or after the next red; keep hand-authoring only for slots the receipt lists as unfilled.' });
+        }
+        return sanitizeToolResult(await handleServiceUpdate(args));
+      }
       // 246th C1 (final review): artifact.propose applies through the SAME
       // pipeline as service.update — never a bare applyArtifact setter. The
       // tool handler runs the evidence sweep and returns the synthesis
@@ -1696,6 +1714,9 @@
         // dispatches, the armed red→propose routing nudge is discharged —
         // the routing already succeeded, a pending note would be noise.
         state.redNudgePending246 = null;
+        // 247th (FIX C): adoption observed — the one-time routing note at
+        // hand-authored service.update dispatches is moot from here on.
+        state.proposeAdoptionNudged247 = true;
         const fnP = tools['artifact.propose'];
         if (typeof fnP !== 'function') return { error: 'artifact.propose not wired' };
         let proposed = null;

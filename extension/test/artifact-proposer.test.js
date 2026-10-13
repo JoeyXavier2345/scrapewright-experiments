@@ -387,6 +387,11 @@ describe('joint solver — proposeArtifact (stubbed sweep)', () => {
     assert.ok(censusArgs && typeof censusArgs.timeoutMs === 'number', 'census called with an explicit budget');
     assert.ok(censusArgs.timeoutMs >= 10000 && censusArgs.timeoutMs <= 110000,
       'timeoutMs = max(censusMinMs, totalMs-elapsed-10000) — got ' + censusArgs.timeoutMs);
+    // 247th round: the sweep's census carries the bounded mount phase —
+    // the maiden live session's window held only top-of-SERP modules while
+    // the organic posts sat unmounted below; scrollRounds:2 (settle 900ms
+    // x2) fits the 120s sweep budget.
+    assert.equal(censusArgs.scrollRounds, 2, 'the sweep scrolls for mounted-window bias before reading');
     assert.equal(out.applied, true);
   });
   // Review batch (joint-solver #P2-F): the CARD's :has(a[href*=…]) demands an
@@ -647,6 +652,45 @@ describe('joint solver — red→propose nudge', () => {
       .find((t) => /RED → artifact\.propose/.test(t));
     assert.ok(note, 'family red arms the nudge');
     assert.match(note, /copy\/paste-ready evidence included/);
+  });
+  // 247th round (FIX C): the maiden joint-solver session hand-authored for
+  // 40 turns without ever calling artifact.propose. One-time-per-session
+  // routing note at the FIRST service.update with no prior propose — the
+  // note lands BEFORE the update processes (same turn's context).
+  it('247th: the first hand-authored service.update with no prior propose fires exactly ONE routing note; later updates stay silent', async () => {
+    const session = makeSession([
+      env('io.confirm', Object.assign({ testInput: { keyword: 'ml', count: 3 } }, SCHEMAS)),
+      env('service.update', { steps: [STEP1] }),
+      env('service.update', { steps: [STEP1] }),
+      fin('done')
+    ], []);
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const notes = session.state().session.transcript.filter((t) => t.kind === 'system').map((t) => t.text)
+      .filter((t) => /TOOL ROUTING: hand-authored service\.update/.test(t));
+    assert.equal(notes.length, 1, 'exactly one routing note across two updates');
+    assert.match(notes[0], /artifact\.propose \{\}/, 'the note names the call shape');
+    assert.match(notes[0], /same gates/i);
+    assert.match(notes[0], /slots the receipt lists as unfilled/);
+    // The note rides the transcript BEFORE the triggering update's tool
+    // entry (same turn's context), never after it.
+    const kinds = session.state().session.transcript.map((t) => t.kind + ':' + (t.name || ''));
+    const noteIdx = session.state().session.transcript.findIndex((t) => t.kind === 'system' && /TOOL ROUTING: hand-authored/.test(t.text || ''));
+    const updIdx = session.state().session.transcript.findIndex((t) => t.kind === 'tool' && t.name === 'service.update');
+    assert.ok(noteIdx > -1 && updIdx > -1 && noteIdx < updIdx, 'note precedes the update entry — order: ' + kinds.join(','));
+  });
+  it('247th: artifact.propose dispatched before any update → the routing note never fires', async () => {
+    const session = makeSession([
+      env('io.confirm', Object.assign({ testInput: { keyword: 'ml', count: 3 } }, SCHEMAS)),
+      env('artifact.propose', {}),
+      env('service.update', { steps: [STEP1] }),
+      fin('done')
+    ], []);
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const notes = session.state().session.transcript.filter((t) => t.kind === 'system').map((t) => t.text)
+      .filter((t) => /TOOL ROUTING: hand-authored service\.update/.test(t));
+    assert.equal(notes.length, 0, 'adoption observed — no routing note ever');
   });
   // Review batch (joint-solver #12): the merged propose receipt's `next` was
   // the handler's pass-through ('engine applies + verify.run') on BOTH

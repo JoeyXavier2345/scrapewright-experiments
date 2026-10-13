@@ -32,6 +32,13 @@ function makeCensusTools(records, opts) {
   const o = opts || {};
   const observationLog = createObservationLog();
   const calls = [];
+  // 247th round (mount phase): when scrollGrows is set, the FIRST
+  // $scrollBy-bearing round flips the stub into its grown state — counts
+  // and census reads thereafter return the GROWN population (real
+  // per-record ?story= tokens), exactly like a lazy feed mounting organic
+  // cards below the top-of-window modules.
+  let scrolled = false;
+  const activeRecords = () => (o.scrollGrows && scrolled && o.grownRecords) ? o.grownRecords : records;
   const tools = createProbeTools({
     executeDsl: async (snippet) => {
       calls.push(snippet);
@@ -47,9 +54,21 @@ function makeCensusTools(records, opts) {
           hovercards: []
         }];
       }
+      if (/\$scrollBy\(/.test(snippet)) {
+        if (o.scrollGrows && !scrolled) {
+          scrolled = true;
+          return { c0: records.length, c1: (o.grownRecords || records).length };
+        }
+        return { c0: records.length, c1: records.length };
+      }
+      if (/\$count\(/.test(snippet)) {
+        const src = activeRecords();
+        return (o.count != null && src === records) ? o.count : src.length;
+      }
       // Pre-wrapped record objects pass through (empty/unparseable-sample
       // tests need control over the __c_html payload itself).
-      return records.map((h) => (h && typeof h === 'object' && !Array.isArray(h)) ? h : { __c_html: h });
+      const src = activeRecords();
+      return src.map((h) => (h && typeof h === 'object' && !Array.isArray(h)) ? h : { __c_html: h });
     },
     observationLog
   });
@@ -444,6 +463,97 @@ describe('probe.census A+B batch (175th round): bounded reads, coverage fidelity
     const pid = r.hrefIdentity.find((e) => e.token === 'query:pid');
     assert.ok(pid, 'pid is single-per-card and varies across cards — the identity candidate');
     assert.deepEqual(pid.samples, ['p1000001', 'p1000002', 'p1000003']);
+  });
+});
+
+// 247th round (build 246's maiden live session): the page's mounted window
+// held only 7 top-of-SERP cards (a spelling-correction module + recommendation
+// cards) while the organic posts sat unmounted below — the census read the
+// window ONCE and the session hand-authored against it for 40 turns. The
+// bounded mount phase: scrollRounds hops of $scrollBy+settle when the
+// identity diff came back empty, re-census on growth, and a mounted-window-
+// bias disclosure when the identity/url lanes stay empty.
+describe('probe.census bounded mount phase (247th round)', () => {
+  // Top-of-window module cards: NO links at all — hrefIdentity is empty and
+  // the url lane carries no a-tag entry (the weak-lane shape the bias hint
+  // keys on). This mirrors the correction/recommendation strip.
+  function mountedCard(n) {
+    return '<div class="card">' +
+      '<span class="ttl">Including results for tripp ' + n + '</span>' +
+      '<span class="ts">' + n + ' days ago</span>' +
+      '</div>';
+  }
+
+  it('default scrollRounds:0 — no scroll snippet at all (behavior unchanged), mountHint discloses the mounted-window bias', async () => {
+    const { tools, calls } = makeCensusTools([mountedCard(1), mountedCard(2), mountedCard(3)]);
+    const r = await tools.census({ containerSel: 'div.card' });
+    assert.ok(!calls.some((s) => /\$scrollBy\(/.test(s)), 'no scroll snippet at the default — existing behavior pinned');
+    assert.ok(!r.mount, 'no mount receipt when the phase never ran');
+    assert.match(r.mountHint, /MOUNTED-WINDOW BIAS/, 'the bias hint names the empty identity/url lanes');
+    assert.match(r.mountHint, /3 mounted cards/, 'the hint quantifies the mounted window');
+    assert.match(r.mountHint, /scrollRounds:2/);
+    assert.match(r.mountHint, /\$scrollBy/);
+    // The pinned note text is untouched — the hint is a NEW field.
+    assert.doesNotMatch(r.note, /MOUNTED-WINDOW BIAS/);
+  });
+
+  it('scrollRounds:2 + growth — one hop, re-census on the grown population, mount.reCensused:true, hrefIdentity populated', async () => {
+    const grown = [cardHtml(1), cardHtml(2), cardHtml(3), cardHtml(4), cardHtml(5)];
+    const { tools, calls, observationLog } = makeCensusTools(
+      [mountedCard(1), mountedCard(2), mountedCard(3)],
+      { scrollGrows: true, grownRecords: grown });
+    const r = await tools.census({ containerSel: 'div.card', scrollRounds: 2 });
+    const scrolls = calls.filter((s) => /\$scrollBy\(/.test(s));
+    assert.equal(scrolls.length, 1, 'growth stops the hopping after one round');
+    assert.match(scrolls[0], /\$count\(/, 'the hop round carries the before/after counts (scrollUntil round shape)');
+    assert.match(scrolls[0], /setTimeout\(r,\s*900\)/, 'bounded settle inside the hop');
+    assert.ok(r.mount, 'mount receipt present');
+    assert.equal(r.mount.rounds, 1);
+    assert.equal(r.mount.countBefore, 3);
+    assert.equal(r.mount.countAfter, 5);
+    assert.equal(r.mount.reCensused, true);
+    assert.ok(Array.isArray(r.hrefIdentity) && r.hrefIdentity.some((e) => e.token === 'query:story'),
+      'identity diffed from the GROWN cards (distinct ?story= tokens)');
+    assert.ok(!r.mountHint, 'the bias hint clears once the re-census found identity');
+    const mountEntries = observationLog.serialize().entries.filter((e) => e.tool === 'probe.census.mount');
+    assert.equal(mountEntries.length, 1, 'the mount hop records an observation receipt');
+    assert.match(mountEntries[0].summary, /mount round 1: count 3→5/);
+    assert.deepEqual(mountEntries[0].selectors, ['div.card']);
+  });
+
+  it('scrollRounds:2 + NO growth — two hops (the bound), mount.reCensused:false, mountHint still discloses', async () => {
+    const { tools, calls } = makeCensusTools([mountedCard(1), mountedCard(2), mountedCard(3)]);
+    const r = await tools.census({ containerSel: 'div.card', scrollRounds: 2 });
+    assert.equal(calls.filter((s) => /\$scrollBy\(/.test(s)).length, 2, 'hopping bounded at scrollRounds');
+    assert.ok(r.mount, 'mount receipt present');
+    assert.equal(r.mount.rounds, 2);
+    assert.equal(r.mount.reCensused, false);
+    assert.equal(r.mount.countAfter, 3, 'no growth — count unchanged');
+    assert.match(r.mountHint, /MOUNTED-WINDOW BIAS/);
+  });
+
+  it('identity already present — no mount phase even with scrollRounds:2', async () => {
+    const { tools, calls } = makeCensusTools([cardHtml(1), cardHtml(2), cardHtml(3)]);
+    const r = await tools.census({ containerSel: 'div.card', scrollRounds: 2 });
+    assert.ok(!calls.some((s) => /\$scrollBy\(/.test(s)), 'identity present — the mount phase is skipped entirely');
+    assert.ok(!r.mount);
+    assert.ok(Array.isArray(r.hrefIdentity) && r.hrefIdentity.length);
+    assert.ok(!r.mountHint);
+  });
+
+  it('scrollRounds clamps to 3 and an a-tag url lane suppresses the mountHint (the lane is not weak)', async () => {
+    // Identical hrefs (no per-record token variance) BUT a real a.ttl link —
+    // the url lane carries an a-tag entry, so the hint stays silent.
+    const sameHref = (n) => '<div class="card">' +
+      '<a class="ttl" href="/post/1?story=1001">Title ' + n + '</a>' +
+      '<span class="ts">' + n + ' days ago</span>' +
+      '</div>';
+    const noGrowth = makeCensusTools([sameHref(1), sameHref(2), sameHref(3)]);
+    const r1 = await noGrowth.tools.census({ containerSel: 'div.card', scrollRounds: 9 });
+    assert.equal(noGrowth.calls.filter((s) => /\$scrollBy\(/.test(s)).length, 3, 'scrollRounds:9 clamps to 3 hops');
+    assert.ok(r1.mount && r1.mount.rounds === 3);
+    assert.ok(!Array.isArray(r1.hrefIdentity) || !r1.hrefIdentity.length, 'identical hrefs diff no identity');
+    assert.ok(!r1.mountHint, 'an a-tag url lane is not weak — no bias hint');
   });
 });
 

@@ -1232,79 +1232,163 @@
         }
         timeoutMs = Math.min(Math.floor(a.timeoutMs), SNIPPET_MAX_TIMEOUT_MS);
       }
+      // 247th round (build 246's maiden live session): bounded mount phase
+      // opt. scrollRounds 0-3 (default 0 — behavior unchanged), clamped
+      // like scrollUntil's maxRounds, never a rejection.
+      const scrollRounds = (typeof a.scrollRounds === 'number' && a.scrollRounds > 0)
+        ? Math.min(3, Math.floor(a.scrollRounds)) : 0;
       const fieldMap = { __c_html: { attr: 'outerHTML' } };
-      // Count first (#35/#32): decides the bounded-read strategy, and makes
-      // the honest zero-population receipt reachable WITHOUT catching the
-      // raw $extractList throw (which carries the selector differential —
-      // that shape still flows through the error passthroughs below).
-      const cnt = await runSnippet('return $count(' + JSON.stringify(containerSel) + ');', timeoutMs);
-      if (cnt && typeof cnt.error === 'string') {
-        const routed = censusBudgetRoute(cnt.error);
-        return { error: routed || cnt.error };
-      }
-      const total = (typeof cnt === 'number') ? cnt : (Array.isArray(cnt) ? cnt.length : 0);
-      if (!total) {
-        return { total: 0, note: '0 containers matched — nothing to census. Fix the container selector first (probe.sample the card, or read the selector differential)' };
-      }
-      const indices = engine.pickIndices(total, samples);
-      const recs = [];
-      let boundedRead = false;
-      if (total <= CENSUS_FULL_READ_MAX) {
-        const r = await runSnippet('return $extractList(' + JSON.stringify(containerSel) + ', ' + JSON.stringify(fieldMap) + ');', timeoutMs);
-        if (r && typeof r.error === 'string') {
-          const routed = censusBudgetRoute(r.error);
-          return { error: routed || r.error };
+      // 247th round (FIX A): the population read (pre-count -> sampled
+      // $extractList -> parse -> lanes -> href diff) extracted into a
+      // closure so the mount phase below can RE-RUN it verbatim on a grown
+      // population — the maiden session's window held only top-of-SERP
+      // correction/recommendation cards while the organic posts sat
+      // unmounted below, and the one-shot read grounded 40 turns of
+      // hand-authoring against the wrong population.
+      async function readPopulation() {
+        // Count first (#35/#32): decides the bounded-read strategy, and makes
+        // the honest zero-population receipt reachable WITHOUT catching the
+        // raw $extractList throw (which carries the selector differential —
+        // that shape still flows through the error passthroughs below).
+        const cnt = await runSnippet('return $count(' + JSON.stringify(containerSel) + ');', timeoutMs);
+        if (cnt && typeof cnt.error === 'string') {
+          const routed = censusBudgetRoute(cnt.error);
+          return { error: routed || cnt.error };
         }
-        const all = Array.isArray(r) ? r : (r && Array.isArray(r.records) ? r.records : []);
-        for (const i of indices) recs.push(all[i]);
-      } else {
-        // #35: sample through per-index range reads — the relay carries the
-        // sampled containers' HTML only, never all N.
-        boundedRead = true;
-        for (const i of indices) {
-          const r = await runSnippet('return $extractList(' + JSON.stringify(containerSel) + ', ' + JSON.stringify(fieldMap) + ', ' +
-            JSON.stringify({ containerRange: [i, i + 1] }) + ');', timeoutMs);
+        const total = (typeof cnt === 'number') ? cnt : (Array.isArray(cnt) ? cnt.length : 0);
+        if (!total) {
+          return { zero: true, receipt: { total: 0, note: '0 containers matched — nothing to census. Fix the container selector first (probe.sample the card, or read the selector differential)' } };
+        }
+        const indices = engine.pickIndices(total, samples);
+        const recs = [];
+        let boundedRead = false;
+        if (total <= CENSUS_FULL_READ_MAX) {
+          const r = await runSnippet('return $extractList(' + JSON.stringify(containerSel) + ', ' + JSON.stringify(fieldMap) + ');', timeoutMs);
           if (r && typeof r.error === 'string') {
             const routed = censusBudgetRoute(r.error);
             return { error: routed || r.error };
           }
-          const one = Array.isArray(r) ? r : (r && Array.isArray(r.records) ? r.records : []);
-          recs.push(one[0]);
+          const all = Array.isArray(r) ? r : (r && Array.isArray(r.records) ? r.records : []);
+          for (const i of indices) recs.push(all[i]);
+        } else {
+          // #35: sample through per-index range reads — the relay carries the
+          // sampled containers' HTML only, never all N.
+          boundedRead = true;
+          for (const i of indices) {
+            const r = await runSnippet('return $extractList(' + JSON.stringify(containerSel) + ', ' + JSON.stringify(fieldMap) + ', ' +
+              JSON.stringify({ containerRange: [i, i + 1] }) + ');', timeoutMs);
+            if (r && typeof r.error === 'string') {
+              const routed = censusBudgetRoute(r.error);
+              return { error: routed || r.error };
+            }
+            const one = Array.isArray(r) ? r : (r && Array.isArray(r.records) ? r.records : []);
+            recs.push(one[0]);
+          }
         }
+        const docs = [];
+        // The surviving sample indices (empty AND unparseable samples drop
+        // out) — out.sampled reports what was actually censused, so k/n
+        // coverage denominators and the sampled list never disagree.
+        const sampledActual = [];
+        let truncatedCount = 0;
+        indices.forEach((idx, k) => {
+          const h = (recs[k] && typeof recs[k].__c_html === 'string') ? recs[k].__c_html : '';
+          if (!h) return;
+          // Element-HTML caps land MID-MARKUP — a lane derived from a cut card
+          // can carry selectors the real cards do not have past the cut.
+          if (/<!--TRUNCATED: element HTML capped/.test(h)) truncatedCount += 1;
+          const doc = engine.parseSample(h);
+          if (!doc) return;
+          docs.push(doc);
+          sampledActual.push(idx);
+        });
+        if (!docs.length) return { total: total, error: 'no sample container produced parseable HTML' };
+        // Dossier feed parity with probe.sample/skeleton: the census just
+        // fetched real container HTML — keep it reachable for the per-turn
+        // evidence dossier (skeleton view) instead of re-extracting later.
+        // (stashHtml takes the RAW string; the parsed doc is not serializable,
+        // so re-read the first surviving sample's HTML from the aligned recs.)
+        try {
+          const k0 = sampledActual.length ? indices.indexOf(sampledActual[0]) : -1;
+          if (k0 > -1 && recs[k0] && typeof recs[k0].__c_html === 'string' && recs[k0].__c_html) stashHtml(recs[k0].__c_html);
+        } catch (eStash) { /* dossier feed is best-effort */ }
+        const built = engine.buildLanes(docs, maxPerLane);
+        const lanes = built.lanes;
+        if (!Object.keys(lanes).length && built.laneErrors > 0) {
+          return { total: total, error: 'lane classification failed (' + built.laneErrors + ' lane scan error(s)) — the DOM context is degraded; fall back to probe.sample opts.samples:3 plus per-field probes' };
+        }
+        const hrefIdentity = engine.hrefIdentity(docs);
+        return {
+          total: total,
+          indices: indices,
+          docs: docs,
+          sampledActual: sampledActual,
+          truncatedCount: truncatedCount,
+          boundedRead: boundedRead,
+          lanes: lanes,
+          laneErrors: built.laneErrors,
+          hrefIdentity: hrefIdentity
+        };
       }
-      const docs = [];
-      // The surviving sample indices (empty AND unparseable samples drop
-      // out) — out.sampled reports what was actually censused, so k/n
-      // coverage denominators and the sampled list never disagree.
-      const sampledActual = [];
-      let truncatedCount = 0;
-      indices.forEach((idx, k) => {
-        const h = (recs[k] && typeof recs[k].__c_html === 'string') ? recs[k].__c_html : '';
-        if (!h) return;
-        // Element-HTML caps land MID-MARKUP — a lane derived from a cut card
-        // can carry selectors the real cards do not have past the cut.
-        if (/<!--TRUNCATED: element HTML capped/.test(h)) truncatedCount += 1;
-        const doc = engine.parseSample(h);
-        if (!doc) return;
-        docs.push(doc);
-        sampledActual.push(idx);
-      });
-      if (!docs.length) return { total: total, error: 'no sample container produced parseable HTML' };
-      // Dossier feed parity with probe.sample/skeleton: the census just
-      // fetched real container HTML — keep it reachable for the per-turn
-      // evidence dossier (skeleton view) instead of re-extracting later.
-      // (stashHtml takes the RAW string; the parsed doc is not serializable,
-      // so re-read the first surviving sample's HTML from the aligned recs.)
-      try {
-        const k0 = sampledActual.length ? indices.indexOf(sampledActual[0]) : -1;
-        if (k0 > -1 && recs[k0] && typeof recs[k0].__c_html === 'string' && recs[k0].__c_html) stashHtml(recs[k0].__c_html);
-      } catch (eStash) { /* dossier feed is best-effort */ }
-      const built = engine.buildLanes(docs, maxPerLane);
-      const lanes = built.lanes;
-      if (!Object.keys(lanes).length && built.laneErrors > 0) {
-        return { total: total, error: 'lane classification failed (' + built.laneErrors + ' lane scan error(s)) — the DOM context is degraded; fall back to probe.sample opts.samples:3 plus per-field probes' };
+      let pop = await readPopulation();
+      if (pop && pop.zero) return pop.receipt;
+      if (pop && typeof pop.error === 'string') return pop;
+      // 247th round (FIX A): the bounded mount phase. Runs ONLY when the
+      // caller opted in (scrollRounds>0) AND the identity diff came back
+      // empty — the mounted-window signature. Each hop is a scrollUntil-
+      // shaped round ($scrollBy + settle + before/after counts); if the
+      // population grew, RE-RUN the census read on the grown population
+      // and stop hopping. Best-effort throughout: a failed hop or a failed
+      // re-read is an evidence gap, never a crash — the original census
+      // survives.
+      let mount = null;
+      if (scrollRounds > 0 && !(Array.isArray(pop.hrefIdentity) && pop.hrefIdentity.length)) {
+        const countBefore = pop.total;
+        let countAfter = countBefore;
+        let rounds = 0;
+        let reCensused = false;
+        const roundSnippet =
+          'const __c0 = await $count(' + JSON.stringify(containerSel) + ');\n' +
+          'await $scrollBy(900);\n' +
+          'await new Promise(r => setTimeout(r, 900));\n' +
+          'const __c1 = await $count(' + JSON.stringify(containerSel) + ');\n' +
+          'return { c0: __c0, c1: __c1 };';
+        for (let i = 0; i < scrollRounds; i++) {
+          let r = null;
+          try { r = await runSnippet(roundSnippet, timeoutMs); }
+          catch (eHop) { r = { error: String((eHop && eHop.message) || eHop) }; }
+          if (r && typeof r.error === 'string') break; // a failed hop ends the phase; the census still returns
+          rounds += 1;
+          countAfter = (r && typeof r.c1 === 'number') ? r.c1 : countAfter;
+          if (observationLog) {
+            try {
+              observationLog.record({
+                tool: 'probe.census.mount',
+                selectors: [containerSel],
+                summary: 'mount round ' + rounds + ': count ' + ((r && typeof r.c0 === 'number') ? r.c0 : countBefore) + '→' + countAfter
+              });
+            } catch (eObs) { /* best-effort receipt */ }
+          }
+          if (countAfter > countBefore) {
+            const grown = await readPopulation();
+            if (grown && !grown.zero && typeof grown.error !== 'string') {
+              pop = grown;
+              reCensused = true;
+            }
+            break;
+          }
+        }
+        mount = { rounds: rounds, countBefore: countBefore, countAfter: countAfter, reCensused: reCensused };
       }
-      const hrefIdentity = engine.hrefIdentity(docs);
+      const total = pop.total;
+      const indices = pop.indices;
+      const docs = pop.docs;
+      const sampledActual = pop.sampledActual;
+      const truncatedCount = pop.truncatedCount;
+      const boundedRead = pop.boundedRead;
+      const lanes = pop.lanes;
+      const laneErrors = pop.laneErrors;
+      const hrefIdentity = pop.hrefIdentity;
       const out = {
         containerSel: containerSel,
         total: total,
@@ -1312,6 +1396,7 @@
         lanes: lanes
       };
       if (boundedRead) out.boundedRead = true;
+      if (mount) out.mount = mount;
       if (hrefIdentity.length) out.hrefIdentity = hrefIdentity;
       // Empty or unparseable samples were skipped above — disclose the gap
       // so k/n coverage is never misread as k/total.
@@ -1385,9 +1470,9 @@
       // produced entries. A missing lane was never scanned — NOT proven
       // absent — so name the error count and route those lanes to per-field
       // probes instead of letting silence read as "no candidates".
-      if (built.laneErrors > 0 && Object.keys(lanes).length) {
-        out.laneErrors = built.laneErrors;
-        out.note += ' ' + built.laneErrors + ' lane scan(s) errored — missing lanes were NOT scanned (not proven absent); probe those per-field.';
+      if (laneErrors > 0 && Object.keys(lanes).length) {
+        out.laneErrors = laneErrors;
+        out.note += ' ' + laneErrors + ' lane scan(s) errored — missing lanes were NOT scanned (not proven absent); probe those per-field.';
       }
       // Hover-phase failure is quarantined: the lanes above were computed
       // BEFORE the hover ran and are unaffected — teach the separate retry,
@@ -1408,6 +1493,19 @@
         out.note += ' population ' + total + ' exceeded the full-read bound (' + CENSUS_FULL_READ_MAX + ') — sampled through bounded range reads: only the sampled containers were relayed, total is the live count. The reads are SEPARATE snapshots — a virtualizing feed can shift cards between them; treat cross-sample coverage as indicative, not exact.';
       }
       out.note += ' Changing containerSel? re-run the census on the new selector — one call returns fresh lanes; do NOT fall back to serial per-field probes.';
+      // 247th round (FIX A): the mounted-window-bias disclosure. Fires when
+      // the identity diff AND the url lane both came back weak (no a-tag
+      // lane entry) and the mount phase never FIXED it — either it never
+      // ran (scrollRounds 0/default) or it ran to its bound without
+      // growth. A NEW FIELD, never appended to out.note — the pinned note
+      // text stays byte-identical.
+      const urlLaneHasATag = Array.isArray(lanes.url) && lanes.url.some((e) => e && (
+        e.tag === 'a' || /^a(\[|\.|:|$)/.test(String(e.selector || ''))));
+      const mountResolvedIdentity = !!(mount && mount.reCensused);
+      if (!mountResolvedIdentity && !(Array.isArray(hrefIdentity) && hrefIdentity.length) && !urlLaneHasATag) {
+        out.mountHint = 'MOUNTED-WINDOW BIAS: the identity/url lane is empty over the ' + total +
+          ' mounted cards — top-of-feed modules (corrections/recommendations) can occupy the window while organic items sit unmounted below: re-run with scrollRounds:2 (bounded scroll + re-census) or scroll via $scrollBy first.';
+      }
       if (observationLog) {
         observationLog.record({ tool: 'probe.census', selectors: [containerSel], summary: 'census total=' + total + ' lanes=' + Object.keys(lanes).join('+') + (hrefIdentity.length ? ' hrefIdentity=' + hrefIdentity.length : '') + (a.hover === true ? ' +hover' : '') });
       }

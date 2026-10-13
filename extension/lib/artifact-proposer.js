@@ -300,7 +300,11 @@ async function proposeArtifact(ctx) {
   }
   let census = null;
   if (containerSel) {
-    const censusArgs = { containerSel: containerSel, samples: 5, hover: true };
+    // 247th round: scrollRounds:2 — the sweep's census runs the bounded
+    // mount phase when the identity diff comes back empty over the mounted
+    // window (the maiden live session's top-of-SERP correction strip). The
+    // hops' settle (900ms x2) fits the 120s sweep budget.
+    const censusArgs = { containerSel: containerSel, samples: 5, hover: true, scrollRounds: 2 };
     const remaining = budget.totalMs - elapsedMs();
     if (typeof remaining === 'number' && remaining > 0) {
       censusArgs.timeoutMs = Math.max(budget.censusMinMs, remaining - 10000);
