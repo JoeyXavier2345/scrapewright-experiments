@@ -451,7 +451,15 @@
   // uniform insertion-order shares let prose (scoreNote/shapeDistribution)
   // consume budget while the rows the model acts on (error/detectors/
   // finalResult/steps) collapsed into "[+N keys elided]" stubs.
-  const PRIORITY_KEYS = ['error', 'ok', 'detectors', 'finalResult', 'steps', 'schemaOk', 'score', 'events'];
+  // 253b (P3-C): the joint-solver propose receipts added decision-bearing
+  // fields — updateReceipt (nests large) plus the five small ones
+  // (ledgerWarning/populationHint/censusMount/ledgerConflicts/
+  // selectorProvenance). They ride AFTER the established families and BEFORE
+  // generic keys, so the 4000-char receipt cap cannot stub exactly the rows
+  // that route the next action (annotate-first population hints, ledger
+  // conflicts, mount-phase disclosures).
+  const PRIORITY_KEYS = ['error', 'ok', 'detectors', 'finalResult', 'steps', 'schemaOk', 'score', 'events',
+    'updateReceipt', 'ledgerWarning', 'populationHint', 'censusMount', 'ledgerConflicts', 'selectorProvenance'];
 
   function compactObjectForLLM(obj, budget) {
     // stable partition: priority keys first (in PRIORITY_KEYS order), then

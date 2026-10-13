@@ -231,6 +231,22 @@ try {
   }
 } catch (eGG) { GroundingGateRef_246 = null; }
 
+// 253b (P3-E): paste-ready labels carrier + family parse line for the count
+// slots — the exact shape the synthesis emits when a count lane exists, so
+// the model pastes one block instead of composing the carrier/parse split
+// blind. Web-generic alternates only (like/赞/点赞, comment/评论,
+// share/转发/分享); the digit requirement stays so label-shaped prose never
+// poses as a count.
+function countSlotTemplate253b(slot) {
+  const kind = /^like/.test(slot) ? 'like' : (/^comment/.test(slot) ? 'comment' : 'share');
+  const finder = kind === 'like'
+    ? "/^like\\s*:|^[赞点][赞]?\\s*\\d|^\\d+\\s*人.*赞/i.test(l)"
+    : (kind === 'comment'
+        ? "/comment|评论/i.test(l) && /\\d/.test(l)"
+        : "/share|转发|分享/i.test(l) && /\\d/.test(l)");
+  return "labels: { selector: '[aria-label]', attr: 'aria-label', multi: true }, // into the fieldMap\n// parse in the assembly: const labs = (r.labels || []).map(function (x) { return String(x || '').trim(); }); const m = labs.find(function (l) { return " + finder + "; }) || ''; // value = num(m)";
+}
+
 function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   const clauses = parseRequirementClauses(requirementText);
   const census = (pack && pack.census) || null;
@@ -340,6 +356,17 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   const th252 = census ? census.timeHover : null;
   const thAbs252 = !!(th252 && Array.isArray(th252.candidates) &&
     th252.candidates.some(function (c) { return c && !c.relative && /(19|20)\d{2}/.test(String(c.value || '')); }));
+  // 253b (P3-A): the hover clause was a dead knob — parseRequirementClauses
+  // parsed it but nothing read it, so EVERY synthesis ran $extractWithHover
+  // (hover wall budget per extract) even when the requirement asked for no
+  // hover source and no hover evidence existed. Degrade to $extractList when
+  // BOTH the clause is absent AND the timeHover receipt proves no absolute.
+  // The tsHover (read:'hoverPopover') field is dropped from the fieldMap —
+  // $extractList hard-rejects hoverPopover specs by contract — while
+  // tsAria/tsLabel stay when a time selector exists (ARIA reads need no
+  // hover phase). The hover option object is omitted entirely; the assembly
+  // loop is already undefined-safe for absent fields.
+  const useHoverExtract253b = !!(clauses.hover || thAbs252);
   const timeSel252 = timeLane
     ? timeLane.selector
     : (thAbs252
@@ -348,9 +375,22 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   if (timeSel252) {
     timeFm.push('tsAria: { selector: ' + JSON.stringify(timeSel252) + ', attr: \'aria-label\' }');
     timeFm.push('tsLabel: { selector: ' + JSON.stringify(timeSel252) + ', labelledby: true }');
-    timeFm.push('tsHover: { selector: ' + JSON.stringify(timeSel252) + ', read: \'hoverPopover\', match: /(19|20)\\d{2}/ }');
+    if (useHoverExtract253b) {
+      timeFm.push('tsHover: { selector: ' + JSON.stringify(timeSel252) + ', read: \'hoverPopover\', match: /(19|20)\\d{2}/ }');
+    }
   } else {
-    unfilled.push({ slot: 'postTime', reason: 'no time-like census lane — run probe.census {hover:true} or bind the timestamp anchor by hand' });
+    // 253b (P3-E): paste-ready binding template for the recurring postTime
+    // slot — built from the best available evidence like the 252 binding:
+    // the timeHover receipt's own anchorSel when the dance ran (even
+    // relative-only — the anchor is MEASURED), the web-generic
+    // span[aria-label] family otherwise. The model pastes instead of
+    // composing the fieldMap shape blind.
+    const tmplSel253b = (th252 && typeof th252.anchorSel === 'string' && th252.anchorSel) ? th252.anchorSel : 'span[aria-label]';
+    unfilled.push({
+      slot: 'postTime',
+      reason: 'no time-like census lane — run probe.census {hover:true} or bind the timestamp anchor by hand',
+      template: 'tsAria: { selector: ' + JSON.stringify(tmplSel253b) + ', attr: \'aria-label\' }, tsLabel: { selector: ' + JSON.stringify(tmplSel253b) + ', labelledby: true }, tsHover: { selector: ' + JSON.stringify(tmplSel253b) + ', read: \'hoverPopover\', match: /(19|20)\\d{2}/ },'
+    });
   }
   if (countLane) {
     fm.push('labels: { selector: \'[aria-label]\', attr: \'aria-label\', multi: true }');
@@ -358,8 +398,11 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
     // 248th round (FIX 3): the plural schema names are checked too — a
     // schema declaring likes/comments/shares must see THOSE slots named as
     // the gaps, not the canonical likeCount family it never declared.
+    // 253b (P3-E): each count-family gap carries the paste-ready labels
+    // carrier + its own family parse line — the same shape the synthesis
+    // emits when a count lane exists (CJK alternates included).
     for (const s of ['likeCount', 'likes', 'commentCount', 'comments', 'shareCount', 'shares']) {
-      if (schemaFields.indexOf(s) > -1) unfilled.push({ slot: s, reason: 'no count-like census lane on this page — renegotiate via io.confirm or bind the count carrier by hand' });
+      if (schemaFields.indexOf(s) > -1) unfilled.push({ slot: s, reason: 'no count-like census lane on this page — renegotiate via io.confirm or bind the count carrier by hand', template: countSlotTemplate253b(s) });
     }
   }
   if (textLane) {
@@ -383,11 +426,19 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   // measured). With no url lane the guard would skip EVERY record (r.postUrl
   // is undefined) and the extract deterministically returned {posts:[]}.
   const urlGuardLine = identitySel ? '  if (!r.' + urlSlot + ') continue;' : null;
+  // 253b (P3-A): the degraded form swaps $extractWithHover for $extractList —
+  // no hover option object, no maxContainers (the assembly loop already caps
+  // at __input__.count), no tsHover field in the fieldMap.
+  const extractHead253b = useHoverExtract253b
+    ? ['const rs = await $extractWithHover(CARD, {',
+       '  ' + fm.concat(timeFm).join(',\n  '),
+       '}, { hover: { anchorSel: ' + JSON.stringify(anchorSel) + ' }, maxContainers: Math.min(__input__.count || 10, 50) });']
+    : ['const rs = await $extractList(CARD, {',
+       '  ' + fm.concat(timeFm).join(',\n  '),
+       '});'];
   const extractScript = [
-    'const CARD = ' + JSON.stringify(CARD) + ';',
-    'const rs = await $extractWithHover(CARD, {',
-    '  ' + fm.concat(timeFm).join(',\n  '),
-    '}, { hover: { anchorSel: ' + JSON.stringify(anchorSel) + ' }, maxContainers: Math.min(__input__.count || 10, 50) });',
+    'const CARD = ' + JSON.stringify(CARD) + ';'
+  ].concat(extractHead253b, [
     'const num = function (s) { const m = String(s || \'\').match(/[\\d.,]+[KMkm]?/); return m ? m[0] : \'\'; };',
     'const posts = [];',
     'for (const r of rs) {',
@@ -396,9 +447,15 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
     '  const times = [r.tsAria, r.tsLabel, r.tsHover].map(function (t) { return String(t || \'\').trim(); }).filter(Boolean);',
     '  const abs = times.find(function (t) { return /(19|20)\\d{2}/.test(t); });',
     markerGuards + '  const labs = (r.labels || []).map(function (x) { return String(x || \'\').trim(); });',
-    '  const like = (labs.find(function (l) { return /^like\\s*:/i.test(l); }) || \'\').replace(/^like\\s*:\\s*/i, \'\').replace(/\\s+people.*$/i, \'\');',
-    '  const commL = labs.find(function (l) { return /comment/i.test(l) && /\\d/.test(l); }) || \'\';',
-    '  const shrL = labs.find(function (l) { return /share/i.test(l) && /\\d/.test(l); }) || \'\';',
+    // 253b (P3-B): web-generic CJK alternates for the count labels — 赞/点赞
+    // (like), 评论 (comment), 转发/分享 (share). The digit requirement rides
+    // every CJK branch so prose like 点赞过的朋友 never poses as a count; the
+    // like value is num()-wrapped so a CJK carrier ('赞 1.2万') parses to its
+    // digit run exactly like the comm/shr lanes (English values are already
+    // digit runs — num is a no-op there).
+    '  const like = num((labs.find(function (l) { return /^like\\s*:|^[赞点][赞]?\\s*\\d|^\\d+\\s*人.*赞/i.test(l); }) || \'\').replace(/^like\\s*:\\s*/i, \'\').replace(/\\s+people.*$/i, \'\'));',
+    '  const commL = labs.find(function (l) { return /comment|评论/i.test(l) && /\\d/.test(l); }) || \'\';',
+    '  const shrL = labs.find(function (l) { return /share|转发|分享/i.test(l) && /\\d/.test(l); }) || \'\';',
     '  posts.push({',
     '    postId: idm ? idm[1] : \'\',',
     '    ' + urlSlot + ': r.' + urlSlot + ',',
@@ -411,8 +468,8 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
     '  if (posts.length >= (__input__.count || 5)) break;',
     '}',
     'return { ' + JSON.stringify(arrayKey) + ': posts };'
-  ].filter(function (line) { return line != null; }).join('\n');
-  steps.push({ id: 'extract', name: 'extract cards with hover', script: extractScript, onSuccess: 'TERMINATE', onFailure: 'TERMINATE', maxIterations: 1 });
+  ]).filter(function (line) { return line != null; }).join('\n');
+  steps.push({ id: 'extract', name: useHoverExtract253b ? 'extract cards with hover' : 'extract cards', script: extractScript, onSuccess: 'TERMINATE', onFailure: 'TERMINATE', maxIterations: 1 });
   if (!census) unfilled.push({ slot: 'census', reason: 'no census evidence in this session — selectors fell back to web-generic ARIA conventions; re-run artifact.propose after probe.census for measured lanes' });
   // 248th round (FIX 2): the identity-selector provenance — which selector
   // the CARD :has() filter and the postUrl field bind, and whether it came

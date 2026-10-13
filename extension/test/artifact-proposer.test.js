@@ -816,6 +816,212 @@ describe('joint solver — red receipts carry fragments', () => {
   });
 });
 
+// 253b (P3-A): the hover clause was a dead knob — parseRequirementClauses
+// parsed it but synthesizeFromEvidence never read it, so EVERY synthesis ran
+// $extractWithHover (hover wall budget per extract) even when the requirement
+// asked for no hover source and no hover evidence existed. When the clause is
+// absent AND the timeHover receipt proves no absolute, the extract degrades
+// to $extractList: no hover option object, no tsHover (read:'hoverPopover')
+// field — $extractList hard-rejects hoverPopover specs by contract — while
+// tsAria/tsLabel stay when a time lane exists (ARIA reads need no hover
+// phase).
+describe('joint solver — 253b A: hover-clause degradation to $extractList', () => {
+  const REQ_NOHOVER = '提取帖子正文与链接。'; // no 悬浮/hover/tooltip/popover words, no scroll/expand
+  const SCHEMA_A = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
+    type: 'object', required: ['postId', 'postUrl', 'postTime', 'content'], properties: {
+      postId: { type: 'string' }, postUrl: { type: 'string' }, postTime: { type: 'string' },
+      content: { type: 'string' }, likeCount: { type: 'string' }, commentCount: { type: 'string' },
+      shareCount: { type: 'string' }, mediaUrls: { type: 'array', items: { type: 'string' } },
+      htmlSnippet: { type: 'string' } } } } } };
+  const CENSUS_A = () => ({
+    containerSel: '[role=article]',
+    total: 12,
+    sampled: [{}],
+    lanes: {
+      url: [{ selector: 'a[href*="/posts/"], a[href*="story"]', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['link1', 'link2'] }],
+      time: [{ selector: 'span[aria-label]', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025', '2 days ago'] }],
+      count: [{ selector: '[aria-label]', tag: 'div', strength: 'medium', coverage: '5/5', texts: ['Like: 185 people', '9 comments'] }],
+      id: [],
+      text: [{ selector: 'div.msg', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['body'] }]
+    },
+    hrefIdentity: [{ token: 'query:story_fbid', coverage: '5/5', samples: ['101a', '202b'] }, { token: 'path:last', coverage: '5/5', samples: ['p1', 'p2'] }]
+  });
+  it('no hover clause + no timeHover → $extractList, no hover opts, no tsHover field; tsAria/tsLabel kept when a time lane exists', () => {
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_A() }, REQ_NOHOVER, SCHEMA_A);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    assert.match(ex.script, /\$extractList\(CARD, \{/);
+    assert.doesNotMatch(ex.script, /\$extractWithHover/);
+    assert.doesNotMatch(ex.script, /hover:\s*\{/);
+    assert.doesNotMatch(ex.script, /read: 'hoverPopover'/, 'tsHover dropped — $extractList rejects hoverPopover specs');
+    assert.doesNotMatch(ex.script, /anchorSel/);
+    assert.match(ex.script, /tsAria: \{/, 'the time lane still binds tsAria');
+    assert.match(ex.script, /tsLabel: \{/, 'the time lane still binds tsLabel');
+    assert.equal(ex.name, 'extract cards', 'the step name drops the hover claim');
+  });
+  it('no hover clause + no time lane → no ts fields at all, postTime unfilled (degraded form)', () => {
+    const noTime = CENSUS_A();
+    noTime.lanes.time = [];
+    const out = AP.synthesizeFromEvidence({ census: noTime }, REQ_NOHOVER, SCHEMA_A);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    assert.match(ex.script, /\$extractList\(/);
+    assert.doesNotMatch(ex.script, /tsAria: \{/);
+    assert.ok(out.unfilled.some((u) => u.slot === 'postTime'));
+  });
+  it('hover clause present → $extractWithHover retained (current behavior unchanged)', () => {
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_A() }, '提取帖子正文与悬浮窗时间。', SCHEMA_A);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    assert.match(ex.script, /\$extractWithHover\(/);
+    assert.match(ex.script, /read: 'hoverPopover'/);
+    assert.match(ex.script, /hover:\s*\{ anchorSel:/);
+    assert.equal(ex.name, 'extract cards with hover');
+  });
+  it('no hover clause BUT timeHover absolute evidence → $extractWithHover retained (hover dance justified by evidence)', () => {
+    const census = CENSUS_A();
+    census.lanes.time = [];
+    census.timeHover = { anchorSel: 'abbr[aria-label]', candidates: [{ value: 'November 3, 2025', relative: false }] };
+    const out = AP.synthesizeFromEvidence({ census }, REQ_NOHOVER, SCHEMA_A);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    assert.match(ex.script, /\$extractWithHover\(/);
+    assert.match(ex.script, /read: 'hoverPopover'/);
+    assert.ok(!out.unfilled.some((u) => u.slot === 'postTime'));
+  });
+  it('compile + behavioral: the degraded script constructs and assembles records with no hovercards/tsHover present', async () => {
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_A() }, REQ_NOHOVER, SCHEMA_A);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    let fn;
+    assert.doesNotThrow(() => { fn = new AsyncFunction('__input__', '$extractList', ex.script); }, 'degraded form must construct');
+    const rs = [
+      { postUrl: 'https://e.com/p/1?story_fbid=aaa111', tsAria: 'November 3, 2025', content: 'body' },
+      { postUrl: 'https://e.com/p/2?story_fbid=bbb222', tsAria: '2 days ago', content: 'body2' }
+    ];
+    const res = await fn({ count: 5 }, async () => rs);
+    assert.equal(res.posts.length, 2, 'records without hovercards/tsHover assemble');
+    assert.equal(res.posts[0].postTime, 'November 3, 2025', 'absolute from tsAria wins');
+    assert.equal(res.posts[1].postTime, '2 days ago', 'relative falls through when it is all there is');
+  });
+});
+
+// 253b (P3-B): the synthesized count-label matchers were English-only — a
+// CJK page's own count carriers (赞 1.2万 / 评论 34 / 转发 5) resolved to
+// nothing while the labels carrier had the values in hand. Web-generic CJK
+// alternates (赞/点赞/评论/转发/分享 — no vendor tokens), the digit
+// requirement kept so bare prose like 点赞过的朋友 cannot pose as a count.
+describe('joint solver — 253b B: CJK count labels resolve', () => {
+  const REQ_NOHOVER = '提取帖子正文与链接。';
+  const SCHEMA_B = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
+    type: 'object', required: ['postId', 'postUrl', 'postTime', 'content'], properties: {
+      postId: { type: 'string' }, postUrl: { type: 'string' }, postTime: { type: 'string' },
+      content: { type: 'string' }, likeCount: { type: 'string' }, commentCount: { type: 'string' },
+      shareCount: { type: 'string' }, mediaUrls: { type: 'array', items: { type: 'string' } },
+      htmlSnippet: { type: 'string' } } } } } };
+  const CENSUS_B = () => ({
+    containerSel: '[role=article]', total: 12, sampled: [{}],
+    lanes: {
+      url: [{ selector: 'a[href*="/posts/"]', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }],
+      time: [{ selector: 'span[aria-label]', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }],
+      count: [{ selector: '[aria-label]', tag: 'div', strength: 'medium', coverage: '5/5', texts: ['Like: 185 people'] }],
+      id: [], text: []
+    },
+    hrefIdentity: [{ token: 'query:story_fbid', coverage: '5/5', samples: ['101a'] }]
+  });
+  async function compileWith(census) {
+    const out = AP.synthesizeFromEvidence({ census }, REQ_NOHOVER, SCHEMA_B);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    return new AsyncFunction('__input__', '$extractList', ex.script);
+  }
+  it("behavioral: ['赞 1.2万', '评论 34', '转发 5'] → likeCount/commentCount/shareCount populated", async () => {
+    const fn = await compileWith(CENSUS_B());
+    const rs = [{ postUrl: 'https://e.com/p/1?story_fbid=aaa111', labels: ['赞 1.2万', '评论 34', '转发 5'] }];
+    const res = await fn({ count: 5 }, async () => rs);
+    assert.equal(res.posts[0].likeCount, '1.2', 'the CJK like label parses to its digit run');
+    assert.equal(res.posts[0].commentCount, '34');
+    assert.equal(res.posts[0].shareCount, '5');
+  });
+  it('regression: English labels still parse (Like: 185 people / 9 comments / 2 shares)', async () => {
+    const fn = await compileWith(CENSUS_B());
+    const rs = [{ postUrl: 'https://e.com/p/1?story_fbid=aaa111', labels: ['Like: 185 people', '9 comments', '2 shares'] }];
+    const res = await fn({ count: 5 }, async () => rs);
+    assert.equal(res.posts[0].likeCount, '185');
+    assert.equal(res.posts[0].commentCount, '9');
+    assert.equal(res.posts[0].shareCount, '2');
+  });
+  it('label-shaped prose without digits never poses as a count (点赞过的朋友 / 转发此贴)', async () => {
+    const fn = await compileWith(CENSUS_B());
+    const rs = [{ postUrl: 'https://e.com/p/1?story_fbid=aaa111', labels: ['点赞过的朋友', '转发此贴给好友'] }];
+    const res = await fn({ count: 5 }, async () => rs);
+    assert.equal(res.posts[0].likeCount, '', 'no digit → no count claim');
+    assert.equal(res.posts[0].commentCount, '');
+    assert.equal(res.posts[0].shareCount, '');
+  });
+});
+
+// 253b (P3-E): the unfilled entries for the two recurring slots (postTime,
+// the count family) gain a paste-ready `template` built from the best
+// available evidence — the model pastes instead of composing against the
+// fieldMap shape. Filled slots carry none.
+describe('joint solver — 253b E: unfilled-slot binding templates', () => {
+  const SCHEMA_E = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
+    type: 'object', required: ['postId', 'postUrl', 'postTime', 'content'], properties: {
+      postId: { type: 'string' }, postUrl: { type: 'string' }, postTime: { type: 'string' },
+      content: { type: 'string' }, likeCount: { type: 'string' }, commentCount: { type: 'string' },
+      shareCount: { type: 'string' }, mediaUrls: { type: 'array', items: { type: 'string' } },
+      htmlSnippet: { type: 'string' } } } } } };
+  const CENSUS_E = (opts) => {
+    const c = {
+      containerSel: '[role=article]', total: 12, sampled: [{}],
+      lanes: {
+        url: [{ selector: 'a[href*="/posts/"]', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }],
+        time: [{ selector: 'span[aria-label]', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }],
+        count: [{ selector: '[aria-label]', tag: 'div', strength: 'medium', coverage: '5/5', texts: ['Like: 185'] }],
+        id: [], text: [{ selector: 'div.msg', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['body'] }]
+      },
+      hrefIdentity: [{ token: 'query:story_fbid', coverage: '5/5', samples: ['101a'] }]
+    };
+    if (opts && opts.noTime) c.lanes.time = [];
+    if (opts && opts.noCount) c.lanes.count = [];
+    if (opts && opts.noUrl) { c.lanes.url = []; c.hrefIdentity = []; }
+    return c;
+  };
+  it('postTime unfilled → template carries the 252-shape ts triple with the generic span[aria-label] anchor', () => {
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_E({ noTime: true, noCount: true }) }, '提取帖子正文。', SCHEMA_E);
+    const e = out.unfilled.find((u) => u.slot === 'postTime');
+    assert.ok(e && typeof e.template === 'string', 'postTime entry carries a template');
+    assert.ok(e.template.includes('tsAria: { selector: "span[aria-label]", attr: \'aria-label\' }'));
+    assert.ok(e.template.includes('tsLabel: { selector: "span[aria-label]", labelledby: true }'));
+    assert.ok(e.template.includes('tsHover: { selector: "span[aria-label]", read: \'hoverPopover\', match: /(19|20)\\d{2}/ }'), 'pasteable year-match regex literal');
+  });
+  it('postTime unfilled but the timeHover receipt ran → the template binds the receipt\'s OWN anchorSel (best available evidence)', () => {
+    const census = CENSUS_E({ noTime: true, noCount: true });
+    census.timeHover = { anchorSel: 'abbr[aria-label]', candidates: [{ value: '2 days ago', relative: true }] };
+    const out = AP.synthesizeFromEvidence({ census }, '提取帖子正文。', SCHEMA_E);
+    const e = out.unfilled.find((u) => u.slot === 'postTime');
+    assert.ok(e && e.template.includes('tsAria: { selector: "abbr[aria-label]"'), 'relative-only receipt still names its measured anchor');
+  });
+  it('count slots unfilled → each carries the labels carrier + its family parse line (CJK alternates included)', () => {
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_E({ noTime: true, noCount: true }) }, '提取帖子正文。', SCHEMA_E);
+    const like = out.unfilled.find((u) => u.slot === 'likeCount');
+    assert.ok(like && like.template.includes("labels: { selector: '[aria-label]', attr: 'aria-label', multi: true }"), 'labels carrier template');
+    assert.ok(like.template.includes('赞'), 'the like parse line carries the CJK alternate');
+    const comm = out.unfilled.find((u) => u.slot === 'commentCount');
+    assert.ok(comm && comm.template.includes('评论'), 'comment parse line carries 评论');
+    const shr = out.unfilled.find((u) => u.slot === 'shareCount');
+    assert.ok(shr && shr.template.includes('转发'), 'share parse line carries 转发');
+  });
+  it('filled slots carry no template — non-recurring unfilled entries (postUrl) stay template-free too', () => {
+    const filled = AP.synthesizeFromEvidence({ census: CENSUS_E() }, '提取帖子正文。', SCHEMA_E);
+    assert.ok(!filled.unfilled.some((u) => u.slot === 'postTime' || u.slot === 'likeCount'), 'time+count lanes filled → no such unfilled entries');
+    assert.ok(filled.unfilled.every((u) => !('template' in u)), 'no template rides entries whose slot is not a recurring binding gap');
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_E({ noUrl: true }) }, '提取帖子正文。', SCHEMA_E);
+    const e = out.unfilled.find((u) => u.slot === 'postUrl');
+    assert.ok(e && !('template' in e), 'postUrl gap keeps its reason-only shape');
+  });
+});
+
+// 253b (P3-D): the lib-unresolved error names BOTH exits — the wizard
+// console reload path AND the hand-authored fallback (the tool is an
+// accelerator, not a requirement).
 describe('joint solver — session-tools registration', () => {
   it('the tool is registered with a compact spec and calls proposeArtifact', () => {
     const fs = require('node:fs');
@@ -829,6 +1035,14 @@ describe('joint solver — session-tools registration', () => {
     const t = createSessionTools({ rail: { executeDsl: async () => ({}) }, runVerify: async () => ({}), probeFactory: () => ({}), getDraftService: () => null, applyArtifact: async () => ({}), getTestInput: () => ({}), getOutputSchema: () => ({}), getSteps: () => [] });
     const total = t.toolSpecs.reduce((a, s) => a + (s.args || '').length + (s.returns || '').length, 0);
     assert.ok(total <= 6500, 'toolSpec total ' + total + ' <= 6500');
+  });
+  // 253b (P3-D): the lib-unresolved error receipt names BOTH exits — reload
+  // the extension after checking the wizard console, or fall back to the
+  // hand-authored pipeline (the tool is an accelerator, not a requirement).
+  it('253b D: the lib-unresolved error names both exits (console+reload / hand-authored fallback)', () => {
+    const fs2 = require('node:fs');
+    const src = fs2.readFileSync(require('path').join(__dirname, '..', 'lib', 'session-tools.js'), 'utf8');
+    assert.match(src, /artifact-proposer lib unresolved — check script load order in wizard\.html — exits: \(a\) check the wizard console for the script-load error and reload the extension; \(b\) continue with hand-authored probes \+ service\.update as before \(this tool is an accelerator, not a requirement\)/);
   });
 });
 

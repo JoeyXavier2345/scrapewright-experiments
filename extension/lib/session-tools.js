@@ -2721,7 +2721,11 @@
         const proposeArtifact = (ArtifactProposer && typeof ArtifactProposer.proposeArtifact === 'function')
           ? ArtifactProposer.proposeArtifact : null;
         if (!proposeArtifact) {
-          return { error: 'artifact-proposer lib unresolved — check script load order in wizard.html' };
+          // 253b (P3-D): name BOTH exits — a load-order failure is a five-
+          // second fix (reload), and the hand-authored pipeline is the
+          // always-available fallback (this tool is an accelerator, not a
+          // requirement — a session must never dead-end on it).
+          return { error: 'artifact-proposer lib unresolved — check script load order in wizard.html — exits: (a) check the wizard console for the script-load error and reload the extension; (b) continue with hand-authored probes + service.update as before (this tool is an accelerator, not a requirement)' };
         }
         // 236th-round requirementText passthrough shape: the requirement is
         // the user's own operation list; the clause parser reads it.

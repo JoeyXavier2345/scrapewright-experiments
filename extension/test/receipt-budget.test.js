@@ -50,4 +50,37 @@ describe('T3: per-tool receipt budget + priority key ordering', () => {
     assert.match(RS_SRC, /'verify\.run':\s*\d+/, 'verify.run has an explicit cap');
     assert.match(RS_SRC, /capForTool|toolResultCapFor/, 'a resolver exists');
   });
+
+  // 253b (P3-C): the joint-solver propose receipts carry new decision-bearing
+  // fields (ledgerWarning / populationHint / censusMount / ledgerConflicts /
+  // selectorProvenance, plus the large-nesting updateReceipt). Under the
+  // 4000-char receipt cap the uniform insertion-order shares let generic keys
+  // (merge/sweepCostMs/next prose) consume budget first and stubbed exactly
+  // the rows the model acts on — the same class T3 fixed for verify receipts.
+  it('253b C: propose-receipt decision keys render BEFORE generic keys under budget pressure', () => {
+    const obj = {
+      merge: 'regenerated-from-fresh-sweep (hand-tuned slots are NOT preserved — re-check any slot you had fixed by hand)',
+      sweepCostMs: 87431,
+      bootstrapCapped: false,
+      attrGrounding: [{ attr: 'href', ok: true, absentPct: 0 }],
+      next: 'x'.repeat(600),
+      updateReceipt: { updated: true, version: 3, staticLint: ['l'.repeat(400)], note: 'n'.repeat(300) },
+      ledgerWarning: 'ledger-proven link family conflicts with the fresh sweep',
+      populationHint: 'population NOT grounded — annotate.request before selector archaeology',
+      censusMount: { rounds: 2, countBefore: 3, countAfter: 9, goalMet: false },
+      ledgerConflicts: ['a[href*="/x/"]'],
+      selectorProvenance: { identitySelector: 'a[href*="id="]', source: 'hrefIdentity-tokens' }
+    };
+    const out = Protocol.compactObjectForLLM(obj, 1000);
+    const iGeneric = out.indexOf('sweepCostMs');
+    assert.ok(iGeneric > -1, 'sanity: a generic key renders or stubs');
+    for (const k of ['updateReceipt', 'ledgerWarning', 'populationHint', 'censusMount', 'ledgerConflicts', 'selectorProvenance']) {
+      const i = out.indexOf('"' + k + '"');
+      assert.ok(i !== -1, k + ' key name survives the tight budget — got: ' + out.slice(0, 160));
+      assert.ok(i < iGeneric, k + ' precedes the generic keys');
+    }
+    // The small decision fields carry their VALUES, not just names.
+    assert.match(out, /annotate\.request/, 'populationHint value survives');
+    assert.match(out, /hrefIdentity-tokens/, 'selectorProvenance value survives');
+  });
 });
