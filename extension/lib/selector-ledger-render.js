@@ -1,7 +1,9 @@
 // extension/lib/selector-ledger-render.js
 //
 // [SELECTOR LEDGER] renderer — session-memory architecture (2026-10-13
-// spec §3.2, plan Task 2). The READ path of the validated-facts ledger:
+// spec §3.2, plan Task 2; the §3.3 update-time dead-family WARNING matcher
+// lives here too — the ledger's home). The READ path of the
+// validated-facts ledger:
 // aggregates the observation log's structured `outcomes` rows (the write
 // path landed with the same spec) into epoch-layered PROVEN / PROVEN-DEAD
 // families that the evidence dossier injects EVERY turn, BEFORE the
@@ -182,7 +184,95 @@
     return text;
   }
 
-  const api = { renderSelectorLedger, DEFAULT_BUDGET_CHARS, PROVEN_MAX_ROWS, DEAD_MAX_ROWS, SELECTOR_MAX_CHARS, ENTRY_WINDOW };
+  // Session-memory read net (2026-10-13 spec §3.3): the update-time
+  // dead-family WARNING matcher. The ledger's SECONDARY job (the dossier
+  // section is the primary one): when service.update (and artifact.propose
+  // via the same pipeline) lands an artifact, its selector families are
+  // matched against families measured DEAD in the CURRENT epoch. The match
+  // is deliberately EXACT — full-string equality, or the dead selector
+  // being one of the artifact selector's TOP-LEVEL comma segments. Never a
+  // bare substring (`a` would match everything); never a segment split
+  // inside :has(...)/:not(...) arguments (the standard inclusion-list
+  // shape is ONE compound) — the split is a quote-aware paren-depth walk,
+  // the same rule computeSelectorDifferential applies page-side.
+  function splitTopLevelSegments(sel) {
+    if (typeof sel !== 'string') return [];
+    const out = [];
+    let depth = 0;
+    let quote = null;
+    let start = 0;
+    for (let i = 0; i < sel.length; i++) {
+      const ch = sel[i];
+      if (quote) {
+        if (ch === '\\' && i + 1 < sel.length) { i += 1; continue; }
+        if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'") { quote = ch; continue; }
+      if (ch === '(') depth += 1;
+      else if (ch === ')') { if (depth > 0) depth -= 1; }
+      else if (ch === ',' && depth === 0) {
+        out.push(sel.slice(start, i).trim());
+        start = i + 1;
+      }
+    }
+    out.push(sel.slice(start).trim());
+    return out.filter(Boolean);
+  }
+
+  // artifactSelectors: selector strings claimed by the incoming artifact.
+  // deadEntries: [{selector, tool}] current-epoch dead rows (the caller
+  // aggregates max matched === 0). Returns the HIT dead entries in
+  // deadEntries order, each dead selector named once — a later entry for an
+  // already-hit selector only refreshes its tool (the most recent
+  // measurement names the tool, mirroring the renderer's aggregation).
+  function ledgerDeadMatch(artifactSelectors, deadEntries) {
+    const claims = [];
+    if (Array.isArray(artifactSelectors)) {
+      for (const s of artifactSelectors) {
+        if (typeof s === 'string' && s.trim()) claims.push(s.trim());
+      }
+    }
+    if (!claims.length || !Array.isArray(deadEntries) || !deadEntries.length) return [];
+    const exact = new Set(claims);
+    const claimSegments = claims.map((s) => new Set(splitTopLevelSegments(s)));
+    const hits = [];
+    const bySel = new Map();
+    for (const e of deadEntries) {
+      if (!e || typeof e.selector !== 'string' || !e.selector.trim()) continue;
+      const dead = e.selector.trim();
+      let hit = exact.has(dead);
+      if (!hit) {
+        for (const segs of claimSegments) {
+          if (segs.has(dead)) { hit = true; break; }
+        }
+      }
+      if (!hit) continue;
+      const tool = (typeof e.tool === 'string' && e.tool) ? e.tool : 'unknown';
+      const prior = bySel.get(dead);
+      if (prior) prior.tool = tool;
+      else { const row = { selector: dead, tool: tool }; bySel.set(dead, row); hits.push(row); }
+    }
+    return hits;
+  }
+
+  // Spec §3.3 wording: 'selector <X> was measured DEAD this epoch (0
+  // matches via <tool>) — verify the family or drop it'. One string, each
+  // hit selector once, at most 3 spelled out with the remainder disclosed.
+  function ledgerDeadWarningText(hits) {
+    const list = Array.isArray(hits) ? hits : [];
+    if (!list.length) return '';
+    const parts = list.slice(0, 3).map((h) =>
+      'selector ' + truncSel(h.selector) + ' was measured DEAD this epoch (0 matches via ' +
+      ((typeof h.tool === 'string' && h.tool) ? h.tool : 'unknown') +
+      ') — verify the family or drop it');
+    if (list.length > 3) {
+      parts.push('+' + (list.length - 3) + ' more dead selector(s) — see [SELECTOR LEDGER] in the dossier');
+    }
+    return parts.join(' | ');
+  }
+
+  const api = { renderSelectorLedger, ledgerDeadMatch, ledgerDeadWarningText, splitTopLevelSegments, DEFAULT_BUDGET_CHARS, PROVEN_MAX_ROWS, DEAD_MAX_ROWS, SELECTOR_MAX_CHARS, ENTRY_WINDOW };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.SelectorLedgerRender = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));

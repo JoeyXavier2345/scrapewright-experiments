@@ -354,6 +354,211 @@ describe('ledger — authoring-first methodology rule', () => {
   });
 });
 
+// ---- Task 3 (2026-10-13 spec §3.3): the update-time dead-family WARNING
+// net. The ledger's SECONDARY job: when service.update (and
+// artifact.propose via the same pipeline) lands an artifact, its selector
+// families are matched EXACTLY (full string or one TOP-LEVEL comma
+// segment — never a bare substring) against families the observation log
+// measured DEAD in the CURRENT page epoch. Hits append a non-blocking
+// receipt field; the artifact still lands. ----
+
+const { ledgerDeadMatch, ledgerDeadWarningText } = require('../lib/selector-ledger-render');
+
+describe('ledger — ledgerDeadMatch (pure matcher, spec §3.3)', () => {
+  const DEAD = 'a[href*="/dead/"]';
+
+  it('exact match hits; a comma-SEGMENT of an artifact selector hits; unrelated dead rows do not', () => {
+    const hits = ledgerDeadMatch(
+      ['div.card', 'div.c, a[href*="/dead/"]'],
+      [
+        { selector: 'div.card', tool: 'probe.count' },
+        { selector: DEAD, tool: 'probe.count' },
+        { selector: 'span.alive', tool: 'probe.census' }
+      ]
+    );
+    assert.deepEqual(hits, [
+      { selector: 'div.card', tool: 'probe.count' },
+      { selector: DEAD, tool: 'probe.count' }
+    ], 'exact + segment hits only, in entry order, unmatched rows dropped');
+  });
+
+  it('segments are TRIMMED — whitespace around the top-level comma is not part of the selector', () => {
+    assert.equal(ledgerDeadMatch(['div.c ,   a[href*="/dead/"]'], [{ selector: DEAD, tool: 'verify.run' }]).length, 1);
+    assert.equal(ledgerDeadMatch(['  div.card  '], [{ selector: 'div.card', tool: 'verify.run' }]).length, 1,
+      'both sides trimmed before comparison');
+  });
+
+  it('commas inside :has(...)/:not(...) args are NOT separators — the compound is ONE segment', () => {
+    const art = 'div.card:has(a[x], a[y]), span.z';
+    assert.equal(ledgerDeadMatch([art], [{ selector: 'div.card:has(a[x], a[y])', tool: 'probe.census' }]).length, 1,
+      'the paren-comma compound matches as one whole segment');
+    assert.equal(ledgerDeadMatch([art], [{ selector: 'a[y]', tool: 'probe.census' }]).length, 0,
+      'an inner :has comma never promotes its argument to a list segment');
+  });
+
+  it('bare substring never matches — `a` must not hit `[role=article] a`', () => {
+    assert.deepEqual(ledgerDeadMatch(['[role=article] a'], [{ selector: 'a', tool: 'probe.count' }]), []);
+    assert.deepEqual(ledgerDeadMatch(['div.card a.ttl'], [{ selector: 'card', tool: 'probe.count' }]), []);
+    assert.deepEqual(ledgerDeadMatch(['div.card'], [{ selector: 'div.cardx', tool: 'probe.count' }]), []);
+    assert.deepEqual(ledgerDeadMatch([], [{ selector: 'div.card', tool: 'probe.count' }]), []);
+    assert.deepEqual(ledgerDeadMatch(['div.card'], []), []);
+    assert.deepEqual(ledgerDeadMatch(null, null), []);
+  });
+
+  it('a dead selector observed dead by several entries is named ONCE (the most recent measurement names the tool)', () => {
+    const hits = ledgerDeadMatch(['div.card'], [
+      { selector: 'div.card', tool: 'probe.count' },
+      { selector: 'div.card', tool: 'verify.run' }
+    ]);
+    assert.deepEqual(hits, [{ selector: 'div.card', tool: 'verify.run' }]);
+  });
+
+  it('ledgerDeadWarningText: spec §3.3 wording, each hit once, ≤3 spelled out with the remainder disclosed', () => {
+    const one = ledgerDeadWarningText([{ selector: 'div.dead', tool: 'probe.count' }]);
+    assert.match(one, /selector div\.dead was measured DEAD this epoch \(0 matches via probe\.count\) — verify the family or drop it/);
+    assert.equal(ledgerDeadWarningText([]), '');
+    const many = ledgerDeadWarningText([
+      { selector: 'div.d1', tool: 'probe.count' }, { selector: 'div.d2', tool: 'probe.count' },
+      { selector: 'div.d3', tool: 'probe.count' }, { selector: 'div.d4', tool: 'probe.count' }
+    ]);
+    assert.ok(!/div\.d4/.test(many), 'the 4th hit is not spelled out');
+    assert.match(many, /\+1 more/, 'the remainder is disclosed');
+  });
+});
+
+// ---- functional: the warning rides the service.update receipt ----
+
+describe('ledger — update-time dead-family WARNING net (spec §3.3)', () => {
+  const { createSessionTools } = require('../lib/session-tools');
+  const DEAD_SEL = 'a[href*="/dead/"]';
+
+  function makeUpdateDeps(epoch) {
+    const state = { draft: null, applied: 0 };
+    const deps = {
+      rail: {
+        pageOpen: async () => ({ tabId: 1, url: 'https://example.com', ready: true }),
+        pageState: async () => ({ open: true, tabId: 1, url: 'https://example.com' }),
+        executeDsl: async () => 5,
+        ensureLock: async () => {}, releaseLock: async () => {}, dispose: async () => {}, tabId: 1,
+        epoch: epoch
+      },
+      runVerify: async () => ({ report: { ok: true, error: null, events: [], detectors: {} }, events: [], raw: { testResult: { steps: [] } } }),
+      getDraftService: () => state.draft,
+      applyArtifact: (a) => { state.applied += 1; state.draft = { targetUrl: 'https://example.com', steps: a.steps }; },
+      getTestInput: () => ({}),
+      getOutputSchema: () => ({ type: 'object' }),
+      getSteps: () => (state.draft ? state.draft.steps : []),
+      annotationBridge: null,
+      ioConfirmBridge: { request: async () => ({ confirmed: true }) },
+      probeFactory: (cfg) => {
+        const base = createProbeTools(cfg);
+        if (!base.snippet) base.snippet = async () => ({ result: 'dry-run ok' });
+        return base;
+      }
+    };
+    return { deps, state };
+  }
+
+  // The artifact claims the dead family as one SEGMENT of a comma-union
+  // count selector — the exact shape the segment rule exists for.
+  const DEAD_IN_STEPS = [{
+    id: 's1', name: 'count',
+    script: 'const n = await $count(\'div.c, a[href*="/dead/"]\');\nreturn { done: true, count: n };',
+    onSuccess: 'TERMINATE', onFailure: 'TERMINATE'
+  }];
+  const CTX = { session: { state: () => ({ session: { artifactVersions: [] } }) } };
+
+  async function confirmedBag(deps, observationLog) {
+    const t = createSessionTools(deps);
+    t.bindEngine({ observationLog });
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
+    return t;
+  }
+
+  it('current-epoch dead entry → receipt.ledgerWarning names it; the warning NEVER rejects', async () => {
+    const observationLog = createObservationLog();
+    observationLog.record({ tool: 'probe.count', selectors: [DEAD_SEL], summary: 'count=0', epoch: 1, outcomes: [{ selector: DEAD_SEL, matched: 0 }] });
+    const { deps, state } = makeUpdateDeps(1);
+    const t = await confirmedBag(deps, observationLog);
+    const out = await t.tools['service.update']({ steps: DEAD_IN_STEPS }, CTX);
+    assert.equal(out.updated, true, 'warning-only: the artifact still lands');
+    assert.equal(state.applied, 1, 'artifact applied despite the warning');
+    assert.match(out.ledgerWarning, /selector a\[href\*="\/dead\/"\] was measured DEAD this epoch \(0 matches via probe\.count\) — verify the family or drop it/,
+      'spec §3.3 wording names the family and the measuring tool');
+  });
+
+  it('clean receipt stays terse — no ledgerWarning field when nothing dead is claimed', async () => {
+    const observationLog = createObservationLog();
+    observationLog.record({ tool: 'probe.count', selectors: [DEAD_SEL], summary: 'count=0', epoch: 1, outcomes: [{ selector: DEAD_SEL, matched: 0 }] });
+    const { deps } = makeUpdateDeps(1);
+    const t = await confirmedBag(deps, observationLog);
+    const out = await t.tools['service.update']({
+      steps: [{ id: 's1', name: 'extract', script: "return $extractList('div.card', {t:{selector:'.t'}});", onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }]
+    }, CTX);
+    assert.equal(out.updated, true);
+    assert.equal(out.ledgerWarning, undefined, 'no claim touches the dead family → no field at all');
+  });
+
+  it('the same dead entry at a STALE epoch → no warning (stale-epoch rows are never compared)', async () => {
+    const observationLog = createObservationLog();
+    observationLog.record({ tool: 'probe.count', selectors: [DEAD_SEL], summary: 'count=0', epoch: 1, outcomes: [{ selector: DEAD_SEL, matched: 0 }] });
+    const { deps } = makeUpdateDeps(2); // the page reopened — epoch moved on
+    const t = await confirmedBag(deps, observationLog);
+    const out = await t.tools['service.update']({ steps: DEAD_IN_STEPS }, CTX);
+    assert.equal(out.updated, true);
+    assert.equal(out.ledgerWarning, undefined);
+  });
+
+  it('a dead row rescued by a current-epoch POSITIVE observation (max>0) → no warning', async () => {
+    const observationLog = createObservationLog();
+    observationLog.record({ tool: 'probe.count', selectors: [DEAD_SEL], summary: 'count=0', epoch: 1, outcomes: [{ selector: DEAD_SEL, matched: 0 }] });
+    observationLog.record({ tool: 'verify.run', selectors: [DEAD_SEL], summary: 'pageWide 7', epoch: 1, outcomes: [{ selector: DEAD_SEL, matched: 7 }] });
+    const { deps } = makeUpdateDeps(1);
+    const t = await confirmedBag(deps, observationLog);
+    const out = await t.tools['service.update']({ steps: DEAD_IN_STEPS }, CTX);
+    assert.equal(out.updated, true);
+    assert.equal(out.ledgerWarning, undefined, 'MAX matched wins — a family alive elsewhere on the page is not dead');
+  });
+
+  it('artifact.propose flows through the SAME handler — its receipt can carry ledgerWarning (engine pipeline)', async () => {
+    const { createResearchSession } = require('../lib/research-session');
+    // Seed the ENGINE's observation log: the dead family was measured 0 this
+    // epoch, and the full comma-union selector was observed (grounding
+    // admits it — the warning is not a gate).
+    const seedEntry = {
+      id: 1, tool: 'probe.count',
+      selectors: [DEAD_SEL, 'div.c, a[href*="/dead/"]'],
+      attrs: [], summary: 'count=0', at: 1, epoch: 1,
+      outcomes: [{ selector: DEAD_SEL, matched: 0 }]
+    };
+    const { deps } = makeUpdateDeps(1);
+    const bag = createSessionTools(deps);
+    bag.tools['artifact.propose'] = async () => ({ applied: 'engine-pending', steps: JSON.parse(JSON.stringify(DEAD_IN_STEPS)) });
+    const turns = [
+      JSON.stringify({ think: 'propose the graph', tool: 'artifact.propose', args: {} }),
+      JSON.stringify({ finish: { summary: 'done' } })
+    ];
+    let i = 0;
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: async () => ({ content: turns[i++], finish_reason: 'stop' }),
+      tools: bag.tools,
+      epochOf: () => 1,
+      dossierFeeds: { containerHtml: () => null, popovers: () => [], lastVerify: () => null },
+      seed: { observation: { seq: 1, entries: [seedEntry] } }
+    });
+    bag.bindEngine(session);
+    await bag.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
+    await session.run();
+    const st = session.state();
+    const propose = st.session.transcript.filter((e) => e.kind === 'tool' && e.name === 'artifact.propose').pop();
+    assert.ok(propose, 'propose dispatched');
+    assert.equal(propose.result.applied, true, 'the engine applied the synthesis through the service.update pipeline');
+    assert.match(propose.result.updateReceipt.ledgerWarning, /a\[href\*="\/dead\/"\] was measured DEAD this epoch/,
+      'the propose receipt carries the dead-family warning via its updateReceipt');
+  });
+});
+
 // ---- verify-side recording (session-tools result landing) ----
 
 describe('ledger — verify.run field-census recording', () => {

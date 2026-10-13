@@ -71,6 +71,15 @@
   }
 
   const ProbeTools = resolveLib('./probe-tools', 'ProbeTools');
+  // Session-memory read net (2026-10-13 spec §3.3): the update-time
+  // dead-family warning resolves the ledger renderer (match + wording) and
+  // the grounding gate's own selector-claims extractor — the SAME extractor
+  // that decides what needs a receipt decides what gets dead-matched, so
+  // the two views of "the artifact's selectors" can never diverge. Wizard
+  // page load order (grounding-gate.js, selector-ledger-render.js before
+  // session-tools.js) satisfies the global fallback.
+  const GroundingGateLib = resolveLib('./grounding-gate', 'GroundingGate');
+  const SelectorLedgerLib = resolveLib('./selector-ledger-render', 'SelectorLedgerRender');
   // Joint solver (2026-10-13 spec): artifact.propose delegates to
   // lib/artifact-proposer.js. Resolved at load time like ProbeTools —
   // the wizard page must load artifact-proposer.js BEFORE session-tools.js.
@@ -266,6 +275,57 @@
       }
     };
     const probes = probeFactory({ executeDsl: d.rail.executeDsl, observationLog: lateBoundLog });
+
+    // Session-memory read net (2026-10-13 spec §3.3): the update-time
+    // dead-family WARNING. Aggregates the observation log's structured
+    // `outcomes` over the CURRENT page epoch (the renderer's MAX-matched
+    // semantics — a selector measured 0 inside containers but n>0
+    // page-wide is ALIVE, and legacy null-epoch rows are epoch-agnostic so
+    // they count; numeric non-current epochs are stale and never compared),
+    // then matches the incoming artifact's selector claims EXACTLY (full
+    // string or one top-level comma segment — never a bare substring)
+    // against the dead rows. Pure reads, best-effort: a ledger hiccup must
+    // never block an update — the receipt field is a WARNING in the
+    // staticLint tradition, never a rejection.
+    function ledgerDeadWarningFor(stepsArr) {
+      try {
+        if (!SelectorLedgerLib || typeof SelectorLedgerLib.ledgerDeadMatch !== 'function' ||
+            typeof SelectorLedgerLib.ledgerDeadWarningText !== 'function') return null;
+        if (!GroundingGateLib || typeof GroundingGateLib.extractSelectorClaims !== 'function') return null;
+        if (!engineLog || typeof engineLog.recent !== 'function') return null;
+        const claims = GroundingGateLib.extractSelectorClaims(stepsArr);
+        if (!claims.length) return null;
+        const ep = (d.rail && typeof d.rail.epoch === 'number') ? d.rail.epoch : null;
+        let entries = [];
+        try { entries = engineLog.recent(SelectorLedgerLib.ENTRY_WINDOW || 300); } catch (eLw) { return null; }
+        const bySel = new Map(); // selector -> {max, tool}
+        for (const e of entries) {
+          if (!e || !Array.isArray(e.outcomes)) continue;
+          if (ep !== null && typeof e.epoch === 'number' && e.epoch !== ep) continue; // stale epoch — never compared
+          const tool = String(e.tool || 'unknown');
+          for (const o of e.outcomes) {
+            if (!o || typeof o.selector !== 'string' || !o.selector) continue;
+            const matched = (typeof o.matched === 'number' && isFinite(o.matched) && o.matched >= 0) ? Math.floor(o.matched) : 0;
+            let row = bySel.get(o.selector);
+            if (!row) {
+              row = { selector: o.selector, max: matched, tool: tool };
+              bySel.set(o.selector, row);
+            } else {
+              if (matched > row.max) row.max = matched;
+              row.tool = tool; // the most recent measurement names the tool (renderer parity)
+            }
+          }
+        }
+        const deadRows = [];
+        for (const row of bySel.values()) {
+          if (row.max === 0) deadRows.push({ selector: row.selector, tool: row.tool });
+        }
+        if (!deadRows.length) return null;
+        const hits = SelectorLedgerLib.ledgerDeadMatch(claims.map((c) => c.selector), deadRows);
+        if (!hits.length) return null;
+        return SelectorLedgerLib.ledgerDeadWarningText(hits) || null;
+      } catch (eLdg) { return null; }
+    }
 
     let lastVerify = null;
     // I/O contract confirmation state (ninth-log follow-up): runtime flag for
@@ -2418,6 +2478,15 @@
           };
         }
       }
+      // Session-memory read net (2026-10-13 spec §3.3, plan Task 3): after
+      // every gate has had its say, the incoming artifact's selector claims
+      // are dead-matched against the observation log's CURRENT-epoch
+      // outcomes. Warning-only (the staticLint precedent): the artifact
+      // lands either way, and the receipt names each dead family so the
+      // next probe/verify either resurrects it with fresh evidence or the
+      // family is dropped. artifact.propose reaches this same handler
+      // through the engine's service.update pipeline — covered for free.
+      const ledgerWarnText = ledgerDeadWarningFor(steps);
       try {
         // Twenty-first log: the confirmed contract must land in the artifact
         // even when the update omits schemas (steps-only updates were the
@@ -2467,7 +2536,7 @@
             }
             parts.push('pageVocab registered [' + toks.slice(0, 8).join(', ') + (toks.length > 8 ? ', …' : '') + '] — censuses consult it with priority over the harness fallback lists');
           }
-          return Object.assign({ updated: true, version: version, schemasAttached: attached, testInputAttached: attachedTestInput, note: parts.join('; ') }, staticLint.length ? { staticLint: staticLint } : {}, endgameWarning(ctx));
+          return Object.assign({ updated: true, version: version, schemasAttached: attached, testInputAttached: attachedTestInput, note: parts.join('; ') }, staticLint.length ? { staticLint: staticLint } : {}, ledgerWarnText ? { ledgerWarning: ledgerWarnText } : {}, endgameWarning(ctx));
         }
       } catch (e) {
         return { error: 'artifact apply failed: ' + String((e && e.message) || e) };
@@ -2477,7 +2546,7 @@
         ? st.session.artifactVersions.length + 1
         : 1;
       const receiptNotes = [chunkDedupeNote, parseCheckNote, targetUrlAmendedNote].filter(Boolean).join('; ');
-      return Object.assign({ updated: true, version: version }, receiptNotes ? { note: receiptNotes } : {}, staticLint.length ? { staticLint: staticLint } : {}, endgameWarning(ctx));
+      return Object.assign({ updated: true, version: version }, receiptNotes ? { note: receiptNotes } : {}, staticLint.length ? { staticLint: staticLint } : {}, ledgerWarnText ? { ledgerWarning: ledgerWarnText } : {}, endgameWarning(ctx));
     }
 
     // Sixty-seventh log: the final turns wrote artifact v7 that could never
