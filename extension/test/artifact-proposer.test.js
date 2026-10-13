@@ -47,7 +47,7 @@ describe('joint solver — synthesizeFromEvidence (pure)', () => {
       id: [],
       text: [{ selector: 'div[data-ad-comet-preview="message"]', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['California Road Trip Seq… See more'] }]
     },
-    hrefIdentity: [{ token: 'story_fbid', coverage: '5/5', samples: ['101a', '202b'] }]
+    hrefIdentity: [{ token: 'query:story_fbid', coverage: '5/5', samples: ['101a', '202b'] }, { token: 'path:last', coverage: '5/5', samples: ['p1', 'p2'] }]
   };
   const SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
     type: 'object', required: ['postId', 'postUrl', 'postTime', 'content'], properties: {
@@ -104,8 +104,33 @@ describe('joint solver — synthesizeFromEvidence (pure)', () => {
   it('textFilter uses the string ~regex contract (a regex literal silently no-ops in $clickInList)', () => {
     const out = AP.synthesizeFromEvidence({ census: CENSUS_FIX }, '若有"展开"操作点击展开。', SCHEMA);
     const ex = out.steps.find((s) => s.id === 'expand');
-    assert.match(ex.script, /textFilter: '~see more\|展开'/);
+    assert.ok(ex.script.includes(String.raw`textFilter: '~\\b[Ss]ee\\s*[Mm]ore\\b|展开|查看更多'`), 'case-tolerant doubled-backslash pattern');
     assert.doesNotMatch(ex.script, /textFilter: \//);
+  });
+  // Review batch (joint-solver #P1-A): the DSL's ~regex takes NO flags, so
+  // the old '~see more|展开' could never match 'See more'. Behavioral proof:
+  // evaluate the emitted script's OWN string literal exactly as the runtime
+  // does, then build the RegExp exactly as the DSL does
+  // (content-script/list-extract-ops: new RegExp(tfRaw.slice(1))).
+  it('P1-A: the emitted textFilter matches See more/see more/See More/展开 — and NOT run-on prose', () => {
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_FIX }, '若有"展开"操作点击展开。', SCHEMA);
+    const sources = [
+      out.steps.find((s) => s.id === 'expand').script,
+      AP.renderExpandStepFragment('[role=article]')
+    ];
+    for (const src of sources) {
+      const m = /textFilter: '~([^']*)'/.exec(src);
+      assert.ok(m, 'textFilter string literal present');
+      const dslValue = (new Function('return ' + "'~" + m[1] + "'"))();
+      const re = new RegExp(dslValue.slice(1));
+      assert.ok(re.test('See more'), 'canonical capitalization matches');
+      assert.ok(re.test('see more'));
+      assert.ok(re.test('See More'));
+      assert.ok(re.test('点击 展开'));
+      assert.ok(re.test('查看更多'));
+      assert.ok(!re.test('seemorex'), 'word boundary rejects run-on prose');
+      assert.ok(!re.test('SEEMOREX'));
+    }
   });
   // NOTE (adapted from review): step scripts are async-function BODIES by
   // DSL contract (top-level await is the documented form), so the construct
@@ -116,7 +141,7 @@ describe('joint solver — synthesizeFromEvidence (pure)', () => {
   // literal the token can only ever appear as `posts\/id`.
   it('hrefIdentity tokens with regex metachars (incl. /) escape safely — generated script compiles', () => {
     const census = JSON.parse(JSON.stringify(CENSUS_FIX));
-    census.hrefIdentity = [{ token: 'posts/id', coverage: '5/5', samples: ['a', 'b'] }];
+    census.hrefIdentity = [{ token: 'query:posts/id', coverage: '5/5', samples: ['a', 'b'] }];
     const out = AP.synthesizeFromEvidence({ census }, '滚动加载。悬浮窗。', SCHEMA);
     const ex = out.steps.find((s) => s.id === 'extract');
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
@@ -137,6 +162,65 @@ describe('joint solver — synthesizeFromEvidence (pure)', () => {
     assert.doesNotMatch(collect.script, /r\.count\b/, 'r.count is not a $collectUntil key');
     assert.doesNotMatch(collect.script, /r\.certified\b/, 'r.certified is not a $collectUntil key');
   });
+  // Review batch (joint-solver #P1-B): census-lanes emits tokens in the
+  // PRODUCTION shape ('query:story' is pinned by probe-census tests). The
+  // proposer used to splice the token RAW, producing a regex that can never
+  // match a URL — every production postId came back empty.
+  it('P1-B: query: tokens strip to [?&]param= anchors; path: tokens are ignored — and the regex matches a real URL', () => {
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_FIX }, '滚动加载。悬浮窗。', SCHEMA);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    assert.ok(ex.script.includes('(?:[?&]story_fbid=)(\\w{3,})'), 'query token anchored at [?&]');
+    assert.ok(!ex.script.includes('query:'), 'the transport prefix never rides into the script');
+    assert.ok(!ex.script.includes('[?&]last='), 'path: tokens are not query-param bindings');
+    const mRe = /String\(r\.postUrl\)\.match\(\/(.+)\/\);/.exec(ex.script);
+    assert.ok(mRe, 'identity regex literal present');
+    const idRegex = new RegExp(mRe[1]);
+    assert.equal(idRegex.exec('https://e.com/p/1?story_fbid=abc123')[1], 'abc123');
+    assert.equal(idRegex.exec('https://e.com/story/999'), null, 'no query param → no id claim');
+  });
+  // Review batch (joint-solver #P1-E): the return key follows the schema's
+  // declared array — the hardcoded `return { posts: posts }` made every
+  // non-posts contract verify against a shape the script never emitted.
+  it('P1-E: the extract return key follows the schema array key (items)', () => {
+    const schema = { type: 'object', required: ['items'], properties: { items: { type: 'array', items: {
+      type: 'object', required: ['postUrl'], properties: { postUrl: { type: 'string' } } } } } };
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_FIX }, '提取帖子。', schema);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    assert.ok(ex.script.includes('return { "items": posts };'));
+    const outPosts = AP.synthesizeFromEvidence({ census: CENSUS_FIX }, '提取帖子。', SCHEMA);
+    assert.ok(outPosts.steps.find((s) => s.id === 'extract').script.includes('return { "posts": posts };'), 'default stays posts');
+  });
+  // Review batch (joint-solver #P2-H): the Ad marker rode tsLabel while
+  // tsAria read empty — the old guard tested r.tsAria only and every Ad card
+  // shipped. The guard now tests the ASSEMBLED postTime (abs || times[0]).
+  it('P2-H: the exclusion guard tests the assembled postTime (tsLabel=Ad, tsAria empty → excluded)', async () => {
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_FIX }, '剔除发帖账号为Ad的条目。悬浮窗时间戳作为发帖时间。', SCHEMA);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    const fn = new AsyncFunction('__input__', '$extractWithHover', ex.script);
+    const rs = [
+      { postUrl: 'https://e.com/p/1?story_fbid=aaa111', tsLabel: 'Ad' },
+      { postUrl: 'https://e.com/p/2?story_fbid=bbb222', tsLabel: 'November 3, 2025' }
+    ];
+    const res = await fn({ count: 5 }, async () => rs);
+    assert.equal(res.posts.length, 1, 'the Ad record is excluded, the dated record kept');
+    assert.equal(res.posts[0].postId, 'bbb222');
+    assert.equal(res.posts[0].postTime, 'November 3, 2025');
+  });
+  // Review batch (joint-solver #P2-I): with no url lane the fieldMap never
+  // binds the url slot, so the old unconditional `if (!r.postUrl) continue;`
+  // skipped EVERY record — the extract deterministically returned {posts:[]}.
+  it('P2-I: the per-record url skip-guard is emitted ONLY when the url slot is bound', () => {
+    const noUrl = JSON.parse(JSON.stringify(CENSUS_FIX));
+    noUrl.lanes.url = [];
+    noUrl.hrefIdentity = [];
+    const out = AP.synthesizeFromEvidence({ census: noUrl }, '提取帖子正文与悬浮窗时间。', SCHEMA);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    assert.doesNotMatch(ex.script, /if \(!r\.postUrl\) continue;/, 'no vacuous guard');
+    assert.ok(out.unfilled.some((u) => u.slot === 'postUrl'), 'the gap is disclosed instead');
+    const withUrl = AP.synthesizeFromEvidence({ census: CENSUS_FIX }, '提取帖子正文与悬浮窗时间。', SCHEMA);
+    assert.match(withUrl.steps.find((s) => s.id === 'extract').script, /if \(!r\.postUrl\) continue;/, 'bound url keeps the population filter');
+  });
 });
 
 describe('joint solver — red-receipt fragment renderers', () => {
@@ -146,7 +230,7 @@ describe('joint solver — red-receipt fragment renderers', () => {
     // string literal (same contract as the :has() assertion above) — the
     // selector itself rides verbatim.
     assert.match(frag, /\$clickInList\("\[role=article\]:has\(a\[href\*=\\?"\/posts\/\\?"\]\)"/);
-    assert.match(frag, /textFilter: '~see more\|展开'/);
+    assert.ok(frag.includes(String.raw`textFilter: '~\\b[Ss]ee\\s*[Mm]ore\\b|展开|查看更多'`));
   });
   it('hoverPopover fieldMap fragment carries the anchor + year match', () => {
     const frag = AP.renderHoverPopoverFragment('postTime', 'a[href*="/posts/"] span');
@@ -169,7 +253,7 @@ describe('joint solver — proposeArtifact (stubbed sweep)', () => {
         count: [], id: [],
         text: [{ selector: 'div.msg', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['body'] }]
       },
-      hrefIdentity: [{ token: 'id', coverage: '5/5', samples: ['a1', 'b2'] }]
+      hrefIdentity: [{ token: 'query:id', coverage: '5/5', samples: ['a1', 'b2'] }]
     };
   }
   function SCHEMA_FIX() {
@@ -269,6 +353,81 @@ describe('joint solver — proposeArtifact (stubbed sweep)', () => {
     const c = out.unfilled.find((u) => u && u.slot === 'census' && /census hop failed/.test(u.reason || ''));
     assert.ok(c, 'thrown census error disclosed');
     assert.match(c.reason, /tab closed mid-census/);
+  });
+  // Review batch (joint-solver #P1-D): the unbounded sweep could run ~7min.
+  // Three caps, exercised here with an injected (tiny) sweepBudget: the
+  // bootstrap stops admitting candidates past bootstrapMs, and the census
+  // hop carries a timeoutMs derived from what remains of totalMs.
+  it('P1-D: the bootstrap loop caps itself — slow counts stop before exhausting the candidate list', async () => {
+    let countCalls = 0;
+    const probes = {
+      count: async () => { countCalls += 1; await new Promise((r) => setTimeout(r, 150)); return { count: 0 }; },
+      census: async () => { throw new Error('census must not run when the bootstrap found no container'); }
+    };
+    const out = await AP.proposeArtifact({
+      probes, requirementText: REQ_FULL, outputSchema: SCHEMA_FIX(), currentArtifact: null,
+      sweepBudget: { totalMs: 400, bootstrapMs: 250, hardSkipMs: 350, censusMinMs: 100 },
+      applyArtifact: async () => ({ version: 1 })
+    });
+    assert.ok(countCalls >= 1 && countCalls <= 2, 'bootstrap stopped early (calls=' + countCalls + ' of 4 candidates)');
+    assert.equal(out.bootstrapCapped, true, 'the cap is disclosed on the receipt');
+    assert.ok(out.unfilled.some((u) => u && u.slot === 'census'), 'no pseudo-census — the gap is disclosed');
+    assert.equal(out.applied, true, 'the sweep still terminates and applies');
+  });
+  it('P1-D: the census hop receives a timeoutMs derived from the remaining budget', async () => {
+    let censusArgs = null;
+    const probes = {
+      count: async () => ({ count: 12 }),
+      census: async (a) => { censusArgs = a; return CENSUS_SHALLOW(); }
+    };
+    const out = await AP.proposeArtifact({
+      probes, requirementText: REQ_FULL, outputSchema: SCHEMA_FIX(), currentArtifact: null,
+      applyArtifact: async () => ({ version: 1 })
+    });
+    assert.ok(censusArgs && typeof censusArgs.timeoutMs === 'number', 'census called with an explicit budget');
+    assert.ok(censusArgs.timeoutMs >= 10000 && censusArgs.timeoutMs <= 110000,
+      'timeoutMs = max(censusMinMs, totalMs-elapsed-10000) — got ' + censusArgs.timeoutMs);
+    assert.equal(out.applied, true);
+  });
+  // Review batch (joint-solver #P2-F): the CARD's :has(a[href*=…]) demands an
+  // attribute-distribution receipt the sweep never produced — fresh-session
+  // proposes were deterministically grounding-rejected on 'href'. The sweep
+  // now censuses exactly the gate's own filter-attr set.
+  it('P2-F: the sweep runs probe.attrStats for the CARD :has() filter attrs (descendant form, receipt disclosed)', async () => {
+    const attrCalls = [];
+    const probes = {
+      count: async () => ({ count: 12 }),
+      census: async () => CENSUS_SHALLOW(),
+      attrStats: async (a) => {
+        attrCalls.push(a);
+        return { totalItems: 5, values: [{ value: '/p/1', items: 5, pct: 100 }], absentPct: 0 };
+      }
+    };
+    const out = await AP.proposeArtifact({
+      probes, requirementText: REQ_FULL, outputSchema: SCHEMA_FIX(), currentArtifact: null,
+      applyArtifact: async () => ({ version: 1 })
+    });
+    assert.equal(attrCalls.length, 1, 'href — the only :has() filter attr — censused exactly once');
+    assert.equal(attrCalls[0].containerSel, '[role=article] [href]', 'descendant form: what :has() filters by');
+    assert.equal(attrCalls[0].attr, 'href');
+    assert.ok(Array.isArray(out.attrGrounding) && out.attrGrounding.length === 1);
+    assert.equal(out.attrGrounding[0].attr, 'href');
+    assert.equal(out.attrGrounding[0].ok, true);
+  });
+  it('P2-F/P1-D: past hardSkipMs the attrStats hop is skipped — the budget wins over receipts, and the skip is disclosed', async () => {
+    let attrCalls = 0;
+    const probes = {
+      count: async () => ({ count: 12 }),
+      census: async () => CENSUS_SHALLOW(),
+      attrStats: async () => { attrCalls += 1; return {}; }
+    };
+    const out = await AP.proposeArtifact({
+      probes, requirementText: REQ_FULL, outputSchema: SCHEMA_FIX(), currentArtifact: null,
+      sweepBudget: { totalMs: 120000, bootstrapMs: 30000, hardSkipMs: -1, censusMinMs: 10000 },
+      applyArtifact: async () => ({ version: 1 })
+    });
+    assert.equal(attrCalls, 0, 'no attrStats dispatch past the hard skip');
+    assert.ok(Array.isArray(out.attrGrounding) && /sweep budget/.test(out.attrGrounding[0].skipped || ''), 'skip disclosed');
   });
 });
 
@@ -392,7 +551,7 @@ describe('joint solver — red→propose nudge', () => {
     const tools = createSessionTools({
       rail: { executeDsl: async () => ({}), pageState: async () => ({}), epoch: 0 },
       runVerify: async () => { const r = verifyResults[Math.min(vi, verifyResults.length - 1)]; vi += 1; return r; },
-      probeFactory: () => ({ count: async () => ({ count: countVal }), census: async () => ({ containerSel: '[role=article]', total: 5, sampled: [{}], lanes: { url: [{ selector: 'a', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }], time: [{ selector: 'span', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }], count: [], id: [], text: [{ selector: 'div', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['b'] }] }, hrefIdentity: [{ token: 'id', coverage: '5/5', samples: ['a1', 'b2'] }] }), sample: async () => ({}) }),
+      probeFactory: () => ({ count: async () => ({ count: countVal }), census: async () => ({ containerSel: '[role=article]', total: 5, sampled: [{}], lanes: { url: [{ selector: 'a', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }], time: [{ selector: 'span', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }], count: [], id: [], text: [{ selector: 'div', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['b'] }] }, hrefIdentity: [{ token: 'query:id', coverage: '5/5', samples: ['a1', 'b2'] }] }), sample: async () => ({}) }),
       getDraftService: () => draft, applyArtifact: (a) => { draft = { steps: a.steps, targetUrl: 'https://example.com/?k={{k}}', config: {} }; return Promise.resolve({ version: draft.steps.length }); },
       getTestInput: () => ({ k: 'ml' }), getOutputSchema: () => SCHEMAS.outputSchema, getSteps: () => (draft ? draft.steps : []),
       ioConfirmBridge: { request: (p) => Promise.resolve({ confirmed: true, testInput: p && p.testInput }) }
@@ -524,6 +683,87 @@ describe('joint solver — red→propose nudge', () => {
       .map((t) => t.result).pop();
     assert.ok(proposeResult && proposeResult.applied === true);
     assert.match(proposeResult.next, /^verify\.run$/);
+  });
+  // Review batch (joint-solver #P1-C): after a red verify, the engine routes
+  // the propose synthesis through service.update — whose 118th-round
+  // RED_VERIFY_SNIPPET_GATE rejected it (no dry-run since the red) and told
+  // the model to "resend this service.update", steps the propose receipt
+  // deleted. The sweep IS the fresh-evidence dry-run; the propose handler
+  // credits it with the same flag probe.snippet sets.
+  it('P1-C: red verify → artifact.propose applies WITHOUT the RED_VERIFY_SNIPPET_GATE bounce', async () => {
+    const session = makeSession([
+      env('io.confirm', Object.assign({ testInput: { keyword: 'ml', count: 3 } }, SCHEMAS)),
+      env('service.update', { steps: [STEP1] }),
+      env('verify.run', {}),
+      env('artifact.propose', {}),
+      fin('done')
+    ], [RED]);
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const proposeResult = session.state().session.transcript
+      .filter((t) => t.kind === 'tool' && t.name === 'artifact.propose')
+      .map((t) => t.result).pop();
+    assert.ok(proposeResult && proposeResult.applied === true, 'the propose applied — no deterministic bounce');
+    assert.match(proposeResult.dryRunCredit || '', /joint-solver sweep credited as dry-run/);
+    assert.doesNotMatch(JSON.stringify(proposeResult), /RED_VERIFY_SNIPPET_GATE/, 'the gate did not fire');
+  });
+  // Review batch (joint-solver #P2-G): the merged propose receipt buried the
+  // pipeline failure inside updateReceipt — the transcript flagged a
+  // grounding-rejected propose "ok". Lift error/grounding to the top level
+  // so isErrorResult and the repeated-failure trackers classify it.
+  it('P2-G: a grounding-rejected propose carries top-level grounding:rejected and flags the transcript NOT-ok', async () => {
+    const session = makeSession([
+      env('io.confirm', Object.assign({ testInput: { keyword: 'ml', count: 3 } }, SCHEMAS)),
+      env('artifact.propose', {}),
+      fin('done')
+    ], [RED], { countVal: 0 });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const entries = session.state().session.transcript.filter((t) => t.kind === 'tool' && t.name === 'artifact.propose');
+    const proposeResult = entries.map((t) => t.result).pop();
+    assert.ok(proposeResult && proposeResult.applied === false);
+    assert.equal(proposeResult.grounding, 'rejected', 'top-level grounding classification');
+    assert.equal(entries[entries.length - 1].ok, false, 'isErrorResult sees the rejection');
+  });
+  it('P2-G: a gate-errored propose lifts updateReceipt.error to the top level', async () => {
+    // No io.confirm first: the pipeline's I/O gate errors with a string —
+    // the merged receipt must surface it as a top-level error.
+    const session = makeSession([
+      env('artifact.propose', {}),
+      fin('done')
+    ], [RED]);
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const entries = session.state().session.transcript.filter((t) => t.kind === 'tool' && t.name === 'artifact.propose');
+    const proposeResult = entries.map((t) => t.result).pop();
+    assert.ok(proposeResult && proposeResult.applied === false);
+    assert.equal(typeof proposeResult.error, 'string', 'updateReceipt.error lifted to top level');
+    assert.match(proposeResult.error, /I\/O CONTRACT UNCONFIRMED/);
+    assert.equal(entries[entries.length - 1].ok, false, 'isErrorResult sees the error');
+  });
+  // Review batch (joint-solver #P2-J): a propose during a pending chunk
+  // buffer concatenated stale steps in front of the synthesized graph.
+  // propose is a FULL regeneration — the buffer is superseded, cleared, and
+  // the clearing disclosed.
+  it('P2-J: artifact.propose clears a pending update chunk buffer instead of concatenating it', async () => {
+    const STALE = { id: 'stale', name: 'stale buffered step', script: 'return 1;', onSuccess: 'TERMINATE' };
+    const session = makeSession([
+      env('io.confirm', Object.assign({ testInput: { keyword: 'ml', count: 3 } }, SCHEMAS)),
+      env('service.update', { steps: [STALE], more: true }),
+      env('artifact.propose', {}),
+      fin('done')
+    ], [RED]);
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const proposeResult = session.state().session.transcript
+      .filter((t) => t.kind === 'tool' && t.name === 'artifact.propose')
+      .map((t) => t.result).pop();
+    assert.equal(proposeResult.chunkBufferCleared, true, 'the clearing is disclosed on the receipt');
+    assert.equal(proposeResult.applied, true);
+    const st = session.state().session;
+    const last = st.artifactVersions[st.artifactVersions.length - 1];
+    assert.ok(last && last.steps.every((s) => s.id !== 'stale'),
+      'the buffered stale chunk was never concatenated into the applied artifact');
   });
 });
 

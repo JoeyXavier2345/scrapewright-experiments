@@ -1725,7 +1725,7 @@
           applied: applied246,
           version: (applied246 && typeof updateReceipt.version === 'number') ? updateReceipt.version : null,
           updateReceipt: updateReceipt,
-          // Review batch (joint-solver #12): branch-aware next. The old
+          // Review batch (joint-solver #P2-G): branch-aware next. The old
           // pass-through said 'engine applies + verify.run' on BOTH branches
           // — a grounding-rejected propose told the model to verify an
           // artifact that was never applied.
@@ -1734,6 +1734,17 @@
             : 'fix the rejection (see updateReceipt) or address its teaching, then call artifact.propose again',
           steps: undefined
         });
+        // Review batch (joint-solver #P2-G): lift the pipeline outcome to the
+        // TOP level so isErrorResult and the repeated-failure trackers
+        // classify a rejected propose — the failure used to live only inside
+        // updateReceipt, so the transcript flagged a grounding-rejected or
+        // gate-errored propose "ok" and the trackers never saw it.
+        if (updateReceipt && typeof updateReceipt === 'object') {
+          if (typeof updateReceipt.error === 'string' && typeof merged246.error !== 'string') {
+            merged246.error = updateReceipt.error;
+          }
+          if (updateReceipt.grounding === 'rejected') merged246.grounding = 'rejected';
+        }
         delete merged246.steps;
         return sanitizeToolResult(merged246);
       }

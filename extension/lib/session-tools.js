@@ -2629,13 +2629,42 @@
         } catch (e) { /* best-effort */ }
         let currentSteps = [];
         try { currentSteps = (typeof d.getSteps === 'function' ? d.getSteps() : []) || []; } catch (e) { currentSteps = []; }
-        return await proposeArtifact({
+        const out = await proposeArtifact({
           probes: probes,
           requirementText: requirement,
           outputSchema: (typeof d.getOutputSchema === 'function' ? d.getOutputSchema() : null),
           currentArtifact: currentSteps.length ? { steps: currentSteps } : null,
           applyArtifact: null
         });
+        // Review batch (joint-solver #P1-C): RED_VERIFY_SNIPPET_GATE bounce.
+        // The engine routes the synthesis through handleServiceUpdate → this
+        // bag's service.update, whose 118th-round gate rejects every
+        // steps-carrying update after a RED verify until a dry-run has run —
+        // and its teaching tells the model to "resend this service.update",
+        // steps the propose receipt deliberately does not carry. The sweep IS
+        // the fresh-evidence dry-run (its census/count/attrStats probes
+        // dispatch against the live research tab), so credit it with the same
+        // flag probe.snippet sets — set HERE, in the same closure, before the
+        // engine's service.update pipeline runs.
+        try {
+          if (out && typeof out === 'object' && typeof out.error !== 'string') {
+            dryRunSinceRedVerify = true;
+            out.dryRunCredit = 'joint-solver sweep credited as dry-run (its census/count probes ran against the live page)';
+          }
+        } catch (eCredit) { /* best-effort credit; the gate stays strict */ }
+        // Review batch (joint-solver #P2-J): a propose is a FULL regeneration
+        // — any pending chunk buffer is superseded. Left standing, the
+        // engine's service.update assembly would CONCAT stale buffered steps
+        // in front of the synthesized graph (the 125th-round buffer mashing a
+        // full replacement). Clear it and disclose on the receipt.
+        try {
+          if (pendingUpdateSteps && pendingUpdateSteps.length && out && typeof out === 'object') {
+            pendingUpdateSteps = null;
+            out.chunkBufferCleared = true;
+            out.chunkBufferNote = 'pending service.update chunk(s) were CLEARED — artifact.propose is a full regeneration and supersedes any buffered chunks.';
+          }
+        } catch (eBuf) { /* buffer hygiene must never break the propose */ }
+        return out;
       }),
       'probe.scrollUntil': wrapProbe(probes.scrollUntil, 'probe.scrollUntil'),
       'probe.extract': wrapProbe(probes.extract, 'probe.extract'),
