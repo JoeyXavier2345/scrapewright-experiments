@@ -1,11 +1,12 @@
 // extension/test/batch-turns.test.js
 //
 // Batch probe turns (2026-10-13 session-memory spec §4, plan Task 4): the
-// turn protocol gains a third action shape — "tools":[{tool,args}×1-5] —
-// that dispatches READ-ONLY probes sequentially inside ONE turn (N probes,
-// one LLM round-trip, ONE transcript entry, ONE toolTimings row, +1 turn).
-// Violations are ATOMIC teaching receipts: nothing executes, not even the
-// legal members. Single-tool turns must be byte-for-byte unchanged.
+// turn protocol gains a third action shape — "tools":[{tool,args}×2-5
+// (1 accepted as equivalent)] — that dispatches READ-ONLY probes
+// sequentially inside ONE turn (N probes, one LLM round-trip, ONE
+// transcript entry, ONE toolTimings row, +1 turn). Violations are ATOMIC
+// teaching receipts: nothing executes, not even the legal members.
+// Single-tool turns must be byte-for-byte unchanged.
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { createResearchSession } = require('../lib/research-session');
@@ -117,9 +118,43 @@ describe('batch turns — dispatch', () => {
     assert.equal(calls.length, 0, 'NOTHING executed — not even the legal first member');
     const entries = toolEntries(session);
     assert.equal(entries.length, 1);
-    assert.match(entries[0].result.error, /^batch rejected: only read-only probes may batch — resend as single calls$/);
+    assert.match(entries[0].result.error, /^batch rejected: only whitelisted read-only probes may batch \(probe\.scroll excluded — use scrollUntil\) — resend as single calls$/);
     assert.deepEqual(entries[0].result.rejected, ['verify.run']);
     assert.equal(entries[0].ok, false);
+  });
+
+  it('empty batch (tools:[]) rejects atomically with the count teaching', async () => {
+    // Review batch (#7): the 0-member boundary — the count branch's
+    // '2-5 tools per turn (got 0)' receipt, nothing executed.
+    const { session, calls } = makeSession(
+      [batchReply([]), fin()],
+      { 'probe.count': async () => ({ count: 1 }) }
+    );
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(calls.length, 0, 'nothing executed');
+    const entry = toolEntries(session)[0];
+    assert.match(entry.result.error, /^batch rejected: 2-5 tools per turn \(got 0\) — split the batch$/);
+    assert.equal(entry.ok, false);
+  });
+
+  it('a 1-member batch executes and returns {batch:[oneResult]} (current behavior pinned as the equivalent single call)', async () => {
+    // Review batch (#7): 1 member passes the count branch (only 0 and >5
+    // reject) — it dispatches inside the batch envelope. Pinned so a future
+    // tightening must do it consciously, and the catalog's "(1 accepted as
+    // equivalent)" wording stays honest.
+    const { session, calls } = makeSession(
+      [batchReply([member('probe.count', { sel: 'div' })]), fin()],
+      { 'probe.count': async () => ({ count: 4 }) }
+    );
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.deepEqual(calls.map((c) => c.tool), ['probe.count'], 'the single member dispatched');
+    const entries = toolEntries(session);
+    assert.equal(entries.length, 1, 'ONE transcript tool entry');
+    assert.equal(entries[0].name, 'batch');
+    assert.deepEqual(entries[0].result.batch, [{ count: 4 }], 'the batch envelope wraps the one result');
+    assert.deepEqual(entries[0].result.memberMs.length, 1, 'one member cost entry');
   });
 
   it('over-limit (6 members) rejects atomically with the count', async () => {
@@ -157,7 +192,7 @@ describe('batch turns — dispatch', () => {
     await session.run();
     assert.equal(calls.length, 0);
     const entry = toolEntries(session)[0];
-    assert.match(entry.result.error, /^batch rejected: only read-only probes may batch — resend as single calls$/);
+    assert.match(entry.result.error, /^batch rejected: only whitelisted read-only probes may batch \(probe\.scroll excluded — use scrollUntil\) — resend as single calls$/);
     assert.deepEqual(entry.result.rejected, ['(missing tool name)']);
   });
 
@@ -308,9 +343,10 @@ describe('batch turns — prompt surface', () => {
     assert.ok(total <= 6500, 'toolSpec total ' + total + ' <= 6500');
     const batchLine = t.toolSpecs.find((s) => s.name === 'batch');
     assert.ok(batchLine, 'a catalog line documents the batch shape');
-    assert.match(String(batchLine.args), /tools:\[\{tool,args\}×2-5\]/);
-    assert.match(String(batchLine.returns), /READ-ONLY probes/);
-    assert.match(String(batchLine.returns), /write\/park\/verify tools never batch/);
+    assert.match(String(batchLine.args), /tools:\[\{tool,args\}×2-5 \(1 accepted as equivalent\)\]/);
+    assert.match(String(batchLine.returns), /read-only probes/i);
+    assert.match(String(batchLine.returns), /probe\.\* except probe\.scroll/, 'the catalog names the deliberate probe.scroll exclusion');
+    assert.match(String(batchLine.returns), /write\/park\/verify never batch/);
     assert.match(String(batchLine.returns), /rejected atomically/);
   });
 });

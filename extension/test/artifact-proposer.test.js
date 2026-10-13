@@ -615,6 +615,64 @@ describe('joint solver — 249 measured affordance + path-prefix identity + cens
     assert.equal(out.selectorProvenance.affordanceSelector, undefined, 'no measured affordance → no provenance field');
   });
 
+  // Review batch (#5): 'CARD + " " + family' concatenation splits at the
+  // family's TOP-LEVEL comma — the first arm was scoped to the card but
+  // every later arm counted PAGE-WIDE, so a page with any span[role=button]
+  // outside the feed measured the affordance as "existing on our cards".
+  describe('review #5 — scoped affordance counts (per-arm)', () => {
+    // quote-aware top-level split (the same walk the production splitter
+    // applies): commas inside [attr] or "…" never split an arm.
+    const topLevelArms = (sel) => {
+      const arms = [];
+      let depth = 0, quote = null, cur = '';
+      for (const ch of String(sel)) {
+        if (quote) { cur += ch; if (ch === quote) quote = null; continue; }
+        if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue; }
+        if (ch === '[' || ch === '(') { depth += 1; cur += ch; continue; }
+        if (ch === ']' || ch === ')') { depth = Math.max(0, depth - 1); cur += ch; continue; }
+        if (ch === ',' && depth === 0) { arms.push(cur); cur = ''; continue; }
+        cur += ch;
+      }
+      arms.push(cur);
+      return arms.map((a) => a.trim()).filter(Boolean);
+    };
+    it('pure: scopeFamilyToSelector_253 prefixes EVERY arm; a comma inside a quoted attribute value never splits', () => {
+      assert.equal(
+        AP.scopeFamilyToSelector_253('[role=article]', 'div[role=button], span[role=button]'),
+        '[role=article] div[role=button], [role=article] span[role=button]',
+        'each arm gets its own card prefix');
+      const quoted = AP.scopeFamilyToSelector_253('div.card', 'a[data-x="a,b"], button');
+      assert.ok(quoted.startsWith('div.card a[data-x="a,b"]'), 'the quoted comma stays INSIDE the arm: ' + quoted);
+      assert.ok(quoted.includes('div.card button'), 'the second arm is scoped too');
+      assert.equal((quoted.match(/div\.card /g) || []).length, 2, 'exactly two arms, both prefixed');
+      assert.equal(topLevelArms('x[a="1,2"], y').length, 2, 'checker sanity: quoted comma does not split');
+      assert.equal(AP.scopeFamilyToSelector_253('div.card', 'button'), 'div.card button', 'single-arm family unchanged');
+    });
+    it('sweep: every arm of every counted family sel is scoped to the card (no page-wide later arm)', async () => {
+      const countSels = [];
+      const probes = {
+        count: async (a) => { countSels.push(a.sel); return { count: a.sel === '[role=article]' ? 12 : 0 }; },
+        census: async () => CENSUS_249(),
+        attrStats: async () => ({ totalItems: 5, values: [{ value: '/p/1', items: 5, pct: 100 }], absentPct: 0 })
+      };
+      await AP.proposeArtifact({ probes, requirementText: REQ_FULL, outputSchema: SCHEMA_249(), currentArtifact: null });
+      const scoped = countSels.filter((s) => s.indexOf(':has(') > -1);
+      assert.ok(scoped.length >= 3, 'all families counted (' + JSON.stringify(countSels) + ')');
+      const CARD = '[role=article]:has(a[href*="/p/"])';
+      const union = scoped.find((s) => s.indexOf('role=button') > -1);
+      assert.ok(union, 'the union family was counted');
+      assert.equal(union, CARD + ' div[role=button], ' + CARD + ' span[role=button]',
+        'the union splits into per-arm scoped selectors');
+      for (const s of scoped) {
+        const arms = topLevelArms(s);
+        assert.ok(arms.length >= 1, 'sel parses: ' + s);
+        for (const arm of arms) {
+          assert.ok(arm.indexOf(CARD + ' ') === 0, 'every top-level arm is card-scoped: ' + arm + ' (sel ' + s + ')');
+        }
+      }
+    });
+  });
+
   // --- FIX 2: path-form identity from a stable prefix ---
   it('249 FIX 2 (pure): derivePathIdentity_249 — /stories/ samples → prefix + regex; identical/query-only/single → null', () => {
     const r = AP.derivePathIdentity_249(['https://x/stories/abc?y=1', 'https://x/stories/def']);
@@ -984,13 +1042,30 @@ describe('joint solver — 253b E: unfilled-slot binding templates', () => {
     if (opts && opts.noUrl) { c.lanes.url = []; c.hrefIdentity = []; }
     return c;
   };
-  it('postTime unfilled → template carries the 252-shape ts triple with the generic span[aria-label] anchor', () => {
+  it('postTime unfilled (DEGRADED form) → template carries tsAria/tsLabel + the switch note, NEVER a hoverPopover spec $extractList rejects', () => {
     const out = AP.synthesizeFromEvidence({ census: CENSUS_E({ noTime: true, noCount: true }) }, '提取帖子正文。', SCHEMA_E);
     const e = out.unfilled.find((u) => u.slot === 'postTime');
     assert.ok(e && typeof e.template === 'string', 'postTime entry carries a template');
     assert.ok(e.template.includes('tsAria: { selector: "span[aria-label]", attr: \'aria-label\' }'));
     assert.ok(e.template.includes('tsLabel: { selector: "span[aria-label]", labelledby: true }'));
+    // Review batch (#2): no hover clause + no timeHover absolute → the
+    // synthesis runs the degraded $extractList form, and a pasted
+    // read:'hoverPopover' spec would be hard-REJECTED by $extractList.
+    assert.ok(!e.template.includes("read: 'hoverPopover'"), 'no tsHover in the degraded template');
+    assert.ok(!/tsHover:\s*\{/.test(e.template), 'no tsHover field spec at all');
+    assert.ok(e.template.includes('// add tsHover only after switching the call to $extractWithHover (hoverPopover specs are rejected by $extractList)'),
+      'the note teaches the switch');
+  });
+  it('postTime unfilled (HOVER form) → the template retains tsHover with the pasteable year-match regex', () => {
+    // Hover clause present but no time lane → the synthesis keeps
+    // $extractWithHover, so the template may (and must) carry the tsHover
+    // binding the form can actually run.
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_E({ noTime: true, noCount: true }) }, '提取帖子正文，悬浮窗时间戳作为发帖时间。', SCHEMA_E);
+    const e = out.unfilled.find((u) => u.slot === 'postTime');
+    assert.ok(e && typeof e.template === 'string', 'postTime entry carries a template');
+    assert.ok(e.template.includes('tsAria: { selector: "span[aria-label]", attr: \'aria-label\' }'));
     assert.ok(e.template.includes('tsHover: { selector: "span[aria-label]", read: \'hoverPopover\', match: /(19|20)\\d{2}/ }'), 'pasteable year-match regex literal');
+    assert.ok(!e.template.includes('// add tsHover only after switching'), 'no degradation note on the hover form');
   });
   it('postTime unfilled but the timeHover receipt ran → the template binds the receipt\'s OWN anchorSel (best available evidence)', () => {
     const census = CENSUS_E({ noTime: true, noCount: true });
@@ -1008,6 +1083,32 @@ describe('joint solver — 253b E: unfilled-slot binding templates', () => {
     assert.ok(comm && comm.template.includes('评论'), 'comment parse line carries 评论');
     const shr = out.unfilled.find((u) => u.slot === 'shareCount');
     assert.ok(shr && shr.template.includes('转发'), 'share parse line carries 转发');
+  });
+  // Review batch (#13): the assembly half of the count template ships as RAW
+  // code. The old '// parse in the assembly: const labs = …' comment wrapper
+  // made every pasteable parse line inert — pasting it delivered a comment,
+  // not code.
+  it('count templates: the assembly lines are RAW code — no "// parse" wrapper, and the fragment compiles', () => {
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_E({ noTime: true, noCount: true }) }, '提取帖子正文。', SCHEMA_E);
+    for (const slot of ['likeCount', 'commentCount', 'shareCount']) {
+      const e = out.unfilled.find((u) => u.slot === slot);
+      assert.ok(e, slot + ' unfilled');
+      assert.ok(typeof e.assemblyFragment === 'string', slot + ' carries a separate assemblyFragment');
+      assert.ok(!/^\/\//.test(e.assemblyFragment), 'the fragment is raw code, not a comment');
+      assert.ok(!e.assemblyFragment.includes('// parse in the assembly'), 'no legacy comment wrapper');
+      // every assembly line in the combined template is code or a trailing
+      // comment — never a whole swallowed line
+      const assemblyLines = e.template.split('\n').filter((l) => /const labs|const m =/.test(l));
+      assert.ok(assemblyLines.length >= 1, slot + ': assembly lines present in the template');
+      assert.ok(assemblyLines.every((l) => !/^\/\/\s*parse/.test(l.trim())), 'no leading // parse comment on assembly lines');
+      // the raw fragment must CONSTRUCT — it is pasteable step code
+      assert.doesNotThrow(() => { new Function('r', 'num', e.assemblyFragment); }, slot + ' assemblyFragment compiles: ' + e.assemblyFragment);
+    }
+    // behavioral: the compiled like-fragment picks the like lane out of labels
+    const like = out.unfilled.find((u) => u.slot === 'likeCount');
+    const fn = new Function('r', 'num', like.assemblyFragment + '\nreturn m;');
+    const m = fn({ labels: ['Like: 185 people', '9 comments'] }, (s) => s);
+    assert.equal(m, 'Like: 185 people', 'the raw parse line finds the like label');
   });
   it('filled slots carry no template — non-recurring unfilled entries (postUrl) stay template-free too', () => {
     const filled = AP.synthesizeFromEvidence({ census: CENSUS_E() }, '提取帖子正文。', SCHEMA_E);

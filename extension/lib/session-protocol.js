@@ -458,8 +458,11 @@
   // generic keys, so the 4000-char receipt cap cannot stub exactly the rows
   // that route the next action (annotate-first population hints, ledger
   // conflicts, mount-phase disclosures).
+  // Review batch (#6): unfilled joins the tail — the propose receipt's gap
+  // list is the receipt's ACTION payload (which slots still need binding),
+  // and a large updateReceipt plus generic rows must never elide it.
   const PRIORITY_KEYS = ['error', 'ok', 'detectors', 'finalResult', 'steps', 'schemaOk', 'score', 'events',
-    'updateReceipt', 'ledgerWarning', 'populationHint', 'censusMount', 'ledgerConflicts', 'selectorProvenance'];
+    'updateReceipt', 'ledgerWarning', 'populationHint', 'censusMount', 'ledgerConflicts', 'selectorProvenance', 'unfilled'];
 
   function compactObjectForLLM(obj, budget) {
     // stable partition: priority keys first (in PRIORITY_KEYS order), then

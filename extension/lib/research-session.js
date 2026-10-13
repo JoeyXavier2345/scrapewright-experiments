@@ -2516,7 +2516,8 @@
             break;
           }
           // Batch probe turns (2026-10-13 session-memory spec §4):
-          // turn.tools = [{tool,args}×1-5] dispatches READ-ONLY probes
+          // turn.tools = [{tool,args}×2-5 (1 accepted as equivalent)]
+          // dispatches READ-ONLY probes
           // sequentially inside ONE turn — N probes for one LLM round-trip
           // on the (serial anyway) rail, +1 turn (not +N). Validation is
           // ATOMIC: any violation answers with a teaching receipt and
@@ -2553,7 +2554,11 @@
                 }
               }
               if (rejected.length) {
-                batchResult = { error: 'batch rejected: only read-only probes may batch — resend as single calls', rejected: rejected };
+                // Review batch (#8): the whitelist is explicit and probe.scroll
+                // is deliberately OFF it (scrollUntil is the batchable bounded
+                // form) — the old 'only read-only probes may batch' phrasing
+                // mislabeled that exclusion as a read-only-ness judgment.
+                batchResult = { error: 'batch rejected: only whitelisted read-only probes may batch (probe.scroll excluded — use scrollUntil) — resend as single calls', rejected: rejected };
               }
             }
             if (!batchResult) {

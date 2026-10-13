@@ -1624,3 +1624,53 @@ describe('184th residual: assembled-set grounding + restore/chunk exclusion', ()
     assert.match(r2.note, /buffer was consumed/);
   });
 });
+
+// Review batch (#1): the propose handler's ledger epoch read. rail.pageState
+// is ASYNC — the old unawaited call read .epoch off the Promise (always
+// undefined), so the conflict scan ran epoch-blind: a family measured dead
+// BEFORE a page reload (stale epoch) still landed in ledgerConflicts. The
+// fix reads the rail's sync epoch property (the lateBoundLog idiom).
+describe('artifact.propose — epoch-synced ledger conflict scan (review #1)', () => {
+  const PROVEN_FAMILY = 'a[href*="/x/"]';
+  function makeEpochDeps() {
+    const base = makeDeps();
+    const { deps } = makeDeps({
+      rail: Object.assign(base.deps.rail, {
+        // ASYNC pageState carrying the epoch — exactly the shape the buggy
+        // line misread; the sync epoch property is the fix's source.
+        pageState: async () => ({ open: true, tabId: 1, url: 'https://example.com', epoch: 7 }),
+        epoch: 7
+      }),
+      probeFactory: () => ({
+        count: async (a) => ({ count: a.sel === '[role=article]' ? 12 : 0 }),
+        census: async () => ({
+          containerSel: '[role=article]', total: 12, sampled: [{}],
+          lanes: {
+            url: [{ selector: 'a.mycls', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }],
+            time: [], count: [], id: [], text: []
+          },
+          hrefIdentity: []
+        }),
+        sample: async () => ({}),
+        attrStats: async () => ({ totalItems: 5, values: [{ value: '/x/1', items: 5, pct: 100 }], absentPct: 0 })
+      })
+    });
+    return deps;
+  }
+  const runPropose = async (entryEpoch) => {
+    const t = createSessionTools(makeEpochDeps());
+    t.bindEngine({ observationLog: { recent: () => [
+      { tool: 'probe.count', epoch: entryEpoch, outcomes: [{ selector: PROVEN_FAMILY, matched: 5 }] }
+    ] } });
+    return t.tools['artifact.propose']({}, {});
+  };
+  it('a STALE-epoch proven family is skipped by the conflict scan (currentEpoch read synchronously)', async () => {
+    const out = await runPropose(3); // rail epoch 7 — entry measured pre-reload
+    assert.ok(out && typeof out === 'object' && !out.error, 'propose ran: ' + JSON.stringify(out).slice(0, 160));
+    assert.equal(out.ledgerConflicts, undefined, 'stale-epoch family never conflicts');
+  });
+  it('a CURRENT-epoch proven family is still disclosed (the scan itself is alive)', async () => {
+    const out = await runPropose(7);
+    assert.deepEqual(out.ledgerConflicts, [PROVEN_FAMILY], 'current-epoch proven family disclosed');
+  });
+});

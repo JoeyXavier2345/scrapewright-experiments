@@ -515,7 +515,7 @@ describe('probe.census bounded mount phase (247th round)', () => {
     assert.ok(!r.mount, 'no mount receipt when the phase never ran');
     assert.match(r.mountHint, /MOUNTED-WINDOW BIAS/, 'the bias hint names the empty identity/url lanes');
     assert.match(r.mountHint, /3 mounted cards/, 'the hint quantifies the mounted window');
-    assert.match(r.mountHint, /scrollRounds:2/);
+    assert.match(r.mountHint, /scrollRounds:5 \(persistent hops/);
     assert.match(r.mountHint, /\$scrollBy/);
     // The pinned note text is untouched — the hint is a NEW field.
     assert.doesNotMatch(r.note, /MOUNTED-WINDOW BIAS/);

@@ -255,3 +255,29 @@ describe('compactValueForLLM Error instances (199th re-review F5)', () => {
     assert.match(out, /showing error page/, 'duck-checked error message survives, got: ' + out);
   });
 });
+
+// Review batch (#6): 'unfilled' joined the PRIORITY_KEYS tail — the propose
+// receipt's gap list is the receipt's ACTION payload (which slots still need
+// binding), and a large updateReceipt plus generic receipt rows must never
+// push it into the "[+N keys elided]" stub.
+describe('compactObjectForLLM priority — unfilled survives budget pressure (review #6)', () => {
+  it('a propose-receipt-shaped object keeps unfilled under a budget that elides trailing generic keys', () => {
+    const receipt = {
+      updateReceipt: { applied: true, version: 7, note: 'x'.repeat(600) },
+      ledgerWarning: 'none', populationHint: 'hint', censusMount: { rounds: 2 },
+      ledgerConflicts: [], selectorProvenance: { source: 'url-lane', identitySelector: 'a.mycls' },
+      merge: 'fresh', sweepCostMs: 4321, bootstrapCapped: false, attrGrounding: [], affordanceSkipped: undefined,
+      unfilled: [{ slot: 'postTime', reason: 'no time-like census lane' }]
+    };
+    // Budget 300 without the priority entry: unfilled rides INSIDE the
+    // "[+4 keys elided: …,unfilled]" name-only stub (verified against the
+    // pre-fix list) — the gap list is exactly the row the model acts on.
+    const out = Protocol.compactObjectForLLM(receipt, 300);
+    assert.match(out, /"unfilled":\[\{"slot":"postTime"/, 'the unfilled VALUE renders (not a name-only elision stub): ' + out);
+    assert.match(out, /"updateReceipt":/, 'the large updateReceipt still renders (both priority rows survive)');
+    // and the generic tail is what pays: the elided stub names generic keys, never unfilled
+    const stub = (out.match(/\+\d+ keys elided: "([^"]*)"/g) || []).join(';');
+    assert.ok(stub, 'budget pressure exists in this scenario (the test discriminates)');
+    assert.ok(!/unfilled/.test(stub), 'unfilled never lands in an elision stub: ' + stub);
+  });
+});

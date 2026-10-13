@@ -1560,7 +1560,7 @@
       const mountResolved = !!(mount && mount.goalMet);
       if (!mountResolved && ((!(Array.isArray(hrefIdentity) && hrefIdentity.length) && !urlLaneHasATag) || fieldFamiliesAbsent_248)) {
         out.mountHint = 'MOUNTED-WINDOW BIAS: the identity/url lane is empty over the ' + total +
-          ' mounted cards — top-of-feed modules (corrections/recommendations) can occupy the window while organic items sit unmounted below: re-run with scrollRounds:2 (bounded scroll + re-census) or scroll via $scrollBy first.' +
+          ' mounted cards — top-of-feed modules (corrections/recommendations) can occupy the window while organic items sit unmounted below: re-run with scrollRounds:5 (persistent hops — the loop keeps scrolling while the goal is unmet) or scroll via $scrollBy first.' +
           ' or the field families (time/count) were absent from the sampled window';
       }
       if (observationLog) {

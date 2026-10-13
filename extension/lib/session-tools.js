@@ -2743,7 +2743,12 @@
         let ledgerFor253 = null;
         try {
           const rail = d && d.rail;
-          const ep = rail && typeof rail.pageState === 'function' ? ((rail.pageState() || {}).epoch) : undefined;
+          // Review batch (#1): pageState() is ASYNC — calling it without await
+          // reads .epoch off the Promise (always undefined), so every propose
+          // ran the conflict scan epoch-blind. The file's established sync
+          // idiom reads the rail's epoch property directly (lateBoundLog and
+          // ledgerDeadWarningFor both use it).
+          const ep = (rail && typeof rail.epoch === 'number') ? rail.epoch : undefined;
           const entries = engineLog && typeof engineLog.recent === 'function' ? engineLog.recent(300) : null;
           if (Array.isArray(entries) && entries.length) {
             ledgerFor253 = { entries: entries, currentEpoch: (typeof ep === 'number') ? ep : null };
@@ -2827,7 +2832,7 @@
       { name: 'page.settle', args: '{sel?,timeoutMs?}', returns: '{settled,sel,chars,waitedMs,textHead?,note?} — polls until content stops changing (default sel body). Settle before concluding a JS-heavy page is empty' },
       // Batch probe turns (2026-10-13 session-memory spec §4): a catalog
       // line for the TURN-LEVEL batch shape (not a dispatchable tool name).
-      { name: 'batch', args: 'tools:[{tool,args}×2-5]', returns: '{batch:[results in order],memberMs[]} — batches READ-ONLY probes (probe.*, page.settle/state) in one turn; write/park/verify tools never batch — invalid batches are rejected atomically' },
+      { name: 'batch', args: 'tools:[{tool,args}×2-5 (1 accepted as equivalent)]', returns: '{batch:[in order],memberMs[]} — batches read-only probes (probe.* except probe.scroll, page.settle/state); write/park/verify never batch — invalid batches rejected atomically' },
       { name: 'probe.count', args: '{sel}', returns: '{count}' },
       { name: 'probe.text', args: '{sel}', returns: '{total,items[]}' },
       { name: 'probe.attrStats', args: '{containerSel, attr}', returns: '{totalItems,values[{value,items,pct}],absentPct,note?} — attr is read on the matched ELEMENTS; note appears at absentPct 100 — census the descendant form containerSel + " [attr]"' },

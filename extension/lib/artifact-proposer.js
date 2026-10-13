@@ -231,12 +231,42 @@ try {
   }
 } catch (eGG) { GroundingGateRef_246 = null; }
 
+// Review batch (#5): quote-aware top-level comma splitter for comma-union
+// families — selector-ledger-render owns the canonical walk (the same rule
+// computeSelectorDifferential applies page-side); a naive split would break
+// [data-x="a,b"] arms on the comma INSIDE the attribute value.
+let SelectorLedgerRef_253 = null;
+try {
+  if (typeof SelectorLedgerRender !== 'undefined' && SelectorLedgerRender && typeof SelectorLedgerRender.splitTopLevelSegments === 'function') {
+    SelectorLedgerRef_253 = SelectorLedgerRender;
+  } else if (typeof require === 'function') {
+    const slMod = require('./selector-ledger-render');
+    if (slMod && typeof slMod.splitTopLevelSegments === 'function') SelectorLedgerRef_253 = slMod;
+  }
+} catch (eSL) { SelectorLedgerRef_253 = null; }
+// Scope EVERY arm of a comma-union family to the card: 'CARD + " " + fam'
+// concatenation leaves later arms counting PAGE-WIDE (the union splits at
+// the top-level comma the moment the browser parses it). Each arm gets its
+// own CARD prefix; quoted/bracketed commas never split an arm.
+function scopeFamilyToSelector_253(cardSel, fam) {
+  const splitter = (SelectorLedgerRef_253 && typeof SelectorLedgerRef_253.splitTopLevelSegments === 'function')
+    ? SelectorLedgerRef_253.splitTopLevelSegments : null;
+  const arms = splitter ? splitter(String(fam || '')) : String(fam || '').split(',');
+  const card = String(cardSel || '');
+  return arms
+    .map((seg) => (card ? card + ' ' + seg.trim() : seg.trim()))
+    .filter((s) => s)
+    .join(', ');
+}
+
 // 253b (P3-E): paste-ready labels carrier + family parse line for the count
 // slots — the exact shape the synthesis emits when a count lane exists, so
 // the model pastes one block instead of composing the carrier/parse split
 // blind. Web-generic alternates only (like/赞/点赞, comment/评论,
 // share/转发/分享); the digit requirement stays so label-shaped prose never
-// poses as a count.
+// poses as a count. Review batch (#13): the assembly half ships as RAW code
+// (`assemblyFragment` — compiles standalone), never comment-wrapped — a
+// '// parse in the assembly:' prefix made every pasteable line inert.
 function countSlotTemplate253b(slot) {
   const kind = /^like/.test(slot) ? 'like' : (/^comment/.test(slot) ? 'comment' : 'share');
   const finder = kind === 'like'
@@ -244,7 +274,9 @@ function countSlotTemplate253b(slot) {
     : (kind === 'comment'
         ? "/comment|评论/i.test(l) && /\\d/.test(l)"
         : "/share|转发|分享/i.test(l) && /\\d/.test(l)");
-  return "labels: { selector: '[aria-label]', attr: 'aria-label', multi: true }, // into the fieldMap\n// parse in the assembly: const labs = (r.labels || []).map(function (x) { return String(x || '').trim(); }); const m = labs.find(function (l) { return " + finder + "; }) || ''; // value = num(m)";
+  const fieldMapFragment = "labels: { selector: '[aria-label]', attr: 'aria-label', multi: true }, // into the fieldMap";
+  const assemblyFragment = "const labs = (r.labels || []).map(function (x) { return String(x || '').trim(); }); const m = labs.find(function (l) { return " + finder + "; }) || ''; // value = num(m)";
+  return { fieldMapFragment: fieldMapFragment, assemblyFragment: assemblyFragment };
 }
 
 function synthesizeFromEvidence(pack, requirementText, outputSchema) {
@@ -386,10 +418,21 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
     // span[aria-label] family otherwise. The model pastes instead of
     // composing the fieldMap shape blind.
     const tmplSel253b = (th252 && typeof th252.anchorSel === 'string' && th252.anchorSel) ? th252.anchorSel : 'span[aria-label]';
+    // Review batch (#2): the template follows the SAME degradation as the
+    // fieldMap — a degraded ($extractList) synthesis must never paste a
+    // read:'hoverPopover' spec ($extractList hard-rejects those by
+    // contract). The hover line rides only the hover-form template, with a
+    // note line teaching the switch otherwise.
+    const tmplNote253 = '// add tsHover only after switching the call to $extractWithHover (hoverPopover specs are rejected by $extractList)';
+    const tsAriaLine253 = 'tsAria: { selector: ' + JSON.stringify(tmplSel253b) + ', attr: \'aria-label\' }';
+    const tsLabelLine253 = 'tsLabel: { selector: ' + JSON.stringify(tmplSel253b) + ', labelledby: true }';
+    const tsHoverLine253 = 'tsHover: { selector: ' + JSON.stringify(tmplSel253b) + ', read: \'hoverPopover\', match: /(19|20)\\d{2}/ }';
     unfilled.push({
       slot: 'postTime',
       reason: 'no time-like census lane — run probe.census {hover:true} or bind the timestamp anchor by hand',
-      template: 'tsAria: { selector: ' + JSON.stringify(tmplSel253b) + ', attr: \'aria-label\' }, tsLabel: { selector: ' + JSON.stringify(tmplSel253b) + ', labelledby: true }, tsHover: { selector: ' + JSON.stringify(tmplSel253b) + ', read: \'hoverPopover\', match: /(19|20)\\d{2}/ },'
+      template: useHoverExtract253b
+        ? tsAriaLine253 + ', ' + tsLabelLine253 + ', ' + tsHoverLine253 + ','
+        : tsAriaLine253 + ', ' + tsLabelLine253 + ',\n' + tmplNote253
     });
   }
   if (countLane) {
@@ -402,7 +445,18 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
     // carrier + its own family parse line — the same shape the synthesis
     // emits when a count lane exists (CJK alternates included).
     for (const s of ['likeCount', 'likes', 'commentCount', 'comments', 'shareCount', 'shares']) {
-      if (schemaFields.indexOf(s) > -1) unfilled.push({ slot: s, reason: 'no count-like census lane on this page — renegotiate via io.confirm or bind the count carrier by hand', template: countSlotTemplate253b(s) });
+      if (schemaFields.indexOf(s) > -1) {
+        // Review batch (#13): two clearly-separated RAW snippets — the
+        // fieldMap carrier and the assembly parse line (compiles as-is, no
+        // '// parse in the assembly:' comment wrapper swallowing the code).
+        const t253 = countSlotTemplate253b(s);
+        unfilled.push({
+          slot: s,
+          reason: 'no count-like census lane on this page — renegotiate via io.confirm or bind the count carrier by hand',
+          template: t253.fieldMapFragment + '\n// assembly:\n' + t253.assemblyFragment,
+          assemblyFragment: t253.assemblyFragment
+        });
+      }
     }
   }
   if (textLane) {
@@ -609,7 +663,10 @@ async function proposeArtifact(ctx) {
         break;
       }
       try {
-        const c = await probes.count({ sel: affordanceCard + ' ' + fam });
+        // Review batch (#5): every ARM of the family union is scoped — a
+        // bare 'CARD + fam' concat splits at the top-level comma and the
+        // later arms count page-wide.
+        const c = await probes.count({ sel: scopeFamilyToSelector_253(affordanceCard, fam) });
         const n = c && typeof c.count === 'number' ? c.count : 0;
         affordanceCounts[fam] = n;
         if (n > 0) break; // first existing family wins — no need to count the rest
@@ -664,8 +721,9 @@ async function proposeArtifact(ctx) {
   // ledger-PROVEN families are DISCLOSED — fresh measurement wins by
   // construction (synthesis reads fresh evidence), but the session's
   // validated history is surfaced in the receipt, never silently dropped.
-  let pathIdentity253 = null;
-  try { pathIdentity253 = (typeof pathIdentity !== 'undefined' && pathIdentity) ? pathIdentity : null; } catch (eP253) { pathIdentity253 = null; }
+  // Review batch (dead code): pathIdentity is a plain local two lines up —
+  // the old typeof/try-catch wrapper defended against a TDZ that cannot
+  // happen here and read like a load-order guard.
   const ledgerConflicts253 = [];
   try {
     const lg = ctx && ctx.ledger;
@@ -680,9 +738,9 @@ async function proposeArtifact(ctx) {
           proven.set(o.selector, Math.max(prev || 0, o.matched));
         }
       }
-      const identity246 = chooseIdentitySelector_249(census, pathIdentity253 || null);
-      if (proven.size && identity246 && identity246.selector) {
-        const chosen = String(identity246.selector);
+      const chosenIdentity = chooseIdentitySelector_249(census, pathIdentity);
+      if (proven.size && chosenIdentity && chosenIdentity.selector) {
+        const chosen = String(chosenIdentity.selector);
         for (const [sel253] of proven) {
           if (sel253 === chosen) continue;
           // conflict = a ledger-PROVEN link-family selector that is NOT part
@@ -785,6 +843,7 @@ const JT_API_246 = {
   BOOTSTRAP_CONTAINERS: BOOTSTRAP_CONTAINERS_246,
   BUTTON_FAMILIES: BUTTON_FAMILIES_249,
   chooseAffordanceSelector_249, derivePathIdentity_249, computeCard_249,
+  scopeFamilyToSelector_253, countSlotTemplate253b,
   CLAUSE_RES: CLAUSE_RES_246
 };
 // Dual export (probe-tools pattern): Node tests use require, the wizard
