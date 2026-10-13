@@ -26,7 +26,8 @@
     '',
     'To end the session replace tool/args with "finish": { "summary": "..." }.',
     'Rules:',
-    '- Exactly one of "tool" or "finish" per turn; "args" defaults to {}.',
+    '- Exactly one of "tool", "tools" (a 2-5 read-only probe batch), or',
+    '  "finish" per turn; "args" defaults to {}.',
     '- finish is the TOP-LEVEL action {"finish":{"summary":"…"}} — NEVER a',
     '  tool name. There is no "finish" tool: finish is the protocol-level',
     '  end action, not something you dispatch.',
@@ -252,6 +253,32 @@
     return null;
   }
 
+  // Batch probe turns (2026-10-13 session-memory spec §4): "tools" is a
+  // THIRD action shape alongside "tool" and "finish" — an array of
+  // {tool, args} read-only probe calls dispatched in one turn. This is
+  // SHAPE normalization only; the whitelist/count/mutual-exclusion RULES
+  // live in the engine, which answers violations with a teaching receipt
+  // (the model can fix the shape itself — a repair round would burn an LLM
+  // call). A member missing its tool string normalizes to tool:null so the
+  // engine can reject the WHOLE batch atomically (nothing executes); a
+  // non-array "tools" is not an action at all (missing-action stays loud).
+  function normalizeToolBatch(raw) {
+    if (raw === undefined || raw === null) return null;
+    if (!Array.isArray(raw)) return null;
+    const members = [];
+    for (const mem of raw) {
+      if (mem && typeof mem === 'object' && !Array.isArray(mem)) {
+        members.push({
+          tool: (typeof mem.tool === 'string' && mem.tool.trim()) ? mem.tool.trim() : null,
+          args: (mem.args && typeof mem.args === 'object' && !Array.isArray(mem.args)) ? mem.args : {}
+        });
+      } else {
+        members.push({ tool: null, args: {} });
+      }
+    }
+    return members;
+  }
+
   function parseAssistantTurn(text) {
     const candidate = extractJsonObject(text);
     if (!candidate) {
@@ -336,6 +363,7 @@
       hypothesisUpdates: normalizeHypothesisUpdates(obj.hypotheses),
       tool: typeof obj.tool === 'string' && obj.tool.trim() ? obj.tool.trim() : null,
       args: (obj.args && typeof obj.args === 'object' && !Array.isArray(obj.args)) ? obj.args : {},
+      tools: normalizeToolBatch(obj.tools),
       // Fifteenth log: tolerate a bare-string finish — the lenient parser's
       // repair-finish-double-colon pass rewrites {"finish":"summary":"…"} (an
       // invalid double colon) into the string form.
@@ -343,7 +371,12 @@
         : (typeof obj.finish === 'string' && obj.finish.trim() ? { summary: obj.finish } : null)
     };
     if (turn.tool && turn.finish) return { ok: false, violation: 'ambiguous-action' };
-    if (!turn.tool && !turn.finish) {
+    // "tools" is the batch action and is mutually exclusive with finish the
+    // same way "tool" is. tool+tools is deliberately NOT rejected here: the
+    // engine answers that pair with a teaching receipt (spec §4.1) so the
+    // model resends cleanly instead of burning a protocol repair round.
+    if (turn.tools && turn.finish) return { ok: false, violation: 'ambiguous-action' };
+    if (!turn.tool && !turn.finish && !turn.tools) {
       return { ok: false, violation: 'missing-action', detail: 'reply had keys: ' + Object.keys(obj).slice(0, 12).join(', ').slice(0, 140) };
     }
     if (turn.tool && !/^[a-z][\w]*(\.[\w]+)*$/i.test(turn.tool)) return { ok: false, violation: 'bad-tool-name' };

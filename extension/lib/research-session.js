@@ -43,6 +43,20 @@
     { name: 'service.update', args: '{steps, more?, abortChunk?, inputSchema?, outputSchema?, testInput?, name?, overrides?} — CHUNKED SENDS: when the full steps payload is long (providers cut replies at ~4-5K chars mid-JSON), send it in parts: service.update({steps:[first part], more:true}) buffers; repeat for middle parts; the FINAL chunk (steps without more) assembles and applies everything — keep every reply comfortably under ~3000 chars — REPLACES the whole artifact (a single send carries the complete steps array; chunked sends assemble to the same effect); the receipt discloses the id delta whenever a send REPLACES a standing artifact (a shrink warns you — a final chunk on an empty buffer is a REPLACE, not a merge); patch:true is the ONE-TURN re-author: {steps:[one complete step], patch:true} merges it BY ID into the current artifact (same id replaced, new id appended, every other step untouched, all gates still run) — use it to fix a single step after a red verify instead of re-sending every chunk; abortChunk:true clears buffered chunks (steps sent WITH the abort become the new chunk 1, not a discard); overrides waives grounding receipts (an array of selector strings, or {"selectors":[...]}) and never carries steps — a waiver stays in force for the rest of the session, you do NOT need to resend it with later updates; testInput (sample input values) is REQUIRED when the target URL has {{param}} placeholders, or verify.run fails with MISSING_URL_PARAM; testInput values are user-confirmed alongside the contract (io.confirm carries them in the same panel) — sending values that DIFFER from the confirmed ones is rejected with TEST_INPUT_UNCONFIRMED: re-confirm via io.confirm (same schemas, new testInput) first; inputSchema/outputSchema, when sent, MUST be JSON Schema objects like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}} — natural-language maps ({"posts":"array of post objects"}) are rejected: verify scoring reads "required"/"properties" and cannot see through descriptions; once the user has confirmed the contract you may OMIT the schemas — the confirmed contract attaches to the artifact automatically — and sending schemas that MATERIALLY differ from the confirmed ones is rejected (renegotiate via io.confirm first)', returns: '{version} | {updated, waiverRecorded} | {updated, testInputAdopted} | {updated, schemasAttached} | {updated, patched, stepsNow} | {grounding:"rejected", rejections} | {buffered:true,...} | {aborted:true,...} | {updated, replacedStepIds}' }
   ];
 
+  // Batch probe turns (2026-10-13 session-memory spec §4): the READ-ONLY
+  // whitelist. Only observation-side tools may batch — a batched
+  // write/park/verify would serialize several side effects into one
+  // receipt, and the ATOMIC rejection (nothing executes) keeps the model's
+  // intent unambiguous: it resends as single calls. probe.scroll is
+  // deliberately absent (it mutates scroll position), as are every write,
+  // park, and gate tool.
+  const BATCH_READ_ONLY_TOOLS = [
+    'probe.count', 'probe.sample', 'probe.snippet', 'probe.census', 'probe.skeleton',
+    'probe.attrStats', 'probe.timestamp', 'probe.scrollUntil', 'probe.extract',
+    'probe.labelledby', 'probe.text', 'probe.loginState', 'probe.hover',
+    'page.settle', 'page.state'
+  ];
+
   const DEFAULTS = {
     budgets: { maxTurns: 60, maxTokensPerCall: 32768, tokenCap: 2000000, wallClockMs: 1800000 },
     retry: { attempts: 3, backoffMs: 400 },
@@ -62,7 +76,11 @@
     // trimmed census is exactly the k/n coverage evidence the fieldMap is
     // authored from — the texts-per-entry cap (2) keeps the common case well
     // below the ceiling.
-    toolResultCaps: { 'verify.run': 20000, 'probe.hover': 12000, 'probe.census': 12000 },
+    // Batch probe turns (2026-10-13 spec §4): one receipt budget divides
+    // across EVERY member — the 4000 default would slice each probe to
+    // ~800 chars of noise. 8000 keeps ~1600/member; members are read-only
+    // probes, whose receipts run small.
+    toolResultCaps: { 'verify.run': 20000, 'probe.hover': 12000, 'probe.census': 12000, 'batch': 8000 },
     // tool_result EVENT summaries ride the console mirror (wizard.js slices
     // at 600), so the event budget matches it exactly.
     eventSummaryCapChars: 600,
@@ -1947,6 +1965,72 @@
       // rule above never fired because every call key differed. The SHAPE
       // (same tool, same error class, different args) is the signal.
       let lastClassFail = null;
+      // Batch probe turns (spec §4.3): the trackers above are fed PER
+      // MEMBER inside a batch, exactly as a single dispatch feeds them — a
+      // repeated identical failure inside batches is the same dead loop as
+      // a single-tool one. The body is the former single-dispatch inline
+      // block, moved verbatim (behavior-identical for single turns).
+      function feedFailureTrackers(toolName, args, result) {
+        if (isErrorResult(result)) {
+          const failMsg = typeof result.error === 'string' ? result.error : 'grounding rejected';
+          const transientRe = /transient|retry|timeout after|network|Failed to fetch/i;
+          const isTransient = transientRe.test(String(failMsg));
+          const callKey = toolName + '|' + JSON.stringify(canonicalizeArgs(args || {}));
+          const errPrefix = String(failMsg).slice(0, 80);
+          // Seventieth log F2: first whitespace-delimited token of the
+          // error message, uppercased to [A-Z_]+ — the engine's stable
+          // error classes (SCRIPT_TIMEOUT, ELEMENT_NOT_FOUND, ...).
+          const errorClass = (String(failMsg).trim().split(/\s+/)[0] || '').toUpperCase().replace(/[^A-Z_]/g, '');
+          if (!isTransient) {
+            const consecutive = lastFail && lastFail.tool === toolName && lastFail.key === callKey && lastFail.errPrefix === errPrefix;
+            const nonConsecutiveInRange = !consecutive &&
+              recentFailKeys.indexOf(callKey) !== -1;
+            if (lastFail && !lastFail.fired && consecutive) {
+              lastFail.fired = true;
+              state.transcript.push({ kind: 'system', text:
+                'REPEATED IDENTICAL FAILURE: this is the 2nd consecutive call of ' + toolName +
+                ' with substantially the same arguments failing the same way — resending the same input cannot change the outcome. ' +
+                'Change the SHAPE of the attempt per the error teaching (e.g. narrow the batch with maxContainers:1, split the range, shrink the timeout, or probe a single representative container first).' });
+            } else if (nonConsecutiveInRange) {
+              state.transcript.push({ kind: 'system', text:
+                'REPEATED IDENTICAL FAILURE: ' + toolName +
+                ' with these same arguments failed the same way again within the last 3 calls — resending the same input cannot change the outcome. ' +
+                'Change the SHAPE of the attempt per the error teaching (e.g. narrow the batch with maxContainers:1, split the range, shrink the timeout, or probe a single representative container first).' });
+            }
+            recentFailKeys.push(callKey);
+            if (recentFailKeys.length > 3) recentFailKeys.shift();
+            lastFail = consecutive ? lastFail : { tool: toolName, key: callKey, errPrefix: errPrefix, fired: !!nonConsecutiveInRange };
+            // Seventieth log F2: same tool + same error class on 2
+            // consecutive calls with DIFFERENT arguments. Fired only when
+            // the exact-args nudge did not already cover this turn —
+            // identical args get the (stronger) identical-failure text.
+            const classConsecutive = lastClassFail && lastClassFail.tool === toolName &&
+              errorClass && lastClassFail.errorClass === errorClass;
+            if (classConsecutive && !consecutive && !nonConsecutiveInRange) {
+              let teaching = '';
+              if (/TIMEOUT/.test(errorClass)) {
+                teaching = ' For timeouts: narrow the batch (containerRange/maxContainers/maxWallMs).';
+              } else if (/NOT_FOUND/.test(errorClass)) {
+                teaching = ' For NOT_FOUND: re-probe the selector against the real DOM before retrying.';
+              } else {
+                teaching = ' Change the SHAPE of the attempt per the error teaching.';
+              }
+              state.transcript.push({ kind: 'system', text:
+                'REPEATED FAILURE CLASS: ' + toolName + ' failed with ' + (errorClass || 'UNKNOWN') +
+                ' twice in a row with different arguments — the ARGUMENTS are not the problem; the SHAPE is.' +
+                teaching });
+            }
+            lastClassFail = classConsecutive ? { tool: toolName, errorClass: errorClass, fired: true } : { tool: toolName, errorClass: errorClass, fired: false };
+          } else {
+            lastFail = null;
+            lastClassFail = null;
+          }
+        } else {
+          lastFail = null;
+          lastClassFail = null;
+          recentFailKeys.length = 0;
+        }
+      }
       try {
         while (true) {
         try {
@@ -2411,6 +2495,123 @@
             report = await stop('completed', detail);
             break;
           }
+          // Batch probe turns (2026-10-13 session-memory spec §4):
+          // turn.tools = [{tool,args}×1-5] dispatches READ-ONLY probes
+          // sequentially inside ONE turn — N probes for one LLM round-trip
+          // on the (serial anyway) rail, +1 turn (not +N). Validation is
+          // ATOMIC: any violation answers with a teaching receipt and
+          // NOTHING executes — a partially-executed batch would silently
+          // drop part of the model's intent. Rules checked in order:
+          // mutual exclusion with turn.tool → member count → whitelist
+          // (a member missing its tool string joins the whitelist family).
+          if (Array.isArray(turn.tools)) {
+            emit('tool_call', { tool: 'batch', args: { tools: turn.tools.map((mem) => mem && mem.tool) } });
+            const __t0 = Date.now();
+            __currentDispatchTool = 'batch';
+            const __parkedBeforeDispatch = parkedByTool.get('batch') || 0;
+            const __envBeforeDispatch = environmentalWaitTotal;
+            let batchResult = null;
+            let batchReceipts = null;
+            const memberMs = [];
+            if (turn.tool) {
+              batchResult = { error: 'batch rejected: send either "tool" or "tools", not both — resend as a single call or a clean batch' };
+            } else if (turn.tools.length === 0 || turn.tools.length > 5) {
+              batchResult = { error: 'batch rejected: 2-5 tools per turn (got ' + turn.tools.length + ') — split the batch' };
+            } else {
+              const rejected = [];
+              for (const mem of turn.tools) {
+                if (!mem || typeof mem.tool !== 'string' || BATCH_READ_ONLY_TOOLS.indexOf(mem.tool) === -1) {
+                  rejected.push(mem && typeof mem.tool === 'string' ? mem.tool : '(missing tool name)');
+                }
+              }
+              if (rejected.length) {
+                batchResult = { error: 'batch rejected: only read-only probes may batch — resend as single calls', rejected: rejected };
+              }
+            }
+            if (!batchResult) {
+              batchReceipts = [];
+              for (const mem of turn.tools) {
+                // Spec §4.3: a member's error never stops later members —
+                // dispatchTool already answers throws as {error} receipts;
+                // this belt guards anything thrown between members.
+                const __m0 = Date.now();
+                let r;
+                try { r = await dispatchTool(mem.tool, mem.args); }
+                catch (eMember) { r = { error: String((eMember && eMember.message) || eMember) }; }
+                memberMs.push(Date.now() - __m0);
+                batchReceipts.push(r);
+                // §3.C step-plan transitions ride probe receipts — per member.
+                try { updateStepPlanFromResult(mem.tool, mem.args, r); } catch (ePlan) { /* plan is advisory */ }
+                // 230th: research-supply high-water mark per member receipt.
+                try {
+                  const n230 = (r && typeof r === 'object')
+                    ? (typeof r.collected === 'number' ? r.collected : (typeof r.finalCount === 'number' ? r.finalCount : null))
+                    : null;
+                  if (n230 && n230 > researchSupplyHigh230) researchSupplyHigh230 = n230;
+                } catch (_) { /* high-water mark is best-effort */ }
+              }
+              // Spec §4.3: per-member costs ride the receipt (the
+              // toolTimings row carries only the whole-batch wall).
+              batchResult = { batch: batchReceipts, memberMs: memberMs };
+            }
+            __currentDispatchTool = null;
+            // 197th round: environmental waits disclosed on member receipts
+            // are booked once per receipt into the wall-clock exclusions.
+            try {
+              for (const r of (batchReceipts || [])) {
+                if (r && typeof r === 'object' && r.environmental && typeof r.environmental.waitedMs === 'number' && r.environmental.waitedMs > 0) {
+                  environmentalWaitTotal += r.environmental.waitedMs;
+                  environmentalThisSegment += r.environmental.waitedMs;
+                }
+              }
+            } catch (eEnv) { /* receipt shape is best-effort */ }
+            const __dispatchWall = Date.now() - __t0;
+            // 179th/197th rounds: parked and environmental waits inside the
+            // dispatch are excluded before the consumer tally (same
+            // double-booking trap as the single-dispatch site).
+            const __parkedInDispatch = (parkedByTool.get('batch') || 0) - __parkedBeforeDispatch;
+            const __envInDispatch = environmentalWaitTotal - __envBeforeDispatch;
+            const __netDispatchWall = Math.max(0, __dispatchWall - __parkedInDispatch - __envInDispatch);
+            recordToolTiming('batch', __netDispatchWall,
+              !!(batchReceipts && batchReceipts.some((r) => isErrorResult(r) && /^SCRIPT_TIMEOUT\b/.test(String(r && r.error)))));
+            // 148th log: suspension-shaped dispatch wall is credited back.
+            if (__netDispatchWall > TOOL_DISPATCH_SUSPEND_FLOOR_MS) {
+              const __credit = __netDispatchWall - TOOL_DISPATCH_SUSPEND_FLOOR_MS;
+              suspendCreditTotal += __credit;
+              suspendCreditThisSegment += __credit;
+              state.transcript.push({ kind: 'system', text:
+                'SYSTEM SUSPENSION CREDIT: the batch dispatch wall was ' + Math.round(__netDispatchWall / 1000) +
+                's (no legitimate dispatch exceeds ' + Math.round(TOOL_DISPATCH_SUSPEND_FLOOR_MS / 1000) +
+                's) — ' + Math.round(__credit / 1000) + 's is credited back to the wall budget (machine sleep / SW suspend during the dispatch). The wall clock did not spend it.' });
+            }
+            const batchOk = !isErrorResult(batchResult) &&
+              !(batchReceipts && batchReceipts.some((r) => isErrorResult(r)));
+            const callLabel = 'batch ' + JSON.stringify(turn.tools.map((mem) => ({ tool: mem && mem.tool, args: (mem && mem.args) || {} })));
+            const summary = Protocol.compactToolResultForLLM(callLabel, batchResult, toolResultCapFor('batch'));
+            state.transcript.push({ kind: 'tool', name: 'batch', ok: batchOk, result: batchResult, results: batchReceipts || [], summary: summary });
+            // 68th/70th-round trackers: fed PER MEMBER (spec §4.3 — the
+            // exact-repeat detection works inside batches). A REJECTED
+            // batch is fed as one call: an identically-rejected resend is
+            // the same dead loop.
+            if (batchReceipts) {
+              for (let mi = 0; mi < turn.tools.length; mi++) {
+                feedFailureTrackers(turn.tools[mi].tool, turn.tools[mi].args, batchReceipts[mi]);
+              }
+            } else {
+              feedFailureTrackers('batch', turn.tools, batchResult);
+            }
+            emit('tool_result', {
+              tool: 'batch',
+              ok: batchOk,
+              summary: Protocol.summarizeToolResult(callLabel, batchResult, eventSummaryCapChars),
+              detail: Protocol.compactToolResultForLLM(callLabel, batchResult, eventDetailCapChars),
+              raw: batchResult
+            });
+            if (batchReceipts) for (const r of batchReceipts) attachKnowledge(r);
+            maybeCompact();
+            await persist();
+            continue;
+          }
           emit('tool_call', { tool: turn.tool, args: turn.args });
           // Seventieth log F3: time the dispatch (failures included) and
           // count SCRIPT_TIMEOUT-class results as timeouts for the suffix.
@@ -2801,76 +3002,11 @@
             } catch (eEx171) { /* extractor best-effort */ }
           }
           // Sixty-eighth log F2: nudge on the 2nd consecutive identical
-          // failure (same tool + same args + same error prefix). See the
-          // tracker declaration at loop start for the incident.
-          // Sixty-ninth review F10 hardening:
-          //  - the call key uses a CANONICAL args serialization (recursively
-          //    key-sorted) — {a,b} vs {b,a} is the SAME call, not a new one;
-          //  - TRANSIENT-looking errors (network/retry/timeout classes the
-          //    engine already teaches as retryable) never fire the nudge;
-          //  - besides the consecutive slot, a small ring of the last 3
-          //    failing keys fires on a NON-consecutive repeat within 3 —
-          //    fail, one unrelated call, fail-again used to reset the slot
-          //    and silence the nudge.
-          if (isErrorResult(result)) {
-            const failMsg = typeof result.error === 'string' ? result.error : 'grounding rejected';
-            const transientRe = /transient|retry|timeout after|network|Failed to fetch/i;
-            const isTransient = transientRe.test(String(failMsg));
-            const callKey = turn.tool + '|' + JSON.stringify(canonicalizeArgs(turn.args || {}));
-            const errPrefix = String(failMsg).slice(0, 80);
-            // Seventieth log F2: first whitespace-delimited token of the
-            // error message, uppercased to [A-Z_]+ — the engine's stable
-            // error classes (SCRIPT_TIMEOUT, ELEMENT_NOT_FOUND, ...).
-            const errorClass = (String(failMsg).trim().split(/\s+/)[0] || '').toUpperCase().replace(/[^A-Z_]/g, '');
-            if (!isTransient) {
-              const consecutive = lastFail && lastFail.tool === turn.tool && lastFail.key === callKey && lastFail.errPrefix === errPrefix;
-              const nonConsecutiveInRange = !consecutive &&
-                recentFailKeys.indexOf(callKey) !== -1;
-              if (lastFail && !lastFail.fired && consecutive) {
-                lastFail.fired = true;
-                state.transcript.push({ kind: 'system', text:
-                  'REPEATED IDENTICAL FAILURE: this is the 2nd consecutive call of ' + turn.tool +
-                  ' with substantially the same arguments failing the same way — resending the same input cannot change the outcome. ' +
-                  'Change the SHAPE of the attempt per the error teaching (e.g. narrow the batch with maxContainers:1, split the range, shrink the timeout, or probe a single representative container first).' });
-              } else if (nonConsecutiveInRange) {
-                state.transcript.push({ kind: 'system', text:
-                  'REPEATED IDENTICAL FAILURE: ' + turn.tool +
-                  ' with these same arguments failed the same way again within the last 3 calls — resending the same input cannot change the outcome. ' +
-                  'Change the SHAPE of the attempt per the error teaching (e.g. narrow the batch with maxContainers:1, split the range, shrink the timeout, or probe a single representative container first).' });
-              }
-              recentFailKeys.push(callKey);
-              if (recentFailKeys.length > 3) recentFailKeys.shift();
-              lastFail = consecutive ? lastFail : { tool: turn.tool, key: callKey, errPrefix: errPrefix, fired: !!nonConsecutiveInRange };
-              // Seventieth log F2: same tool + same error class on 2
-              // consecutive calls with DIFFERENT arguments. Fired only when
-              // the exact-args nudge did not already cover this turn —
-              // identical args get the (stronger) identical-failure text.
-              const classConsecutive = lastClassFail && lastClassFail.tool === turn.tool &&
-                errorClass && lastClassFail.errorClass === errorClass;
-              if (classConsecutive && !consecutive && !nonConsecutiveInRange) {
-                let teaching = '';
-                if (/TIMEOUT/.test(errorClass)) {
-                  teaching = ' For timeouts: narrow the batch (containerRange/maxContainers/maxWallMs).';
-                } else if (/NOT_FOUND/.test(errorClass)) {
-                  teaching = ' For NOT_FOUND: re-probe the selector against the real DOM before retrying.';
-                } else {
-                  teaching = ' Change the SHAPE of the attempt per the error teaching.';
-                }
-                state.transcript.push({ kind: 'system', text:
-                  'REPEATED FAILURE CLASS: ' + turn.tool + ' failed with ' + (errorClass || 'UNKNOWN') +
-                  ' twice in a row with different arguments — the ARGUMENTS are not the problem; the SHAPE is.' +
-                  teaching });
-              }
-              lastClassFail = classConsecutive ? { tool: turn.tool, errorClass: errorClass, fired: true } : { tool: turn.tool, errorClass: errorClass, fired: false };
-            } else {
-              lastFail = null;
-              lastClassFail = null;
-            }
-          } else {
-            lastFail = null;
-            lastClassFail = null;
-            recentFailKeys.length = 0;
-          }
+          // failure (same tool + same args + same error prefix). See
+          // feedFailureTrackers at loop start for the incident and the
+          // sixty-ninth review F10 hardening (canonical args keys,
+          // transient exemption, 3-key ring).
+          feedFailureTrackers(turn.tool, turn.args, result);
           // Twenty-second log: slicing the FIRST 200 chars off the
           // transcript summary let a big-args label (service.update echoes
           // 1000+ chars of steps) eat the whole event — two ERRs were
