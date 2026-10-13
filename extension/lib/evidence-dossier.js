@@ -3,6 +3,10 @@
 // Evidence dossier (2026-09-18 spec §3.B): a compact, AUTHORITATIVE evidence
 // block the research-session engine rebuilds and injects EVERY turn — never
 // stored in the transcript, so compaction can never eat it. Six sections:
+//   [SELECTOR LEDGER]      epoch-layered PROVEN/PROVEN-DEAD selector
+//                          families from the observation log's outcomes
+//                          (2026-10-13 session-memory spec §3.2; rendered
+//                          by selector-ledger-render.js, rides FIRST)
 //   [CONTAINER SKELETON]   numbered skeleton of the representative container
 //   [POPOVER CAPTURES]     LRU (≤15) of captured popover texts w/ anchors
 //   [LAST VERIFY CENSUS]   the most recent verify report's detector census
@@ -334,6 +338,12 @@
 
     function assemble(popCount, skel, cens, scripts) {
       const parts = ['<EVIDENCE DOSSIER (authoritative, rebuilt each turn)>'];
+      // Session-memory read path (2026-10-13 spec §3.2 + §2 emphasis): the
+      // [SELECTOR LEDGER] rides FIRST — before the skeleton — because an
+      // authoring turn reads validated OUTCOMES before shapes. Pre-rendered
+      // and internally budgeted (≤~800 chars) by the caller; this module's
+      // own trim loop treats it as one block.
+      if (a.selectorLedger) parts.push(a.selectorLedger);
       // 89th-round D5: disclose skeleton staleness — captured before a
       // page.open/verify.run it may describe a page the model no longer sees.
       let staleNote = '';

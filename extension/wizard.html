@@ -320,8 +320,10 @@
   <!-- Load-order dependency (87th-round live gap): research-session.js
        resolves the dossier lib at IIFE load time — evidence-dossier.js must
        precede it or the engine runs dossier-less (guarded by
-       test/dossier-load.test.js). -->
+       test/dossier-load.test.js). selector-ledger-render.js follows the same
+       rule (the [SELECTOR LEDGER] dossier section resolves at load time). -->
   <script src="lib/evidence-dossier.js"></script>
+  <script src="lib/selector-ledger-render.js"></script>
   <script src="lib/research-session.js"></script>
   <script src="lib/session-persistence.js"></script>
   <script src="lib/live-rail.js"></script>

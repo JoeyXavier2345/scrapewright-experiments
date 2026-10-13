@@ -25,6 +25,10 @@
   const KB = resolveLib('./knowledge-base', 'KnowledgeBase');
   const VR = resolveLib('./verify-runner', 'VerifyRunner');
   const Dossier = resolveLib('./evidence-dossier', 'EvidenceDossier');
+  // Session-memory architecture (2026-10-13 spec §3.2): the ledger renderer
+  // is additive — unresolved here only means the [SELECTOR LEDGER] dossier
+  // section is off, never a dead engine.
+  const LedgerRender = resolveLib('./selector-ledger-render', 'SelectorLedgerRender');
   // Eighty-seventh-round live gap: a wizard.html load-order slip left this
   // const null for the page lifetime and the per-turn evidence dossier
   // (STEP PLAN included) silently never rode — node tests resolve via
@@ -1568,6 +1572,9 @@
           }
         }
         const text = Dossier.buildDossier({
+          // [SELECTOR LEDGER] rides FIRST inside the dossier (spec §2
+          // binding emphasis) — pre-rendered, internally budgeted.
+          selectorLedger: renderLedgerSection() || null,
           containerHtml: (typeof feeds.containerHtml === 'function') ? feeds.containerHtml() : null,
           containerHtmlMeta: (typeof feeds.containerHtmlMeta === 'function') ? feeds.containerHtmlMeta() : null,
           popovers: popovers,
@@ -1586,6 +1593,23 @@
       } catch (e) {
         return null; // a dossier failure must never kill the turn
       }
+    }
+
+    // [SELECTOR LEDGER] text for the dossier (2026-10-13 spec §3.2): the
+    // observation log's structured outcomes aggregated per selector and
+    // layered by the rail's CURRENT page epoch (a mid-session reload moves
+    // every earlier measurement into a stale layer). Isolated try: a ledger
+    // bug must cost the ledger section, never the whole dossier.
+    function renderLedgerSection() {
+      try {
+        if (!LedgerRender || typeof LedgerRender.renderSelectorLedger !== 'function') return '';
+        const epNow = epochOf ? epochOf() : undefined;
+        return LedgerRender.renderSelectorLedger(
+          observationLog.recent(LedgerRender.ENTRY_WINDOW || 300),
+          (typeof epNow === 'number') ? epNow : undefined,
+          LedgerRender.DEFAULT_BUDGET_CHARS || 800
+        );
+      } catch (e) { return ''; }
     }
 
     function accountUsage(messages, res) {

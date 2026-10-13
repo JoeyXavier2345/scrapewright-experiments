@@ -450,13 +450,16 @@ describe('138th log — prompt budget guard (segmentation)', () => {
   const specTotal = specs.reduce((s, t) => s + t.args.length + t.returns.length, 0);
 
   it('the base contract stays within the post-rewrite budget (and above a sanity floor)', () => {
-    assert.ok(base.length <= 17500, 'base prompt ' + base.length + ' chars exceeds the 17500 budget — cut a stale rule or move depth to a knowledge unit');
+    // 253rd-round (session-memory ledger): budget raised 17500 → 17800 for
+    // methodology rule 11 (read [SELECTOR LEDGER] before writing any
+    // selector) — a deliberate, pinned extension, not silent regrowth.
+    assert.ok(base.length <= 17800, 'base prompt ' + base.length + ' chars exceeds the 17800 budget — cut a stale rule or move depth to a knowledge unit');
     assert.ok(base.length >= 9000, 'base prompt ' + base.length + ' chars fell below the 9000 floor — operative rules were LOST, not compressed');
   });
 
   it('the base contract is SECTIONED with a quick index (navigability is the point)', () => {
     assert.match(base, /# Contract quick index/);
-    for (const h of ['# 1 Service model', '# 2 \$ API', '## 2.1 Reads', '## 2.2 Lists \\+ hover', '## 2.3 Scroll \\+ collect', '## 2.4 Interaction \\+ waits', '## 2.5 Tabs', '## 2.6 Selector \\+ return rules', '# 3 Methodology \\(10 rules\\)', '# 4 Skeleton view']) {
+    for (const h of ['# 1 Service model', '# 2 \$ API', '## 2.1 Reads', '## 2.2 Lists \\+ hover', '## 2.3 Scroll \\+ collect', '## 2.4 Interaction \\+ waits', '## 2.5 Tabs', '## 2.6 Selector \\+ return rules', '# 3 Methodology \\(11 rules\\)', '# 4 Skeleton view']) {
       assert.ok(base.indexOf(h.replace(/\\\+/g, '+').replace(/\\\(/g, '(').replace(/\\\)/g, ')').replace(/\\\$/g, '$')) !== -1, 'section present: ' + h);
     }
   });

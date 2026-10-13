@@ -126,6 +126,234 @@ describe('ledger — probe recording sites', () => {
   });
 });
 
+// ---- Task 2 (2026-10-13 spec §3.2): the ledger's READ path — the pure
+// renderer + the dossier wiring. [SELECTOR LEDGER] rides the evidence
+// dossier EVERY turn, BEFORE [CONTAINER SKELETON] (§2 emphasis: the
+// ledger's primary job is the MODEL'S PER-TURN visibility of validated
+// facts, so an authoring turn reads outcomes before shapes). ----
+
+const { renderSelectorLedger } = require('../lib/selector-ledger-render');
+
+function obsEntry(epoch, tool, outcomes, at) {
+  return {
+    id: at || 1, tool: tool, selectors: outcomes.map((o) => o.selector), attrs: [],
+    summary: '', at: at || 1, epoch: epoch, outcomes: outcomes
+  };
+}
+
+describe('ledger — renderSelectorLedger (pure helper, spec §3.2)', () => {
+  it('aggregates per selector with MAX matched winning — 0-inside-containers + pageWide n>0 is PROVEN, never dead (MA1 review note)', () => {
+    const entries = [
+      obsEntry(2, 'verify.run', [{ selector: 'a.ttl', matched: 0 }, { selector: 'a.ttl', matched: 7 }], 1),
+      obsEntry(2, 'probe.census', [{ selector: 'a.ttl', matched: 3 }], 2)
+    ];
+    const text = renderSelectorLedger(entries, 2, 800);
+    assert.match(text, /\[SELECTOR LEDGER\]/);
+    assert.match(text, /a\.ttl → 7 matches \(verify\.run, epoch 2\)/,
+      'row shape: sel → N matches (tool, epoch) — the WINNING observation names the tool, no unit word (units are mixed across tools)');
+    assert.ok(!/PROVEN-DEAD[\s\S]*?a\.ttl/.test(text), 'a.ttl never renders in the dead group');
+  });
+
+  it('sorts PROVEN by cross-epoch survivor count desc, then matched desc; a survivor renders ONCE (live), with its survivor count disclosed', () => {
+    const entries = [
+      obsEntry(1, 'probe.count', [{ selector: 'div.stable', matched: 2 }], 1),
+      obsEntry(2, 'probe.count', [{ selector: 'div.stable', matched: 2 }], 2),
+      obsEntry(2, 'probe.count', [{ selector: 'div.big', matched: 50 }], 3)
+    ];
+    const text = renderSelectorLedger(entries, 2, 800);
+    const iStable = text.indexOf('div.stable');
+    const iBig = text.indexOf('div.big');
+    assert.ok(iStable !== -1 && iBig !== -1, 'both families render');
+    assert.ok(iStable < iBig, 'the 2-epoch survivor outranks the bigger single-epoch match');
+    assert.match(text, /div\.stable → 2 matches[\s\S]{0,60}survives 2 epochs/, 'survivor count disclosed on the row');
+    assert.equal(text.indexOf('div.stable'), text.lastIndexOf('div.stable'),
+      'a survivor never duplicates under a stale layer — old epochs only credit the survivor count');
+  });
+
+  it('renders stale-only selectors under their own epoch header, never in the live groups', () => {
+    const entries = [
+      obsEntry(1, 'probe.count', [{ selector: 'div.old', matched: 4 }], 1),
+      obsEntry(2, 'probe.count', [{ selector: 'div.live', matched: 6 }], 2)
+    ];
+    const text = renderSelectorLedger(entries, 2, 800);
+    const iStale = text.indexOf('[epoch 1 — page reopened, stale]');
+    assert.ok(iStale !== -1, 'stale layer header present');
+    assert.ok(text.indexOf('div.old') > iStale, 'the stale-only row sits under the stale header');
+    assert.ok(text.indexOf('div.live') < iStale, 'the live row sits above the stale layer');
+    assert.ok(!/PROVEN[^\n]*div\.old/.test(text), 'stale rows never leak into the live PROVEN group');
+  });
+
+  it('PROVEN-DEAD rows include the tool name', () => {
+    const text = renderSelectorLedger([obsEntry(2, 'verify.run', [{ selector: 'span.nope', matched: 0 }], 1)], 2, 800);
+    assert.match(text, /PROVEN-DEAD/);
+    assert.match(text, /span\.nope → 0 matches \(verify\.run, epoch 2\)/);
+  });
+
+  it('legacy null-epoch observations render in the live layer (C3: epoch-agnostic receipts never go stale)', () => {
+    const text = renderSelectorLedger([obsEntry(null, 'probe.count', [{ selector: 'div.legacy', matched: 3 }], 1)], 2, 800);
+    assert.match(text, /div\.legacy → 3 matches/);
+    assert.ok(text.indexOf('[epoch') === -1, 'no stale header for epoch-agnostic rows');
+  });
+
+  it('caps PROVEN at 8 / DEAD at 6 rows and counts the capped rows as trimmed (never silent)', () => {
+    const outcomes = [];
+    for (let i = 0; i < 10; i++) outcomes.push({ selector: 'div.p' + i, matched: i + 1 });
+    for (let i = 0; i < 8; i++) outcomes.push({ selector: 'div.d' + i, matched: 0 });
+    const text = renderSelectorLedger([obsEntry(2, 'probe.count', outcomes, 1)], 2, 2000);
+    assert.ok(text.includes('div.p9') && !text.includes('div.p0') && !text.includes('div.p1'),
+      'PROVEN keeps the top 8 by matched');
+    assert.ok(text.includes('div.d5') && !text.includes('div.d6'),
+      'DEAD capped at 6');
+    assert.match(text, /\[\+4 rows trimmed\]/, '2 proven + 2 dead capped rows disclosed');
+  });
+
+  it('overflow trims whole stale layers oldest-first (sweep: an older layer never outlives a newer one)', () => {
+    const entries = [
+      obsEntry(1, 'probe.count', [{ selector: 'div.e1', matched: 4 }], 1),
+      obsEntry(2, 'probe.count', [{ selector: 'div.e2', matched: 4 }], 2),
+      obsEntry(3, 'probe.count', [{ selector: 'div.live', matched: 5 }], 3)
+    ];
+    const full = renderSelectorLedger(entries, 3, 800);
+    assert.ok(full.includes('div.e1') && full.includes('div.e2'), 'fixture sanity: full budget renders both layers');
+    assert.ok(!/rows trimmed/.test(full), 'no trim note when nothing was trimmed');
+    for (let b = 60; b <= 800; b += 7) {
+      const t = renderSelectorLedger(entries, 3, b);
+      assert.ok(t.length <= b, 'budget respected at ' + b + ' (got ' + t.length + ')');
+      if (t.includes('div.e1')) {
+        assert.ok(t.includes('div.e2'), 'budget ' + b + ': the OLDEST layer drops first');
+      }
+      // The live PROVEN row survives every layer/dead trim — only a budget
+      // too small to physically contain it (header + row ≈ 110 chars) may
+      // hard-slice it away.
+      if (b >= 130) {
+        assert.ok(t.includes('div.live'), 'budget ' + b + ': the live PROVEN row survives every trim');
+      }
+    }
+    const tight = renderSelectorLedger(entries, 3, 120);
+    assert.ok(!tight.includes('div.e1'), 'a tight budget drops stale layers');
+    assert.match(tight, /\[\+\d+ rows trimmed\]/, 'trim disclosed');
+  });
+
+  it('after stale layers are gone, dead rows trim from the OLDEST current-epoch observation (sweep)', () => {
+    const entries = [
+      obsEntry(2, 'verify.run', [{ selector: 'div.dead_old', matched: 0 }], 1),
+      obsEntry(2, 'verify.run', [{ selector: 'div.dead_mid', matched: 0 }], 2),
+      obsEntry(2, 'verify.run', [{ selector: 'div.dead_new', matched: 0 }], 3)
+    ];
+    const full = renderSelectorLedger(entries, 2, 800);
+    assert.ok(full.includes('div.dead_old') && full.includes('div.dead_new'), 'fixture sanity');
+    for (let b = 60; b <= 800; b += 7) {
+      const t = renderSelectorLedger(entries, 2, b);
+      assert.ok(t.length <= b, 'budget respected at ' + b);
+      if (t.includes('div.dead_old')) {
+        assert.ok(t.includes('div.dead_mid') && t.includes('div.dead_new'),
+          'budget ' + b + ': an older dead row never outlives newer ones');
+      }
+    }
+    const tight = renderSelectorLedger(entries, 2, 120);
+    assert.ok(!tight.includes('div.dead_old'), 'a tight budget drops the OLDEST dead row');
+    assert.match(tight, /\[\+\d+ rows trimmed\]/);
+  });
+
+  it('truncates over-long selectors to ≤80 chars on the row', () => {
+    const longSel = 'div.' + 'x'.repeat(140);
+    const text = renderSelectorLedger([obsEntry(2, 'probe.count', [{ selector: longSel, matched: 1 }], 1)], 2, 800);
+    const line = text.split('\n').find((l) => l.indexOf('div.xxx') !== -1);
+    assert.ok(line, 'row present');
+    const m = line.match(/^- (.*?) → /);
+    assert.ok(m, 'row parses');
+    assert.ok(m[1].length <= 80, 'rendered selector ≤80 chars (got ' + m[1].length + ')');
+  });
+
+  it('empty ledger → empty string (the dossier omits the section entirely)', () => {
+    assert.equal(renderSelectorLedger([], 1, 800), '');
+    assert.equal(renderSelectorLedger([obsEntry(1, 'probe.count', [], 1)], 1, 800), '',
+      'entries without outcomes are not ledger material');
+    assert.equal(renderSelectorLedger(undefined, 1, 800), '');
+    assert.equal(renderSelectorLedger(null, 1), '');
+  });
+});
+
+// ---- integration: the section rides the assembled dossier, BEFORE the
+// container skeleton (mirror the engine harness shape used by
+// test/graduated-activation.test.js / test/skeleton-dossier.test.js) ----
+
+describe('ledger — dossier [SELECTOR LEDGER] section (integration)', () => {
+  const { createResearchSession } = require('../lib/research-session');
+
+  function scriptedLlm(replies, calls) {
+    let i = 0;
+    return async (req) => {
+      calls.push(req);
+      const r = replies[Math.min(i, replies.length - 1)];
+      i++;
+      return r;
+    };
+  }
+  const reply = (content) => ({ content, finish_reason: 'stop', usage: { prompt_tokens: 100, completion_tokens: 10 } });
+  const finishEnvelope = () => JSON.stringify({ think: 'done', finish: { summary: 'done' } });
+
+  it('renders [SELECTOR LEDGER] BEFORE [CONTAINER SKELETON] from the session observationLog + rail epoch', async () => {
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(finishEnvelope())], calls),
+      tools: {},
+      epochOf: () => 2,
+      dossierFeeds: {
+        containerHtml: () => '<div class="card"><a class="ttl">t</a></div>',
+        popovers: () => [],
+        lastVerify: () => null
+      },
+      seed: { observation: { seq: 4, entries: [
+        obsEntry(1, 'probe.count', [{ selector: 'div.stable', matched: 3 }], 1),
+        obsEntry(2, 'probe.count', [{ selector: 'div.stable', matched: 4 }], 2),
+        obsEntry(2, 'verify.run', [{ selector: 'span.dead', matched: 0 }], 3),
+        obsEntry(1, 'probe.count', [{ selector: 'div.old', matched: 9 }], 4)
+      ] } }
+    });
+    await session.run();
+    const dossier = calls[calls.length - 1].messages
+      .filter((m) => m.role === 'system' && m.content.includes('EVIDENCE DOSSIER'))[0].content;
+    const iLedger = dossier.indexOf('[SELECTOR LEDGER]');
+    const iSkel = dossier.indexOf('[CONTAINER SKELETON]');
+    assert.ok(iLedger !== -1, 'ledger section rides the dossier');
+    assert.ok(iSkel !== -1, 'skeleton present');
+    assert.ok(iLedger < iSkel, 'ledger sits BEFORE the container skeleton (spec §2 emphasis)');
+    assert.match(dossier, /div\.stable → 4 matches[\s\S]{0,60}survives 2 epochs/, 'live survivor row');
+    assert.match(dossier, /span\.dead → 0 matches \(verify\.run, epoch 2\)/, 'live dead row');
+    assert.match(dossier, /\[epoch 1 — page reopened, stale\]/, 'stale layer header');
+  });
+
+  it('omits the section entirely when the ledger is empty', async () => {
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(finishEnvelope())], calls),
+      tools: {},
+      epochOf: () => 1,
+      dossierFeeds: { containerHtml: () => null, popovers: () => [], lastVerify: () => null }
+    });
+    await session.run();
+    const dossier = calls[calls.length - 1].messages
+      .filter((m) => m.role === 'system' && m.content.includes('EVIDENCE DOSSIER'))[0].content;
+    assert.ok(!dossier.includes('[SELECTOR LEDGER]'), 'no empty header');
+  });
+});
+
+// ---- methodology rule (spec §2: the rules route "read the ledger before
+// writing any selector") ----
+
+describe('ledger — authoring-first methodology rule', () => {
+  it('the session prompt rules array carries the read-ledger-first rule as rule 11', () => {
+    const ST = require('../lib/session-tools');
+    const p = ST.buildDslContractPrompt();
+    assert.match(p, /11\. Before writing ANY selector, read \[SELECTOR LEDGER\] in the dossier — PROVEN rows are reusable as-is; PROVEN-DEAD rows must not be retried unless their epoch is stale\./,
+      'the binding rule text rides the methodology rules');
+    assert.match(p, /# 3 Methodology \(11 rules\)/, 'the section header counts the new rule');
+  });
+});
+
 // ---- verify-side recording (session-tools result landing) ----
 
 describe('ledger — verify.run field-census recording', () => {
