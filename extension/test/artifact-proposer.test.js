@@ -123,6 +123,20 @@ describe('joint solver — synthesizeFromEvidence (pure)', () => {
     assert.doesNotThrow(() => new AsyncFunction('__input__', ex.script), 'emitted script must construct');
     assert.match(ex.script, /posts\\\/id/);
   });
+  // Review batch (joint-solver #7): the emitted collect step read
+  // r.count/r.certified — keys $collectUntil NEVER returns (its receipt is
+  // {collected, satisfied, exhaustion:{certified,evidence}}), so every
+  // collect step's step result carried undefined count/certified forever.
+  it('collect step reads the $collectUntil receipt contract (collected / exhaustion.certified / satisfied)', () => {
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_FIX }, REQ_FULL, SCHEMA);
+    const collect = out.steps.find((s) => s.id === 'collect');
+    assert.ok(collect, 'scroll clause → collect step exists');
+    assert.match(collect.script, /count: r\.collected/);
+    assert.match(collect.script, /r\.exhaustion && r\.exhaustion\.certified/);
+    assert.match(collect.script, /satisfied: r\.satisfied \|\| null/);
+    assert.doesNotMatch(collect.script, /r\.count\b/, 'r.count is not a $collectUntil key');
+    assert.doesNotMatch(collect.script, /r\.certified\b/, 'r.certified is not a $collectUntil key');
+  });
 });
 
 describe('joint solver — red-receipt fragment renderers', () => {
@@ -222,13 +236,47 @@ describe('joint solver — proposeArtifact (stubbed sweep)', () => {
     assert.match(out.merge, /regenerated-from-fresh-sweep/);
     assert.match(out.merge, /NOT preserved/);
   });
+  // Review batch (joint-solver #13): a FAILED census hop used to flow into
+  // synthesis as pseudo-evidence (a truthy {error:…} object suppressed the
+  // no-census unfilled entry) — the receipt looked fully sourced while every
+  // lane silently fell back to web-generic ARIA conventions.
+  it('a census hop error discloses itself as an unfilled census slot with the digest', async () => {
+    const out = await AP.proposeArtifact({
+      probes: {
+        count: async () => ({ count: 5 }),
+        census: async () => ({ error: 'no page open' }),
+        sample: async () => ({})
+      },
+      requirementText: REQ_FULL, outputSchema: SCHEMA_FIX(), currentArtifact: null,
+      applyArtifact: async () => ({ version: 1 })
+    });
+    assert.equal(out.applied, true, 'a failed hop is an evidence gap, never a crash');
+    const c = out.unfilled.find((u) => u && u.slot === 'census' && /census hop failed/.test(u.reason || ''));
+    assert.ok(c, 'unfilled carries the census digest slot');
+    assert.match(c.reason, /^census hop failed: no page open/);
+    assert.match(c.reason, /web-generic ARIA conventions/);
+  });
+  it('a census hop that THROWS discloses the same way', async () => {
+    const out = await AP.proposeArtifact({
+      probes: {
+        count: async () => ({ count: 5 }),
+        census: async () => { throw new Error('tab closed mid-census'); },
+        sample: async () => ({})
+      },
+      requirementText: REQ_FULL, outputSchema: SCHEMA_FIX(), currentArtifact: null,
+      applyArtifact: async () => ({ version: 1 })
+    });
+    const c = out.unfilled.find((u) => u && u.slot === 'census' && /census hop failed/.test(u.reason || ''));
+    assert.ok(c, 'thrown census error disclosed');
+    assert.match(c.reason, /tab closed mid-census/);
+  });
 });
 
 describe('joint solver — red receipts carry fragments', () => {
   const { createVerifyRunner } = require('../lib/verify-runner');
   const SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
     type: 'object', required: ['content', 'postTime'], properties: { content: { type: 'string' }, postTime: { type: 'string' } } } } } };
-  function run(records, sessionEvidence, diagRow) {
+  function run(records, sessionEvidence, diagRow, serviceSteps) {
     const runner = createVerifyRunner({
       ensureLock: async () => {}, releaseLock: async () => {},
       createTab: async () => ({ id: 1 }), removeTab: async () => {}, waitForTabLoad: async () => {},
@@ -242,7 +290,7 @@ describe('joint solver — red receipts carry fragments', () => {
         return { finalResult: { posts: records }, steps: [], pages: [], pagesTruncated: false };
       }
     });
-    return runner({ service: { targetUrl: 'https://e.com', steps: [{ id: 's1', name: 's', script: 'return 1;', onSuccess: 'TERMINATE' }], config: {} }, input: { count: 3 }, outputSchema: SCHEMA, sessionEvidence: sessionEvidence });
+    return runner({ service: { targetUrl: 'https://e.com', steps: serviceSteps || [{ id: 's1', name: 's', script: 'return 1;', onSuccess: 'TERMINATE' }], config: {} }, input: { count: 3 }, outputSchema: SCHEMA, sessionEvidence: sessionEvidence });
   }
   it('REQUIREMENT_EXPAND_DROPPED carries the paste-ready $clickInList step', async () => {
     const out = await run(
@@ -273,6 +321,42 @@ describe('joint solver — red receipts carry fragments', () => {
     assert.match(out.report.error.message, /PASTE-READY fieldMap:/);
     assert.match(out.report.error.message, /read: 'hoverPopover'/);
   });
+  // Review batch (joint-solver #9): the CARD/anchorSel literal scans were
+  // single-quote-only, but the proposer (and JSON.stringify generally)
+  // emits DOUBLE quotes — the fallback could never see its own artifact's
+  // literal and silently degraded to the ARIA bootstrap on every propose.
+  it('double-quoted const CARD literal feeds the expand fragment (both quote styles)', async () => {
+    const stepsDbl = [{ id: 's1', name: 's', script: 'const CARD = "[role=article]:has(a)";\nreturn 1;', onSuccess: 'TERMINATE' }];
+    const outDbl = await run(
+      [{ content: 'body #' + Math.random().toString(36).slice(2, 8) + ' … See more', postTime: 'November 3, 2025' },
+       { content: 'body2 … See more', postTime: 'November 3, 2025' }],
+      { requirementText: '若有"展开"操作，点击展开加载完整正文。' }, null, stepsDbl);
+    assert.equal(outDbl.report.ok, false);
+    assert.match(outDbl.report.error.message, /REQUIREMENT_EXPAND_DROPPED/);
+    assert.match(outDbl.report.error.message, /PASTE-READY: await \$clickInList\("\[role=article\]:has\(a\)"/);
+    const stepsSgl = [{ id: 's1', name: 's', script: "const CARD = 'div.card';\nreturn 1;", onSuccess: 'TERMINATE' }];
+    const outSgl = await run(
+      [{ content: 'body3 #' + Math.random().toString(36).slice(2, 8) + ' … See more', postTime: 'November 3, 2025' },
+       { content: 'body4 … See more', postTime: 'November 3, 2025' }],
+      { requirementText: '若有"展开"操作，点击展开加载完整正文。' }, null, stepsSgl);
+    assert.match(outSgl.report.error.message, /PASTE-READY: await \$clickInList\("div\.card"/);
+  });
+  it('double-quoted anchorSel literal feeds the hoverPopover fragment (both quote styles)', async () => {
+    const stepsDbl = [{ id: 's1', name: 's', script: 'const cfg = { hover: { anchorSel: "a[href*=x] span" } };\nreturn 1;', onSuccess: 'TERMINATE' }];
+    const outDbl = await run(
+      [{ content: 'x #' + Math.random().toString(36).slice(2, 8), postTime: 'November 3, 2025' },
+       { content: 'y #' + Math.random().toString(36).slice(2, 8), postTime: '2 days ago' }],
+      { requirementText: '悬浮窗的时间戳信息作为发帖时间，提取帖子正文。', lastFullAbsolute: 'November 3, 2025' }, null, stepsDbl);
+    assert.equal(outDbl.report.ok, false);
+    assert.match(outDbl.report.error.message, /REQUIREMENT_TIME_SOURCE_DROPPED/);
+    assert.match(outDbl.report.error.message, /PASTE-READY fieldMap: postTime: \{ selector: "a\[href\*=x\] span"/);
+    const stepsSgl = [{ id: 's1', name: 's', script: "const cfg = { hover: { anchorSel: 'h3 a' } };\nreturn 1;", onSuccess: 'TERMINATE' }];
+    const outSgl = await run(
+      [{ content: 'x2 #' + Math.random().toString(36).slice(2, 8), postTime: 'November 3, 2025' },
+       { content: 'y2 #' + Math.random().toString(36).slice(2, 8), postTime: '2 days ago' }],
+      { requirementText: '悬浮窗的时间戳信息作为发帖时间，提取帖子正文。', lastFullAbsolute: 'November 3, 2025' }, null, stepsSgl);
+    assert.match(outSgl.report.error.message, /PASTE-READY fieldMap: postTime: \{ selector: "h3 a"/);
+  });
 });
 
 describe('joint solver — session-tools registration', () => {
@@ -298,13 +382,17 @@ describe('joint solver — red→propose nudge', () => {
   const fin = (s) => mk(JSON.stringify({ think: 'done', finish: { summary: s || 'x' } }));
   const SCHEMAS = { inputSchema: { type: 'object', properties: { k: { type: 'string' } } }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } };
   const STEP1 = { id: 's1', name: 's', onSuccess: 'TERMINATE', script: 'return 1;' };
-  function makeSession(replies, verifyResults) {
+  function makeSession(replies, verifyResults, opts) {
     let vi = 0, draft = null;
+    // Review batch (joint-solver #12): the probe-count stub is injectable so
+    // a rejection-path propose test can ground-reject (count 0 → the
+    // grounding gate refuses every selector claim).
+    const countVal = (opts && typeof opts.countVal === 'number') ? opts.countVal : 5;
     const { createSessionTools } = require('../lib/session-tools');
     const tools = createSessionTools({
       rail: { executeDsl: async () => ({}), pageState: async () => ({}), epoch: 0 },
       runVerify: async () => { const r = verifyResults[Math.min(vi, verifyResults.length - 1)]; vi += 1; return r; },
-      probeFactory: () => ({ count: async () => ({ count: 5 }), census: async () => ({ containerSel: '[role=article]', total: 5, sampled: [{}], lanes: { url: [{ selector: 'a', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }], time: [{ selector: 'span', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }], count: [], id: [], text: [{ selector: 'div', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['b'] }] }, hrefIdentity: [{ token: 'id', coverage: '5/5', samples: ['a1', 'b2'] }] }), sample: async () => ({}) }),
+      probeFactory: () => ({ count: async () => ({ count: countVal }), census: async () => ({ containerSel: '[role=article]', total: 5, sampled: [{}], lanes: { url: [{ selector: 'a', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }], time: [{ selector: 'span', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }], count: [], id: [], text: [{ selector: 'div', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['b'] }] }, hrefIdentity: [{ token: 'id', coverage: '5/5', samples: ['a1', 'b2'] }] }), sample: async () => ({}) }),
       getDraftService: () => draft, applyArtifact: (a) => { draft = { steps: a.steps, targetUrl: 'https://example.com/?k={{k}}', config: {} }; return Promise.resolve({ version: draft.steps.length }); },
       getTestInput: () => ({ k: 'ml' }), getOutputSchema: () => SCHEMAS.outputSchema, getSteps: () => (draft ? draft.steps : []),
       ioConfirmBridge: { request: (p) => Promise.resolve({ confirmed: true, testInput: p && p.testInput }) }
@@ -369,6 +457,74 @@ describe('joint solver — red→propose nudge', () => {
       .filter((t) => /RED → artifact\.propose/.test(t));
     assert.ok(notes.length <= 1);
   });
+  // Review batch (joint-solver #10): the nudge used to arm on EVERY red —
+  // but its text promises fragments/evidence the gate families carry. A red
+  // like MISSING_URL_PARAM has no fragment to paste; the note is noise that
+  // trains the model to ignore it. Arming is bounded to the
+  // fragment-carrying families.
+  it('a red outside the fragment-carrying families does NOT arm the nudge', async () => {
+    const RED_OTHER = { events: [], report: { ok: false, error: { message: 'MISSING_URL_PARAM: testInput missing for {{k}}' }, detectors: {} }, raw: {} };
+    const session = makeSession([
+      env('io.confirm', Object.assign({ testInput: { keyword: 'ml', count: 3 } }, SCHEMAS)),
+      env('service.update', { steps: [STEP1] }),
+      env('verify.run', {}),
+      fin('done')
+    ], [RED_OTHER]);
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const notes = session.state().session.transcript.filter((t) => t.kind === 'system').map((t) => t.text)
+      .filter((t) => /RED → artifact\.propose/.test(t));
+    assert.equal(notes.length, 0, 'MISSING_URL_PARAM carries no fragments — no routing nudge');
+  });
+  it('the nudge text names copy/paste-ready evidence, not fragments alone', async () => {
+    const session = makeSession([
+      env('io.confirm', Object.assign({ testInput: { keyword: 'ml', count: 3 } }, SCHEMAS)),
+      env('service.update', { steps: [STEP1] }),
+      env('verify.run', {}),
+      fin('done')
+    ], [RED]);
+    await session.run();
+    const note = session.state().session.transcript.filter((t) => t.kind === 'system').map((t) => t.text)
+      .find((t) => /RED → artifact\.propose/.test(t));
+    assert.ok(note, 'family red arms the nudge');
+    assert.match(note, /copy\/paste-ready evidence included/);
+  });
+  // Review batch (joint-solver #12): the merged propose receipt's `next` was
+  // the handler's pass-through ('engine applies + verify.run') on BOTH
+  // branches — a grounding-rejected propose told the model to verify an
+  // artifact that was never applied.
+  it('rejection-path propose: next names the FIX, not verify.run (grounding rejects when probes count 0)', async () => {
+    const session = makeSession([
+      env('io.confirm', Object.assign({ testInput: { keyword: 'ml', count: 3 } }, SCHEMAS)),
+      env('artifact.propose', {}),
+      fin('done')
+    ], [RED], { countVal: 0 });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const proposeResult = session.state().session.transcript
+      .filter((t) => t.kind === 'tool' && t.name === 'artifact.propose')
+      .map((t) => t.result).pop();
+    assert.ok(proposeResult && proposeResult.applied === false, 'grounding rejection reports applied:false');
+    assert.ok(proposeResult.updateReceipt && proposeResult.updateReceipt.grounding === 'rejected',
+      'the update receipt carries the grounding rejection');
+    assert.match(proposeResult.next, /fix the rejection/);
+    assert.match(proposeResult.next, /artifact\.propose again/);
+    assert.doesNotMatch(proposeResult.next, /verify\.run/);
+  });
+  it('applied-path propose: next stays verify.run', async () => {
+    const session = makeSession([
+      env('io.confirm', Object.assign({ testInput: { keyword: 'ml', count: 3 } }, SCHEMAS)),
+      env('artifact.propose', {}),
+      fin('done')
+    ], [RED]);
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const proposeResult = session.state().session.transcript
+      .filter((t) => t.kind === 'tool' && t.name === 'artifact.propose')
+      .map((t) => t.result).pop();
+    assert.ok(proposeResult && proposeResult.applied === true);
+    assert.match(proposeResult.next, /^verify\.run$/);
+  });
 });
 
 describe('joint solver — universality red line', () => {
@@ -377,6 +533,34 @@ describe('joint solver — universality red line', () => {
     const src = fs.readFileSync(require('path').join(__dirname, '..', 'lib', 'artifact-proposer.js'), 'utf8');
     for (const v of ['facebook', 'fbid', 'fbcdn', 'twitter', 'instagram']) {
       assert.doesNotMatch(src, new RegExp(v, 'i'), 'vendor token: ' + v);
+    }
+  });
+});
+
+// Review batch (joint-solver #5): the requirement-clause lexicon is
+// SINGLE-SOURCED. verify-runner used to carry character-identical inline
+// copies of the expand/exclusion/hover clause regexes at its three gate
+// sites — copies drift (one already had). Lockstep: the proposer exports
+// CLAUSE_RES; verify-runner must reference it and carry no lexicon of its
+// own.
+describe('joint solver — clause lexicon single-sourcing (lockstep)', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const apSrc = () => fs.readFileSync(path.join(__dirname, '..', 'lib', 'artifact-proposer.js'), 'utf8');
+  const vrSrc = () => fs.readFileSync(path.join(__dirname, '..', 'lib', 'verify-runner.js'), 'utf8');
+  it('the proposer exports CLAUSE_RES covering every clause family it parses', () => {
+    const AP2 = require('../lib/artifact-proposer');
+    assert.ok(AP2.CLAUSE_RES && typeof AP2.CLAUSE_RES === 'object', 'CLAUSE_RES exported');
+    for (const k of ['scroll', 'expand', 'hover', 'exclSeg']) {
+      assert.ok(AP2.CLAUSE_RES[k] && typeof AP2.CLAUSE_RES[k].test === 'function', 'family ' + k + ' carries a regex');
+    }
+    assert.match(apSrc(), /CLAUSE_RES/);
+  });
+  it('verify-runner references the shared export and carries NO inline clause lexicon', () => {
+    const vr = vrSrc();
+    assert.ok(vr.indexOf('AP246.CLAUSE_RES') > -1, 'verify-runner resolves the proposer export');
+    for (const inline of ['剔除|排除|过滤', '悬浮窗|悬浮|悬停', 'see\\s*more|expand|read\\s*more']) {
+      assert.ok(vr.indexOf(inline) === -1, 'inline clause lexicon copy still present: ' + inline);
     }
   });
 });

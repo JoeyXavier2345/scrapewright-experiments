@@ -147,8 +147,11 @@
       const steps246 = (service && Array.isArray(service.steps)) ? service.steps : [];
       for (const st246 of steps246) {
         if (!st246 || typeof st246.script !== 'string') continue;
-        const m246 = st246.script.match(/const CARD = '([^']+)'/);
-        if (m246) return m246[1];
+        // Review batch (joint-solver #9): BOTH quote styles — the proposer
+        // (and JSON.stringify generally) emits DOUBLE-quoted literals, so
+        // the old single-quote-only scan never saw its own artifact's CARD.
+        const m246 = st246.script.match(/const CARD = (['"])([^'"]+)\1/);
+        if (m246) return m246[2];
       }
     } catch (e246st) { /* best-effort */ }
     return '[role=article]';
@@ -598,6 +601,21 @@
     // require(). Every use is guarded — an unresolved proposer means the red
     // message ships WITHOUT its fragment, never without the message.
     const AP246 = resolveLib('./artifact-proposer', '__artifactProposerModuleMarker__');
+    // Review batch (joint-solver #5): the requirement-clause lexicon is
+    // SINGLE-SOURCED in artifact-proposer (its CLAUSE_RES export — the same
+    // RE_*_246 regexes parseRequirementClauses tests). The requirement gates
+    // below (REQUIREMENT_EXPAND_DROPPED / REQUIREMENT_EXCLUSION_LEAKED /
+    // REQUIREMENT_TIME_SOURCE_DROPPED) used to carry near-identical inline
+    // copies here; the exclusion one had already drifted (filter\s+out vs
+    // the proposer's filter\s*out). Guarded: an unresolved proposer skips
+    // the clause test — same degradation contract as the fragment renderers
+    // above (the red message is the contract; fragments and clause intent
+    // are additive layers that must never break the report).
+    const CLAUSE_RES_246 = (AP246 && AP246.CLAUSE_RES &&
+      AP246.CLAUSE_RES.expand && typeof AP246.CLAUSE_RES.expand.test === 'function' &&
+      AP246.CLAUSE_RES.exclSeg && typeof AP246.CLAUSE_RES.exclSeg.test === 'function' &&
+      AP246.CLAUSE_RES.hover && typeof AP246.CLAUSE_RES.hover.test === 'function')
+      ? AP246.CLAUSE_RES : null;
     const log = typeof d.log === 'function' ? d.log : function () {};
     const onEventCb = typeof d.onEvent === 'function' ? d.onEvent : function () {};
     const ensureLock = typeof d.ensureLock === 'function' ? d.ensureLock : async function () {};
@@ -1796,7 +1814,7 @@
             const reqText236 = (o.sessionEvidence && typeof o.sessionEvidence.requirementText === 'string')
               ? o.sessionEvidence.requirementText : null;
             if (smu && reqText236 && !error) {
-              const expandIntent236 = /展开|see\s*more|expand|read\s*more|显示更多|查看更多/i.test(reqText236);
+              const expandIntent236 = CLAUSE_RES_246 ? CLAUSE_RES_246.expand.test(reqText236) : false;
               const clickStep236 = (service && Array.isArray(service.steps) ? service.steps : [])
                 .some((st) => st && typeof st.script === 'string' && /\$(click|clickInList)\s*\(/.test(typeof WU.stripJSComments === 'function' ? WU.stripJSComments(st.script) : st.script));
               if (expandIntent236 && !clickStep236) {
@@ -1923,7 +1941,7 @@
             // against near-exact field values: when the excluded marker ships
             // AS a value, the discrimination was inverted, not imperfect.
             const exclSegs242 = reqText237.split(/[。；;.\n]/)
-              .filter((seg242) => seg242 && /剔除|排除|过滤|不含|去掉|exclude|filter\s+out|remove/i.test(seg242));
+              .filter((seg242) => seg242 && (CLAUSE_RES_246 ? CLAUSE_RES_246.exclSeg.test(seg242) : false));
             const STOP242 = new Set(['exclude', 'filter', 'out', 'remove', 'and', 'or', 'the', 'a', 'an', 'of', 'with', 'without', 'entries', 'entry', 'items', 'item', 'posts', 'post', 'cards', 'card', 'dom']);
             const markers242 = [];
             for (const seg242 of exclSegs242) {
@@ -2730,7 +2748,7 @@
         try {
           const reqText237b = (o.sessionEvidence && typeof o.sessionEvidence.requirementText === 'string')
             ? o.sessionEvidence.requirementText : null;
-          if (reqText237b && /悬浮窗|悬浮|悬停|hover|tooltip|popover/i.test(reqText237b)
+          if (reqText237b && (CLAUSE_RES_246 ? CLAUSE_RES_246.hover.test(reqText237b) : false)
             && /时间戳|发帖时间|时间|日期|timestamp|date/i.test(reqText237b)) {
             let capturedAbs237 = null;
             for (const s of allSamples) {
@@ -2799,8 +2817,10 @@
                     const steps237b = (service && Array.isArray(service.steps)) ? service.steps : [];
                     for (const st237 of steps237b) {
                       if (!st237 || typeof st237.script !== 'string') continue;
-                      const m237 = st237.script.match(/anchorSel:\s*'([^']+)'/);
-                      if (m237) { anchor237 = m237[1]; break; }
+                      // Review batch (joint-solver #9): both quote styles —
+                      // the anchorSel literal may be double-quoted.
+                      const m237 = st237.script.match(/anchorSel:\s*(['"])([^'"]+)\1/);
+                      if (m237) { anchor237 = m237[2]; break; }
                     }
                     if (!anchor237) anchor237 = cardSel246(events, service);
                     paste237b = ' PASTE-READY fieldMap: ' + AP246.renderHoverPopoverFragment(c.field, anchor237);

@@ -1725,6 +1725,13 @@
           applied: applied246,
           version: (applied246 && typeof updateReceipt.version === 'number') ? updateReceipt.version : null,
           updateReceipt: updateReceipt,
+          // Review batch (joint-solver #12): branch-aware next. The old
+          // pass-through said 'engine applies + verify.run' on BOTH branches
+          // — a grounding-rejected propose told the model to verify an
+          // artifact that was never applied.
+          next: applied246
+            ? 'verify.run'
+            : 'fix the rejection (see updateReceipt) or address its teaching, then call artifact.propose again',
           steps: undefined
         });
         delete merged246.steps;
@@ -1894,7 +1901,7 @@
           // (whichever comes first); a second red re-arms it once more.
           if (state.redNudgePending246) {
             state.transcript.push({ kind: 'system', text:
-              'RED → artifact.propose: the red\'s evidence is now in the receipt (paste-ready fragments included). Call artifact.propose {} — it re-sweeps with the new evidence (~60-120s) and applies through the same gates, regenerating the artifact from measured lanes — or apply the receipt fragment surgically. Hand-authoring from scratch re-pays the discovery cost.' });
+              'RED → artifact.propose: the red\'s evidence is now in the receipt (copy/paste-ready evidence included). Call artifact.propose {} — it re-sweeps with the new evidence (~60-120s) and applies through the same gates, regenerating the artifact from measured lanes — or apply the receipt fragment surgically. Hand-authoring from scratch re-pays the discovery cost.' });
             state.redNudgePending246 = null;
           }
 
@@ -2447,15 +2454,24 @@
             // routing nudge. A RED verify REPORT (result.ok === false — the
             // 'ok'-keyed report shape, not a bare dispatch failure like
             // {error:'no artifact yet'}) means the requirement gates just
-            // ran and the receipt now carries paste-ready fragments — the
-            // next artifact move is artifact.propose, not hand-authoring
+            // ran and the receipt now carries copy/paste-ready evidence —
+            // the next artifact move is artifact.propose, not hand-authoring
             // from scratch. One note per red episode: discharged at the
             // next turn-top injection point, or the moment the joint
             // solver dispatches, whichever comes first. A GREEN verify
             // ends the episode (the routing question is answered).
+            // Review batch (joint-solver #10): arming is BOUNDED to the
+            // fragment/evidence-carrying error families — REQUIREMENT_*
+            // gates ship PASTE-READY fragments, FIELD_MATCH_ZERO /
+            // EMPTY_EXTRACTION ship COPY-READY containers and field
+            // censuses. Every other red (MISSING_URL_PARAM, POLL_EXHAUSTED,
+            // RELAY_FAILED, …) has nothing to paste; nudging there trains
+            // the model to ignore the note.
             if (result && typeof result === 'object' && !Array.isArray(result) && result.ok === false) {
-              state.redNudgePending246 = (result.error && result.error.message)
-                ? String(result.error.message).slice(0, 600) : '(red verify)';
+              const nudgeMsg246 = (result.error && result.error.message)
+                ? String(result.error.message) : '';
+              state.redNudgePending246 = /^REQUIREMENT_|FIELD_MATCH_ZERO|EMPTY_EXTRACTION/.test(nudgeMsg246)
+                ? nudgeMsg246.slice(0, 600) : null;
             } else if (result && typeof result === 'object' && !Array.isArray(result) && result.ok === true) {
               state.redNudgePending246 = null;
             }

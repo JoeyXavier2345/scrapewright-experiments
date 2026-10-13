@@ -14,6 +14,13 @@ const RE_EXPAND_246 = /展开|see\s*more|expand|read\s*more|显示更多|查看�
 const RE_HOVER_246 = /悬浮窗|悬浮|悬停|hover|tooltip|popover/i;
 const RE_EXCL_SEG_246 = /剔除|排除|过滤|不含|去掉|exclude|filter\s*out|remove/i;
 const STOP_TOKENS_246 = new Set(['exclude', 'filter', 'out', 'remove', 'and', 'or', 'the', 'a', 'an', 'of', 'with', 'without', 'entries', 'entry', 'items', 'item', 'posts', 'post', 'cards', 'card', 'dom']);
+// Review batch (joint-solver #5): single-sourced clause lexicon. The
+// verify-runner requirement gates (REQUIREMENT_EXPAND_DROPPED,
+// REQUIREMENT_EXCLUSION_LEAKED, REQUIREMENT_TIME_SOURCE_DROPPED) test the
+// SAME clause families through this export — verify-runner used to carry
+// near-identical inline copies (the exclusion one had already drifted to
+// filter\s+out) and every future lexicon edit would drift again.
+const CLAUSE_RES_246 = { scroll: RE_SCROLL_246, expand: RE_EXPAND_246, hover: RE_HOVER_246, exclSeg: RE_EXCL_SEG_246 };
 
 function parseRequirementClauses(requirementText) {
   const req = String(requirementText || '');
@@ -96,7 +103,12 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   if (clauses.scroll) {
     steps.push({
       id: 'collect', name: 'scroll until enough cards', maxIterations: 15,
-      script: 'const CARD = ' + JSON.stringify(CARD) + ';\nconst r = await $collectUntil(CARD, { targetCount: __input__.count || 5, idAttr: \'href\' });\nreturn { done: true, count: r.count, certified: r.certified || null };',
+      // Review batch (joint-solver #7): read the receipt contract
+      // $collectUntil actually returns — {collected, satisfied,
+      // exhaustion:{certified,evidence}} — never r.count/r.certified (keys
+      // the primitive does not expose; the old reads shipped undefined
+      // count/certified into the step result forever).
+      script: 'const CARD = ' + JSON.stringify(CARD) + ';\nconst r = await $collectUntil(CARD, { targetCount: __input__.count || 5, idAttr: \'href\' });\nreturn { done: true, count: r.collected, certified: (r.exhaustion && r.exhaustion.certified) || null, satisfied: r.satisfied || null };',
       onSuccess: clauses.expand ? 'expand' : 'extract', onFailure: 'extract'
     });
   }
@@ -223,8 +235,23 @@ async function proposeArtifact(ctx) {
     try { census = await probes.census({ containerSel: containerSel, samples: 5, hover: true }); }
     catch (e) { census = { error: String((e && e.message) || e) }; }
   }
+  // Review batch (joint-solver #13): a census hop that FAILED (threw, or
+  // returned an error-bearing object) used to flow into synthesis as
+  // pseudo-evidence — and being truthy it SUPPRESSED the no-census unfilled
+  // disclosure, so the receipt looked fully sourced while every lane
+  // silently fell back to web-generic ARIA conventions. Null it (synthesis
+  // degrades to the honest no-census path) and keep the digest for an
+  // explicit unfilled entry below.
+  let censusErrorDigest = null;
+  if (census && typeof census === 'object' && typeof census.error === 'string' && census.error) {
+    censusErrorDigest = census.error;
+    census = null;
+  }
   const pack = { census: census, currentArtifact: (ctx && ctx.currentArtifact) || null };
   const synth = synthesizeFromEvidence(pack, (ctx && ctx.requirementText) || '', (ctx && ctx.outputSchema) || null);
+  if (censusErrorDigest) {
+    synth.unfilled.push({ slot: 'census', reason: 'census hop failed: ' + censusErrorDigest.slice(0, 140) + ' — selectors fell back to web-generic ARIA conventions; the failing probe error above is the gap' });
+  }
   if (!(ctx && typeof ctx.applyArtifact === 'function')) {
     return {
       applied: 'engine-pending',
@@ -260,7 +287,8 @@ async function proposeArtifact(ctx) {
 const JT_API_246 = {
   parseRequirementClauses, synthesizeFromEvidence, proposeArtifact,
   renderExpandStepFragment, renderHoverPopoverFragment, renderExclusionGuardFragment,
-  BOOTSTRAP_CONTAINERS: BOOTSTRAP_CONTAINERS_246
+  BOOTSTRAP_CONTAINERS: BOOTSTRAP_CONTAINERS_246,
+  CLAUSE_RES: CLAUSE_RES_246
 };
 // Dual export (probe-tools pattern): Node tests use require, the wizard
 // page loads this as a plain script tag — session-tools.js resolves it via
