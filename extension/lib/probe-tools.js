@@ -24,6 +24,10 @@
     const executeDsl = deps && typeof deps.executeDsl === 'function' ? deps.executeDsl : null;
     const observationLog = deps && deps.observationLog ? deps.observationLog : null;
     const cleanHtmlFn = deps && typeof deps.cleanHtml === 'function' ? deps.cleanHtml : null;
+    // 254th review (#3): injectable clock for the census mount wall —
+    // tests drive a fake clock so the aggregate cap is exercised
+    // deterministically (no real sleeps). Production uses Date.now.
+    const nowFn = deps && typeof deps.now === 'function' ? deps.now : Date.now;
     if (!executeDsl) throw new Error('createProbeTools requires an executeDsl(snippet) function');
 
     // Page-cleaning hook for probe.sample clean:true — strips the noise the
@@ -1245,11 +1249,24 @@
       // scrollUntil's maxRounds, never a rejection. 250th round: the cap
       // rises 3→5 — the 249th session's recommendation headers spanned
       // multiple viewports (the 243rd showed 3→12 only with deep scroll),
-      // and the sweep now passes scrollRounds:5 (5 hops x (900px scroll +
-      // 900ms settle + count) ≈ 9-12s worst case, inside the 120s sweep
-      // budget).
+      // and the sweep now passes scrollRounds:5. 254th review (#3): the
+      // loop's cost is NOT hop-count arithmetic — the 250th-round loop is
+      // persistent, so EVERY growth hop re-runs the full population read
+      // (1 $count + up to 5 sampled $extractList legs, each bounded by
+      // timeoutMs). The aggregate is bounded by mountWallMs below (default
+      // 60000; the sweep passes its remaining budget), checked before each
+      // hop AND before each growth re-read.
       const scrollRounds = (typeof a.scrollRounds === 'number' && a.scrollRounds > 0)
         ? Math.min(5, Math.floor(a.scrollRounds)) : 0;
+      // 254th review (#3): aggregate mount wall budget, clamped
+      // 5000-120000 (never a rejection — invalid values take the 60s
+      // default). 5 hops × (900ms settle + count) fits well under it on
+      // healthy pages; pathological feeds break out with
+      // mount.stoppedEarly:'wall budget' instead of eating the caller's
+      // whole budget.
+      const mountWallMs = (typeof a.mountWallMs === 'number' && isFinite(a.mountWallMs) && a.mountWallMs > 0)
+        ? Math.min(120000, Math.max(5000, Math.floor(a.mountWallMs)))
+        : 60000;
       const fieldMap = { __c_html: { attr: 'outerHTML' } };
       // 247th round (FIX A): the population read (pre-count -> sampled
       // $extractList -> parse -> lanes -> href diff) extracted into a
@@ -1380,11 +1397,27 @@
          (p.lanes && Array.isArray(p.lanes.count) && p.lanes.count.length > 0));
       let mount = null;
       if (scrollRounds > 0 && (identityMissing_248 || familiesMissing_248)) {
+        // 254th review (#3): the mount phase's AGGREGATE wall clock. The
+        // 250th-round loop is persistent — every growth hop re-runs the
+        // FULL population read (1 $count + up to 5 sampled $extractList
+        // legs, each bounded by timeoutMs), so hop-only arithmetic
+        // ("5 hops ≈ 9-12s") ignored the reads. Every hop AND every growth
+        // re-read is wall-gated; a breach breaks with
+        // mount.stoppedEarly:'wall budget' (the census still returns on
+        // whatever population is current).
+        const tMount = nowFn();
+        const overWall = () => (nowFn() - tMount) > mountWallMs;
         const countBefore = pop.total;
         let countAfter = countBefore;
         let rounds = 0;
         let reCensused = false;
         let goalMet = false;
+        let stoppedEarly = null;
+        // 254th review (#12): a failed hop / failed re-read is disclosed on
+        // the mount receipt (140-char digest), never a crash — the census
+        // survives on the current population either way.
+        let lastHopError = null;
+        let reReadError = null;
         const roundSnippet =
           'const __c0 = await $count(' + JSON.stringify(containerSel) + ');\n' +
           'await $scrollBy(900);\n' +
@@ -1392,10 +1425,15 @@
           'const __c1 = await $count(' + JSON.stringify(containerSel) + ');\n' +
           'return { c0: __c0, c1: __c1 };';
         for (let i = 0; i < scrollRounds; i++) {
+          if (overWall()) { stoppedEarly = 'wall budget'; break; }
           let r = null;
           try { r = await runSnippet(roundSnippet, timeoutMs); }
           catch (eHop) { r = { error: String((eHop && eHop.message) || eHop) }; }
-          if (r && typeof r.error === 'string') break; // a failed hop ends the phase; the census still returns
+          if (r && typeof r.error === 'string') {
+            // a failed hop ends the phase (disclosed); the census still returns
+            lastHopError = String(r.error).slice(0, 140);
+            break;
+          }
           rounds += 1;
           const c0 = (r && typeof r.c0 === 'number') ? r.c0 : countAfter;
           countAfter = (r && typeof r.c1 === 'number') ? r.c1 : countAfter;
@@ -1409,12 +1447,18 @@
             } catch (eObs) { /* best-effort receipt */ }
           }
           if (countAfter > c0) {
+            if (overWall()) { stoppedEarly = 'wall budget'; break; }
             // Growth: re-read the census, then re-evaluate the trigger
             // against the FRESH read. A satisfying read ends the loop
             // (goal met); a still-unsatisfying one (or a failed re-read —
-            // an evidence gap) keeps hopping within the bound.
-            const grown = await readPopulation();
-            if (grown && !grown.zero && typeof grown.error !== 'string') {
+            // an evidence gap, disclosed 254th #12) keeps hopping within
+            // the bound.
+            let grown = null;
+            try { grown = await readPopulation(); }
+            catch (eReRead) { grown = { error: String((eReRead && eReRead.message) || eReRead) }; }
+            if (grown && typeof grown.error === 'string') {
+              reReadError = String(grown.error).slice(0, 140);
+            } else if (grown && !grown.zero) {
               pop = grown;
               reCensused = true;
               if (mountGoalMet_250(grown)) { goalMet = true; break; }
@@ -1425,6 +1469,9 @@
           // organic posts only appeared past the recommendation strip.
         }
         mount = { rounds: rounds, countBefore: countBefore, countAfter: countAfter, reCensused: reCensused, goalMet: goalMet };
+        if (stoppedEarly) mount.stoppedEarly = stoppedEarly;
+        if (lastHopError) mount.lastHopError = lastHopError;
+        if (reReadError) mount.reReadError = reReadError;
       }
       const total = pop.total;
       const indices = pop.indices;

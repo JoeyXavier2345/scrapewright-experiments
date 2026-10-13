@@ -40,15 +40,23 @@
         at: typeof e.at === 'number' ? e.at : 0,
         epoch: (typeof e.epoch === 'number') ? e.epoch : null,
         // Session-memory write path (2026-10-13 spec §3.1): structured
-        // per-selector outcomes [{selector, matched}] — the raw material of
-        // the SELECTOR LEDGER. Whitelist-validated row-wise: a polluted row
-        // is dropped on its own, never takes the entry down, and old seeds
-        // without the field pass through as []. Zeros are VALID rows — a
-        // family measured dead is as valuable as one measured alive.
+        // per-selector outcomes [{selector, matched, scope?}] — the raw
+        // material of the SELECTOR LEDGER. Whitelist-validated row-wise: a
+        // polluted row is dropped on its own, never takes the entry down,
+        // and old seeds without the field pass through as []. Zeros are
+        // VALID rows — a family measured dead is as valuable as one
+        // measured alive. 254th review (#7): the 'pageWide' scope tag (the
+        // verify field census's page-wide count) survives the whitelist —
+        // the ledger renderer uses it to caveat PROVEN rows whose count is
+        // a page-wide fact, not a card-scoped binding.
         outcomes: Array.isArray(e.outcomes)
           ? e.outcomes
               .filter(o => o && typeof o === 'object' && typeof o.selector === 'string' && o.selector.length > 0 && typeof o.matched === 'number' && isFinite(o.matched) && o.matched >= 0)
-              .map(o => ({ selector: o.selector, matched: Math.floor(o.matched) }))
+              .map(o => {
+                const row = { selector: o.selector, matched: Math.floor(o.matched) };
+                if (o.scope === 'pageWide') row.scope = 'pageWide';
+                return row;
+              })
           : []
       };
     }

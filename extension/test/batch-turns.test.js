@@ -348,5 +348,138 @@ describe('batch turns — prompt surface', () => {
     assert.match(String(batchLine.returns), /probe\.\* except probe\.scroll/, 'the catalog names the deliberate probe.scroll exclusion');
     assert.match(String(batchLine.returns), /write\/park\/verify never batch/);
     assert.match(String(batchLine.returns), /rejected atomically/);
+    // 254th review (#6): the line must say TURN SHAPE — a model reading it
+    // as a tool spec put "batch" in the tool slot.
+    assert.match(String(batchLine.args), /TURN SHAPE/i, 'the catalog marks batch as a turn-level shape, not a tool');
+  });
+});
+
+// 254th review batch (#4 + #6 + #9 + #10): member-loop interrupt checks,
+// the dispatchTool batch backstop, per-member scaled receipt caps, and the
+// interaction-snippet guard.
+describe('batch turns — 254th review hardening', () => {
+  it('#4: abort between members — later members skipped, receipt names them', async () => {
+    let sessionRef = null;
+    const { session, calls } = makeSession(
+      [batchReply([member('probe.count', { sel: 'div' }), member('page.settle'), member('probe.text', { sel: 'p' })]), fin()],
+      {
+        'probe.count': async () => { if (sessionRef) sessionRef.abort('test'); return { count: 1 }; },
+        'page.settle': async () => ({ settled: true }),
+        'probe.text': async () => ({ total: 2 })
+      }
+    );
+    sessionRef = session;
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'aborted', 'the turn-top guard still owns the stop');
+    assert.deepEqual(calls.map((c) => c.tool), ['probe.count'], 'members 2-3 never dispatched');
+    const entry = toolEntries(session)[0];
+    assert.equal(entry.result.interrupted, 'aborted');
+    assert.deepEqual(entry.result.skipped, ['page.settle', 'probe.text'], 'the receipt names the skipped member tools');
+    assert.equal(entry.result.batch.length, 1, 'only member 1 has a receipt');
+    assert.equal(entry.result.memberMs.length, 1, 'memberMs stays aligned with the DISPATCHED members');
+  });
+
+  it('#4: wallClock between members — a member that exhausts the wall budget stops the loop', async () => {
+    const sleep = (ms) => async () => { await new Promise((r) => setTimeout(r, ms)); return { ok: true }; };
+    const { session, calls } = makeSession(
+      [batchReply([member('probe.count', { sel: 'a' }), member('page.settle'), member('probe.text', { sel: 'p' })]), fin()],
+      { 'probe.count': sleep(60), 'page.settle': sleep(10), 'probe.text': sleep(10) },
+      null,
+      { budgets: { wallClockMs: 50 } }
+    );
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'wallClock', 'the turn-top wall guard owns the stop');
+    assert.deepEqual(calls.map((c) => c.tool), ['probe.count'], 'member 1 alone burned the wall — members 2-3 skipped');
+    const entry = toolEntries(session)[0];
+    assert.equal(entry.result.interrupted, 'wallClock');
+    assert.deepEqual(entry.result.skipped, ['page.settle', 'probe.text']);
+  });
+
+  it('#6: {"tool":"batch"} gets the TURN-LEVEL shape backstop, not unknown-tool', async () => {
+    const raw = mk(JSON.stringify({ think: 't', tool: 'batch', args: { tools: [member('probe.count')] } }));
+    const { session, calls } = makeSession([raw, fin()], {});
+    await session.run();
+    assert.equal(calls.length, 0);
+    const entry = toolEntries(session)[0];
+    assert.ok(entry && entry.name === 'batch', 'the dispatch is recorded under the attempted name');
+    assert.equal(entry.result.error,
+      'batch is a TURN-LEVEL shape, not a tool: send {"tools":[{tool,args},…]} at the top level of the turn JSON (2-5 read-only probes), exactly one of tool/tools/finish');
+  });
+
+  it('#6: the tools+finish ambiguous-action nudge names the "tools" batch shape', async () => {
+    const both = mk(JSON.stringify({ think: 't', tools: [member('page.settle')], finish: { summary: 'x' } }));
+    const { session } = makeSession([both, fin()], { 'page.settle': async () => ({ settled: true }) });
+    await session.run();
+    const nudge = systemTexts(session).find((t) => /PROTOCOL VIOLATION \(ambiguous-action/.test(t));
+    assert.ok(nudge, 'the ambiguous-action repair nudge fired');
+    assert.match(nudge, /"tools"/, 'the nudge teaches the tools batch as a legal single action');
+  });
+
+  it('#9: per-member receipt caps scale with batch size — every member keeps its key fields', async () => {
+    const big = (i) => ({ total: i, note: 'x'.repeat(11000), marker: 'lane-' + i });
+    const five = [0, 1, 2, 3, 4].map((i) => member('probe.census', { containerSel: 'div.c' + i }));
+    const { session } = makeSession([batchReply(five), fin()], {
+      'probe.census': async (a) => big(Number(String(a.containerSel).slice(-1)))
+    });
+    await session.run();
+    const entry = toolEntries(session)[0];
+    const s = entry.summary;
+    // scaled total = 8000 + 4*2000 = 16000; per member min(12000, 3200) = 3200
+    assert.ok(s.length <= 16000 + 400, 'summary within the scaled cap + label slack — got ' + s.length);
+    for (let i = 0; i < 5; i++) {
+      assert.ok(s.indexOf('"total":' + i) !== -1, 'member ' + i + ' keeps its decision key (total:' + i + ')');
+      assert.ok(s.indexOf('lane-' + i) !== -1, 'member ' + i + ' keeps its marker field');
+    }
+    assert.match(s, /chars elided/, 'the oversized note discloses its elision per member');
+    assert.ok(!/\[\+\d+ more items elided\]/.test(s), 'no member fully elided');
+  });
+
+  it('#10: a snippet member that mutates the page rejects the batch atomically, naming the op', async () => {
+    const { session, calls } = makeSession(
+      [batchReply([
+        member('probe.count', { sel: 'div' }),
+        member('probe.snippet', { code: 'await $click("button.go"); return 1;' })
+      ]), fin()],
+      { 'probe.count': async () => ({ count: 1 }), 'probe.snippet': async () => ({ ok: 1 }) }
+    );
+    await session.run();
+    assert.equal(calls.length, 0, 'NOTHING executes — the read-only member included');
+    const entry = toolEntries(session)[0];
+    assert.equal(entry.result.error,
+      'batch rejected: snippet member mutates the page ($click) — interaction snippets run as single calls so later members read an unmutated page; disclose order-dependence by running singly');
+    assert.deepEqual(entry.result.mutatingOps, ['$click']);
+    assert.equal(entry.ok, false);
+  });
+
+  it('#10: read-only snippet members still batch (the capability stays)', async () => {
+    const { session, calls } = makeSession(
+      [batchReply([
+        member('probe.snippet', { code: 'return await $count("div.card");' }),
+        member('page.settle')
+      ]), fin()],
+      {
+        'probe.snippet': async () => ({ count: 7 }),
+        'page.settle': async () => ({ settled: true })
+      }
+    );
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.deepEqual(calls.map((c) => c.tool), ['probe.snippet', 'page.settle'], 'both members dispatched');
+    const entry = toolEntries(session)[0];
+    assert.ok(!entry.result.error, 'no rejection');
+    // $clickInList must not false-positive on a bare $click pattern match
+    assert.ok(!(entry.result.mutatingOps), 'no mutating ops flagged');
+  });
+
+  it('#10: $clickInList is detected as its own op (no $click/$clickInList confusion)', async () => {
+    const { session, calls } = makeSession(
+      [batchReply([member('probe.snippet', { code: 'await $clickInList("div.c", "button"); return 1;' })]), fin()],
+      { 'probe.snippet': async () => ({ ok: 1 }) }
+    );
+    await session.run();
+    assert.equal(calls.length, 0);
+    const entry = toolEntries(session)[0];
+    assert.deepEqual(entry.result.mutatingOps, ['$clickInList'], 'the FULL op name is flagged');
+    assert.ok(entry.result.error.indexOf('$clickInList') !== -1);
   });
 });

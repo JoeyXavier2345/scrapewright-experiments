@@ -700,7 +700,15 @@ describe('budgets and breakers', () => {
         'service.update': async () => ({ version: 1 }),
         'probe.count': async () => ({ count: 1 })
       },
-      budgets: { maxTurns: 8 }   // buckets at turns 4 / 6 / 7; artifact lands turn 1
+      // 254th review (#9) fixture migration: the finalize trigger is now
+      // clamped at 75% of maxTurns, so budgets <= 20 TIE the author and
+      // finalize thresholds — and the single-highest-advisory design
+      // (seventh-log J1) then pushes only the finalize text. The old
+      // maxTurns:8 fixture (finalize 3 < author 6) fired finalize FIRST —
+      // the inversion the clamp removes. maxTurns:24 keeps the buckets
+      // separate (half 12 / author 18 / finalize 19) so the author
+      // advisory's hasArtifact wording is observable; artifact lands turn 1.
+      budgets: { maxTurns: 24 }
     });
     await session.run();
     const st = session.state().session;

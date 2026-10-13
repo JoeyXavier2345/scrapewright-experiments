@@ -602,12 +602,16 @@ async function proposeArtifact(ctx) {
     // spanned multiple viewports (the 243rd showed 3→12 only with deep
     // scroll), and the mount loop is now persistent (it keeps hopping
     // while the trigger holds), so depth is what finds the organic
-    // population. 5 hops x (900px scroll + 900ms settle + count) ≈ 9-12s
-    // worst case — still inside the 120s sweep budget that gates the hop.
+    // population. 254th review (#3): the mount wall is NOT hop-count
+    // arithmetic — every growth hop re-runs the full population read
+    // ($count + up to 5 sampled $extractList legs, each bounded by
+    // timeoutMs), so the sweep passes its REMAINING budget as mountWallMs
+    // and the phase can never outrun the sweep.
     const censusArgs = { containerSel: containerSel, samples: 5, hover: true, scrollRounds: 5 };
     const remaining = budget.totalMs - elapsedMs();
     if (typeof remaining === 'number' && remaining > 0) {
       censusArgs.timeoutMs = Math.max(budget.censusMinMs, remaining - 10000);
+      censusArgs.mountWallMs = remaining;
     }
     try { census = await probes.census(censusArgs); }
     catch (e) { census = { error: String((e && e.message) || e) }; }
@@ -728,6 +732,9 @@ async function proposeArtifact(ctx) {
   try {
     const lg = ctx && ctx.ledger;
     if (lg && Array.isArray(lg.entries)) {
+      // 254th review (#11): keep the WINNING outcome's tool alongside its
+      // count — the conflict row carries its evidence, not just a selector
+      // string that reads as "swap to this".
       const proven = new Map();
       for (const en of lg.entries) {
         if (!(en && Array.isArray(en.outcomes))) continue;
@@ -735,18 +742,25 @@ async function proposeArtifact(ctx) {
         for (const o of en.outcomes) {
           if (!o || !(o.matched > 0)) continue;
           const prev = proven.get(o.selector);
-          proven.set(o.selector, Math.max(prev || 0, o.matched));
+          if (!prev || o.matched > prev.matched) {
+            proven.set(o.selector, { matched: o.matched, tool: en.tool });
+          }
         }
       }
       const chosenIdentity = chooseIdentitySelector_249(census, pathIdentity);
       if (proven.size && chosenIdentity && chosenIdentity.selector) {
         const chosen = String(chosenIdentity.selector);
-        for (const [sel253] of proven) {
+        for (const [sel253, prov253] of proven) {
           if (sel253 === chosen) continue;
           // conflict = a ledger-PROVEN link-family selector that is NOT part
           // of the chosen identity union but shares link-ish shape (a[href…])
           if (/^a\[href/.test(sel253) && chosen.indexOf(sel253) === -1) {
-            ledgerConflicts253.push(sel253);
+            ledgerConflicts253.push({
+              selector: sel253,
+              matched: prov253.matched,
+              tool: (prov253.tool && typeof prov253.tool === 'string') ? prov253.tool : 'unknown',
+              note: 'fresh census wins — union this family only if verify confirms a shortfall'
+            });
             if (ledgerConflicts253.length >= 3) break;
           }
         }

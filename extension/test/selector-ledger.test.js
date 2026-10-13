@@ -154,6 +154,41 @@ describe('ledger — renderSelectorLedger (pure helper, spec §3.2)', () => {
     assert.ok(!/PROVEN-DEAD[\s\S]*?a\.ttl/.test(text), 'a.ttl never renders in the dead group');
   });
 
+  // 254th review (#7, partial defensible): a pageWide-TAGGED winner whose
+  // same-epoch census measured 0 INSIDE containers must NOT render as plain
+  // PROVEN "reuse as-is" — the count is a page-wide fact, not a card-scoped
+  // binding. Legacy scope-less rows keep the plain rendering.
+  it('254th #7: a pageWide-tagged winner renders the 0-INSIDE-containers caveat, not plain PROVEN reuse', () => {
+    const entries = [
+      obsEntry(2, 'verify.run', [{ selector: 'a.ttl', matched: 0 }, { selector: 'a.ttl', matched: 7, scope: 'pageWide' }], 1),
+      obsEntry(2, 'probe.census', [{ selector: 'a.ttl', matched: 3 }], 2)
+    ];
+    const text = renderSelectorLedger(entries, 2, 800);
+    assert.match(text, /a\.ttl → 7 matches page-wide, 0 INSIDE containers \(verify\.run, epoch 2\)/,
+      'the row carries both counts with the pageWide scope spelled out');
+    assert.ok(!/a\.ttl → 7 matches \(verify\.run/.test(text), 'no plain-reusable row for the pageWide winner');
+    assert.ok(!/PROVEN-DEAD[\s\S]*?a\.ttl/.test(text), 'still never dead');
+  });
+
+  it('254th #7: the caveat requires the 0 at the SAME epoch — an older-epoch zero renders plain', () => {
+    const entries = [
+      obsEntry(1, 'verify.run', [{ selector: 'a.ttl', matched: 0 }], 1),
+      obsEntry(2, 'verify.run', [{ selector: 'a.ttl', matched: 7, scope: 'pageWide' }], 2)
+    ];
+    const text = renderSelectorLedger(entries, 2, 800);
+    assert.match(text, /a\.ttl → 7 matches \(verify\.run, epoch 2\)/,
+      'the zero predates the reload — the fresh pageWide count is the live fact');
+  });
+
+  it('254th #7: legacy scope-less pageWide counts keep the plain PROVEN rendering (backward compat)', () => {
+    const entries = [
+      obsEntry(2, 'verify.run', [{ selector: 'a.ttl', matched: 0 }, { selector: 'a.ttl', matched: 7 }], 1)
+    ];
+    const text = renderSelectorLedger(entries, 2, 800);
+    assert.match(text, /a\.ttl → 7 matches \(verify\.run, epoch 2\)/);
+    assert.ok(!/page-wide/.test(text), 'no caveat for scope-less rows');
+  });
+
   it('sorts PROVEN by cross-epoch survivor count desc, then matched desc; a survivor renders ONCE (live), with its survivor count disclosed', () => {
     const entries = [
       obsEntry(1, 'probe.count', [{ selector: 'div.stable', matched: 2 }], 1),
@@ -623,6 +658,35 @@ describe('session-memory §5 — FINALIZE cycle-cost threshold (maxTurns-5)', ()
     assert.match(author[0].text, /75% of the turn budget spent: 53 of 60/);
   });
 
+  // 254th review (#9): the finalize trigger is CLAMPED at 75% of maxTurns —
+  // at small budgets the absolute maxTurns-5 landed at the halfway point
+  // (maxTurns=10 fired finalize at turn 5, BELOW the 75% author bucket's 7),
+  // inverting the escalation order. max(75%, maxTurns-5) keeps 60→55 and
+  // 40→35 byte-identical and only raises small-budget triggers (10→7).
+  it('254th #9 clamp: maxTurns=10 → finalize at 7, NOT 5 — no inversion under the 75% author bucket', async () => {
+    const at5 = makeSession([finishTurn()], 10, 5);
+    await at5.run();
+    assert.equal(finalizeNotes(at5).length, 0,
+      'turn 5 of 10 is past the OLD maxTurns-5 trigger but under the clamped 7 — the halfway point is not finalize territory');
+    assert.ok(at5.state().session.budgetAdvisories.indexOf('finalize') === -1);
+
+    const at7 = makeSession([finishTurn()], 10, 7);
+    await at7.run();
+    const fin = finalizeNotes(at7);
+    assert.equal(fin.length, 1, 'fires at the clamped threshold 7');
+    assert.match(fin[0].text, /7 of 10 turns spent — 3 left/);
+  });
+
+  it('254th #9: the finalize text restores the contract-first clause', async () => {
+    const session = makeSession([finishTurn()], 40, 35);
+    await session.run();
+    const fin = finalizeNotes(session);
+    assert.equal(fin.length, 1);
+    assert.match(fin[0].text, /\(If the contract is still unconfirmed, io\.confirm comes first\.\)$/);
+    // 40-turn behavior is byte-identical otherwise (threshold 35 stays).
+    assert.ok(fin[0].text.includes(newText(5)), 'the cycle-cost arithmetic is untouched');
+  });
+
   it('maxTurns=60 turns=55 → fires (LATER than the old 90%=54 — correct at large budgets)', async () => {
     const session = makeSession([finishTurn()], 60, 55);
     await session.run();
@@ -817,7 +881,7 @@ describe('ledger — verify.run field-census recording', () => {
     assert.deepEqual(entry.selectors, ['a.ttl', 'span.ts'], 'selectors = the censused sub-selectors');
     assert.deepEqual(entry.outcomes, [
       { selector: 'a.ttl', matched: 0 },   // measured dead INSIDE every processed container
-      { selector: 'a.ttl', matched: 7 },   // the 244 pageWide count — alive elsewhere on the page
+      { selector: 'a.ttl', matched: 7, scope: 'pageWide' },   // the 244 pageWide count — alive elsewhere on the page, TAGGED (254th #7)
       { selector: 'span.ts', matched: 0 }  // pageWide 0 → no duplicate second row
     ], 'dead rows + pageWide rows');
     assert.equal(entry.epoch, 3, 'epoch stamped from the rail like every other session-tools receipt');
@@ -869,8 +933,16 @@ describe('ledger — propose conflict disclosure (spec §2 binding emphasis)', (
       ] }
     });
     assert.equal(out.applied, 'engine-pending');
-    assert.ok(Array.isArray(out.ledgerConflicts) && out.ledgerConflicts.indexOf('a[href*="/stories/"]') > -1,
-      'the PROVEN family absent from the chosen identity is disclosed');
+    // 254th review (#11): conflicts carry their EVIDENCE (matched count,
+    // tool) and the resolution note — a bare selector string read as
+    // "swap to this" when the semantics are "fresh census wins, union only
+    // on verify-confirmed shortfall".
+    assert.ok(Array.isArray(out.ledgerConflicts) && out.ledgerConflicts.length === 1, 'one conflict object');
+    const conflict = out.ledgerConflicts[0];
+    assert.equal(conflict.selector, 'a[href*="/stories/"]');
+    assert.equal(conflict.matched, 8, 'the PROVEN count rides the row');
+    assert.equal(conflict.tool, 'probe.count', 'the tool that measured it');
+    assert.equal(conflict.note, 'fresh census wins — union this family only if verify confirms a shortfall');
     const out2 = await AP.proposeArtifact({ probes, requirementText: REQ, outputSchema: SCHEMA, currentArtifact: null, ledger: null });
     assert.equal(out2.ledgerConflicts, undefined, 'no ledger → no field');
   });

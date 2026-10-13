@@ -1671,6 +1671,14 @@ describe('artifact.propose — epoch-synced ledger conflict scan (review #1)', (
   });
   it('a CURRENT-epoch proven family is still disclosed (the scan itself is alive)', async () => {
     const out = await runPropose(7);
-    assert.deepEqual(out.ledgerConflicts, [PROVEN_FAMILY], 'current-epoch proven family disclosed');
+    // 254th review (#11): conflicts are OBJECTS — selector + matched + tool
+    // + the resolution note (fresh census wins; union only on a
+    // verify-confirmed shortfall).
+    assert.ok(Array.isArray(out.ledgerConflicts) && out.ledgerConflicts.length === 1, 'one conflict entry');
+    const row = out.ledgerConflicts[0];
+    assert.equal(row.selector, PROVEN_FAMILY);
+    assert.equal(row.matched, 5);
+    assert.equal(row.tool, 'probe.count');
+    assert.equal(row.note, 'fresh census wins — union this family only if verify confirms a shortfall');
   });
 });

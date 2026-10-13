@@ -16,6 +16,12 @@
 //   - per selector, MAX matched wins: a selector the verify field census
 //     measured 0 INSIDE containers but pageWide n>0 elsewhere is PROVEN,
 //     not dead.
+//   - 254th review (#7): when the winning observation carries the
+//     pageWide scope tag AND an inside-containers 0 exists at the same
+//     selector+epoch, the row renders with the "N matches page-wide,
+//     0 INSIDE containers" caveat instead of plain PROVEN reuse — the
+//     count is a page-wide fact, not a card-scoped binding. Legacy
+//     scope-less outcomes keep the plain rendering.
 //   - PROVEN rows sort by cross-epoch survivor count desc (a family that
 //     survived a page reload is the session's most-trusted measurement),
 //     then matched desc; ≤8 rows, survivor count disclosed on the row.
@@ -54,7 +60,17 @@
 
   function famRow(fam, survivorCount) {
     const ep = (typeof fam.epoch === 'number') ? fam.epoch : '?';
-    let line = '- ' + truncSel(fam.selector) + ' → ' + fam.maxMatched + ' matches (' + fam.tool + ', epoch ' + ep + ')';
+    // 254th review (#7, partial defensible): when the WINNING observation is
+    // a pageWide-tagged count AND the same selector+epoch measured 0 INSIDE
+    // the processed containers, the row must NOT read as plain PROVEN
+    // "reuse as-is" — the count is a page-wide fact; a card-scoped binding
+    // needs re-scoping. Legacy scope-less rows keep the plain rendering.
+    let line;
+    if (fam.winScope === 'pageWide' && fam.zeroEpochs && fam.zeroEpochs.has(fam.epoch)) {
+      line = '- ' + truncSel(fam.selector) + ' → ' + fam.maxMatched + ' matches page-wide, 0 INSIDE containers (' + fam.tool + ', epoch ' + ep + ')';
+    } else {
+      line = '- ' + truncSel(fam.selector) + ' → ' + fam.maxMatched + ' matches (' + fam.tool + ', epoch ' + ep + ')';
+    }
     if (survivorCount > 1) line += ' — survives ' + survivorCount + ' epochs';
     return line;
   }
@@ -90,15 +106,19 @@
         }
         let fam = bucket.get(o.selector);
         if (!fam) {
-          fam = { selector: o.selector, maxMatched: -1, tool: tool, epoch: e.epoch, lastAt: at };
+          fam = { selector: o.selector, maxMatched: -1, tool: tool, epoch: e.epoch, lastAt: at, winScope: null, zeroEpochs: new Set() };
           bucket.set(o.selector, fam);
         }
+        // 254th review (#7): track WHERE the zero measurements live (by
+        // epoch) and whether the winning observation was a pageWide count.
+        if (matched === 0) fam.zeroEpochs.add(e.epoch);
         // MAX matched wins (MA1 review note) — the winning observation
         // names the tool and epoch the row renders.
         if (matched > fam.maxMatched) {
           fam.maxMatched = matched;
           fam.tool = tool;
           fam.epoch = e.epoch;
+          fam.winScope = (o.scope === 'pageWide') ? 'pageWide' : null;
         }
         fam.lastAt = Math.max(fam.lastAt, at);
         if (typeof e.epoch === 'number') {

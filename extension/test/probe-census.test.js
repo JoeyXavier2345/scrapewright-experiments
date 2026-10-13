@@ -728,6 +728,130 @@ describe('probe.census persistent mount loop (250th round)', () => {
   });
 });
 
+// 254th review (#3 + #12): the mount phase's AGGREGATE wall cap and error
+// disclosure. The 250th-round loop is PERSISTENT — every growth hop re-runs
+// the FULL population read ($count + up to 5 sampled $extractList legs,
+// each bounded by timeoutMs), so the old "5 hops ≈ 9-12s" arithmetic
+// counted only the hops and ignored the re-reads. mountWallMs (clamped
+// 5000-120000, default 60000) bounds hops AND re-reads; a breach breaks
+// with mount.stoppedEarly:'wall budget'. Hop/re-read FAILURES are disclosed
+// (mount.lastHopError / mount.reReadError) and never crash the census.
+describe('probe.census mount wall cap + error disclosure (254th review)', () => {
+  // Bare recommendation modules: no links (identity absent) AND no
+  // time/count leaves (families absent) — both trigger halves fire.
+  const bareRec = (n) => '<div class="card"><span class="ttl">Recommended channel ' + n + '</span></div>';
+  const BASE_254 = [bareRec(1), bareRec(2), bareRec(3)];
+
+  function makeMountTools(o) {
+    const observationLog = createObservationLog();
+    const calls = [];
+    let t = 0;
+    let hops = 0;
+    const activeCount = () => (o.seq && hops > 0) ? o.seq[Math.min(hops, o.seq.length) - 1] : 3;
+    const activeRecords = () => {
+      if (o.seq && hops > 0 && typeof o.grownFor === 'function') {
+        const r = o.grownFor(activeCount());
+        if (r) return r;
+      }
+      return BASE_254;
+    };
+    const tools = createProbeTools({
+      // 254th: fake-clock seam — the mount wall reads THIS clock, never the
+      // real one, so the cap tests are deterministic (no sleeps).
+      now: () => { if (o.advancePerCall) t += o.advancePerCall; return t; },
+      executeDsl: async (snippet) => {
+        calls.push(snippet);
+        if (/\$scrollBy\(/.test(snippet)) {
+          if (o.hopError) return { error: o.hopError };
+          const prev = activeCount();
+          hops += 1;
+          if (o.advanceOnScroll) t += o.advanceOnScroll;
+          return { c0: prev, c1: activeCount() };
+        }
+        if (/\$count\(/.test(snippet)) {
+          if (o.reReadError && hops > 0) return { error: o.reReadError };
+          return activeRecords().length;
+        }
+        return activeRecords().map((h) => ({ __c_html: h }));
+      },
+      observationLog
+    });
+    return { tools: tools, calls: calls };
+  }
+  const scrollCalls = (calls) => calls.filter((s) => /\$scrollBy\(/.test(s));
+  const readCalls = (calls) => calls.filter((s) => /\$extractList\(/.test(s));
+
+  it('wall boundary: already over budget at the first pre-hop check → 0 hops, stoppedEarly, goalMet:false', async () => {
+    const { tools, calls } = makeMountTools({ advancePerCall: 6000, seq: [6, 9, 12, 15, 18], grownFor: () => BASE_254 });
+    const r = await tools.census({ containerSel: 'div.card', scrollRounds: 5, mountWallMs: 5000 });
+    assert.equal(scrollCalls(calls).length, 0, 'the wall check fires BEFORE each hop — none ran');
+    assert.ok(r.mount, 'mount receipt present');
+    assert.equal(r.mount.rounds, 0);
+    assert.equal(r.mount.stoppedEarly, 'wall budget');
+    assert.equal(r.mount.goalMet, false);
+    assert.equal(r.total, 3, 'the census survives on the original population');
+  });
+
+  it('mid-loop: a growth re-read is wall-gated too — hop 1 runs, the re-read never does', async () => {
+    const { tools, calls } = makeMountTools({ advanceOnScroll: 6000, seq: [6], grownFor: () => BASE_254 });
+    const r = await tools.census({ containerSel: 'div.card', scrollRounds: 5, mountWallMs: 5000 });
+    assert.equal(scrollCalls(calls).length, 1, 'hop 1 ran');
+    assert.equal(r.mount.rounds, 1);
+    assert.equal(r.mount.stoppedEarly, 'wall budget');
+    assert.equal(r.mount.reCensused, false, 'the re-read was gated by the same wall');
+    assert.equal(readCalls(calls).length, 1, 'only the INITIAL population read ever extracted');
+  });
+
+  it('mid-loop hop gate: hop 2 is blocked by the wall after hop 1 + a legal re-read', async () => {
+    const { tools, calls } = makeMountTools({ advanceOnScroll: 3000, seq: [4, 6, 9, 12, 15], grownFor: () => BASE_254 });
+    const r = await tools.census({ containerSel: 'div.card', scrollRounds: 5, mountWallMs: 5000 });
+    assert.equal(scrollCalls(calls).length, 2, 'hop 1 + re-read + hop 2 — then the wall trips before hop 2\'s re-read');
+    assert.equal(r.mount.rounds, 2);
+    assert.equal(r.mount.reCensused, true, 'hop 1\'s growth re-read was still inside the wall');
+    assert.equal(r.mount.stoppedEarly, 'wall budget');
+    assert.ok(readCalls(calls).length >= 2, 'at least one re-census read ran');
+  });
+
+  it('mountWallMs clamps: below-floor values floor at 5000 (a hop still runs), above-ceiling at 120000', async () => {
+    // mountWallMs:3 must NOT be honored as 3 — the floor is 5000, and a
+    // 4000ms clock step stays inside it, so hop 1 runs.
+    const floorTools = makeMountTools({ advancePerCall: 4000, seq: [3], grownFor: () => BASE_254 });
+    const rf = await floorTools.tools.census({ containerSel: 'div.card', scrollRounds: 5, mountWallMs: 3 });
+    assert.equal(rf.mount.rounds, 1, 'floor 5000: the 4000ms step did not trip the cap — one hop ran');
+    assert.equal(rf.mount.stoppedEarly, 'wall budget', 'the NEXT check (8000ms elapsed) does trip it');
+    // mountWallMs:999999 clamps DOWN to 120000 — a 130000ms step trips it.
+    const ceilTools = makeMountTools({ advancePerCall: 130000, seq: [6], grownFor: () => BASE_254 });
+    const rc = await ceilTools.tools.census({ containerSel: 'div.card', scrollRounds: 5, mountWallMs: 999999 });
+    assert.equal(rc.mount.rounds, 0, 'ceiling 120000: the 130000ms step is over budget');
+    assert.equal(rc.mount.stoppedEarly, 'wall budget');
+  });
+
+  it('#12: a failed hop breaks with mount.lastHopError (sliced to 140) and the census survives on the original population', async () => {
+    const longErr = 'RELAY_FAILED: ' + 'x'.repeat(200);
+    const { tools, calls } = makeMountTools({ hopError: longErr, seq: [6], grownFor: () => BASE_254 });
+    const r = await tools.census({ containerSel: 'div.card', scrollRounds: 5 });
+    assert.equal(scrollCalls(calls).length, 1, 'the errored hop ended the phase');
+    assert.ok(r.mount && r.mount.lastHopError, 'lastHopError present');
+    assert.equal(r.mount.lastHopError.length, 140, 'sliced to 140 chars');
+    assert.match(r.mount.lastHopError, /^RELAY_FAILED:/);
+    assert.equal(r.mount.rounds, 0, 'the failed hop never counted as a round');
+    assert.ok(!r.error, 'no census-level error — best-effort throughout');
+    assert.equal(r.total, 3, 'original population survives');
+    assert.ok(r.lanes && r.lanes.text && r.lanes.text.length, 'lanes computed from the original read');
+  });
+
+  it('#12: a failed growth re-read records mount.reReadError and the loop keeps hopping within the bound', async () => {
+    const { tools, calls } = makeMountTools({ seq: [6], grownFor: () => BASE_254, reReadError: 'SCRIPT_TIMEOUT: read blew up' });
+    const r = await tools.census({ containerSel: 'div.card', scrollRounds: 5 });
+    assert.ok(r.mount && r.mount.reReadError, 'reReadError present');
+    assert.match(r.mount.reReadError, /^SCRIPT_TIMEOUT: read blew up/);
+    assert.ok(r.mount.reReadError.length <= 140, 'sliced to 140 chars');
+    assert.equal(r.mount.reCensused, false, 'a failed re-read never swaps the population');
+    assert.equal(r.total, 3, 'the ORIGINAL population survives the failed re-read');
+    assert.ok(!r.error, 'the census still returns');
+  });
+});
+
 // 177c round (live: the default timestamp union matched ZERO anchors inside
 // search-post containers — their anchors are plain links, not
 // labelledby-carrying feed-card spans — while the census's own lanes held

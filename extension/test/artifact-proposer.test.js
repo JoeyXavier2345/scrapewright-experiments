@@ -457,10 +457,31 @@ describe('joint solver — proposeArtifact (stubbed sweep)', () => {
     // the maiden live session's window held only top-of-SERP modules while
     // the organic posts sat unmounted below. 250th round: scrollRounds 2→5
     // — the 249th session's rec headers spanned multiple viewports (the
-    // 243rd showed 3→12 with deep scroll); 5 hops x (900px scroll + 900ms
-    // settle + count) ~= 9-12s worst case, still inside the 120s sweep
-    // budget that gates the census hop.
+    // 243rd showed 3→12 with deep scroll). 254th review (#3): the mount
+    // wall is NOT hop-count arithmetic — every growth hop re-runs the full
+    // population read ($count + up to 5 sampled $extractList legs, each
+    // bounded by timeoutMs), so the aggregate is bounded by the mountWallMs
+    // the sweep derives from its remaining budget.
     assert.equal(censusArgs.scrollRounds, 5, 'the sweep scrolls deep for mounted-window bias before reading');
+    assert.equal(out.applied, true);
+  });
+  // 254th review (#3): the mount phase is bounded by the caller's remaining
+  // sweep budget — the persistent loop re-runs the FULL population read on
+  // every growth hop, so the hop-only arithmetic could outrun the sweep.
+  it('254th #3: the census hop carries mountWallMs derived from the remaining sweep budget', async () => {
+    let censusArgs = null;
+    const probes = {
+      count: async () => ({ count: 12 }),
+      census: async (a) => { censusArgs = a; return CENSUS_SHALLOW(); }
+    };
+    const out = await AP.proposeArtifact({
+      probes, requirementText: REQ_FULL, outputSchema: SCHEMA_FIX(), currentArtifact: null,
+      applyArtifact: async () => ({ version: 1 })
+    });
+    assert.ok(censusArgs && typeof censusArgs.mountWallMs === 'number',
+      'mountWallMs passed — got ' + JSON.stringify(censusArgs));
+    assert.ok(censusArgs.mountWallMs > 0 && censusArgs.mountWallMs <= 120000,
+      'a timeoutMs-shaped remaining-budget value (probe-tools clamps 5000-120000) — got ' + censusArgs.mountWallMs);
     assert.equal(out.applied, true);
   });
   // Review batch (joint-solver #P2-F): the CARD's :has(a[href*=…]) demands an

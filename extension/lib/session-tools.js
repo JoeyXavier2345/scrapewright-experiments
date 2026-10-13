@@ -1397,7 +1397,11 @@
             if (!row || typeof row.subSelector !== 'string' || !row.subSelector) continue;
             ledgerOutcomes.push({ selector: row.subSelector, matched: 0 });
             if (typeof row.pageWideMatches === 'number' && row.pageWideMatches > 0) {
-              ledgerOutcomes.push({ selector: row.subSelector, matched: row.pageWideMatches });
+              // 254th review (#7): the pageWide row is TAGGED — the ledger
+              // renderer uses the tag to caveat PROVEN rows whose count is
+              // a page-wide fact, not a card-scoped binding (0 INSIDE the
+              // processed containers at the same epoch).
+              ledgerOutcomes.push({ selector: row.subSelector, matched: row.pageWideMatches, scope: 'pageWide' });
             }
             if (ledgerSels.indexOf(row.subSelector) === -1) ledgerSels.push(row.subSelector);
           }
@@ -2832,7 +2836,7 @@
       { name: 'page.settle', args: '{sel?,timeoutMs?}', returns: '{settled,sel,chars,waitedMs,textHead?,note?} — polls until content stops changing (default sel body). Settle before concluding a JS-heavy page is empty' },
       // Batch probe turns (2026-10-13 session-memory spec §4): a catalog
       // line for the TURN-LEVEL batch shape (not a dispatchable tool name).
-      { name: 'batch', args: 'tools:[{tool,args}×2-5 (1 accepted as equivalent)]', returns: '{batch:[in order],memberMs[]} — batches read-only probes (probe.* except probe.scroll, page.settle/state); write/park/verify never batch — invalid batches rejected atomically' },
+      { name: 'batch', args: 'TURN SHAPE (never a "tool"): tools:[{tool,args}×2-5 (1 accepted as equivalent)]', returns: '{batch:[in order],memberMs[]} — read-only probes (probe.* except probe.scroll); write/park/verify never batch — invalid batches rejected atomically' },
       { name: 'probe.count', args: '{sel}', returns: '{count}' },
       { name: 'probe.text', args: '{sel}', returns: '{total,items[]}' },
       { name: 'probe.attrStats', args: '{containerSel, attr}', returns: '{totalItems,values[{value,items,pct}],absentPct,note?} — attr is read on the matched ELEMENTS; note appears at absentPct 100 — census the descendant form containerSel + " [attr]"' },

@@ -58,6 +58,12 @@
     'probe.labelledby', 'probe.text', 'probe.loginState', 'probe.hover',
     'page.settle', 'page.state'
   ];
+  // 254th review (#10): DSL ops that MUTATE the page — a probe.snippet
+  // member carrying any of these cannot batch (later members would read
+  // the mutated page). Static scan of the member's code string, applied
+  // ONLY to probe.snippet members (the other whitelist entries have fixed,
+  // read-only contracts).
+  const BATCH_MUTATING_SNIPPET_OPS_254 = ['click', 'type', 'clickInList', 'openTab', 'scrollBy', 'scrollToBottom'];
 
   const DEFAULTS = {
     budgets: { maxTurns: 60, maxTokensPerCall: 32768, tokenCap: 2000000, wallClockMs: 1800000 },
@@ -176,8 +182,15 @@
       // trigger is 55 (LATER than the old 90%=54), at maxTurns=40 it is 35
       // (EARLIER than 36) — both correct, because the threshold tracks
       // what a fix costs, not what 10% of the budget happens to be.
+      // 254th review (#9): CLAMPED at 75% of maxTurns — at small budgets
+      // the absolute form inverted the escalation order (maxTurns=10 fired
+      // finalize at turn 5, the halfway point, while the 75% author bucket
+      // sat unfired at 7). Real budgets are byte-identical (60→55, 40→35);
+      // small ones only move UP (10→7). The contract-first clause rides the
+      // finalize text again: an unconfirmed io.confirm contract outranks
+      // the artifact push.
       key: 'finalize', turnsLeftThreshold: 5,
-      text: (used, max) => 'BUDGET ADVISORY (' + used + ' of ' + max + ' turns spent — ' + (max - used) + ' left): FINALIZE — ' + (max - used) + ' turns left ≈ ONE fix cycle (snippet→update→verify ≈3 turns + 2 buffer): submit the best-grounded artifact via service.update NOW and verify; anything needing more than one cycle belongs in the finish disclosure.'
+      text: (used, max) => 'BUDGET ADVISORY (' + used + ' of ' + max + ' turns spent — ' + (max - used) + ' left): FINALIZE — ' + (max - used) + ' turns left ≈ ONE fix cycle (snippet→update→verify ≈3 turns + 2 buffer): submit the best-grounded artifact via service.update NOW and verify; anything needing more than one cycle belongs in the finish disclosure. (If the contract is still unconfirmed, io.confirm comes first.)'
     }
   ];
 
@@ -186,9 +199,12 @@
   // cycle-cost trigger. Shared by the due-selection and mark-sent loops so
   // the two can never drift.
   function advisoryTurnThreshold(adv, maxTurns) {
-    return (typeof adv.turnsLeftThreshold === 'number')
-      ? maxTurns - adv.turnsLeftThreshold
-      : Math.floor(maxTurns * adv.pct);
+    if (typeof adv.turnsLeftThreshold === 'number') {
+      // 254th review (#9): the finalize trigger never drops below the 75%
+      // author bucket's territory — see the advisory's comment.
+      return Math.max(Math.floor(maxTurns * 0.75), maxTurns - adv.turnsLeftThreshold);
+    }
+    return Math.floor(maxTurns * adv.pct);
   }
 
   // 117th log: the session died at tokenCap with detail=null and ZERO
@@ -1873,7 +1889,14 @@
         // dispatch (e.g. alongside a finish key in some other route), teach
         // the shape instead of the bare unknown-tool error.
         if (name === 'finish') {
-          return { error: 'finish is the protocol-level action, not a tool: resend this turn as {"finish":{"summary":"…"}} (top-level, exactly one of tool/finish)' };
+          return { error: 'finish is the protocol-level action, not a tool: resend this turn as {"finish":{"summary":"…"}} (top-level, exactly one of tool/tools/finish)' };
+        }
+        // 254th review (#6): batch is likewise a TURN-LEVEL shape — the
+        // catalog line can be misread as a tool spec and the model puts
+        // "batch" in the tool slot. Teach the shape (one receipt, no repair
+        // round) instead of the bare unknown-tool error.
+        if (name === 'batch') {
+          return { error: 'batch is a TURN-LEVEL shape, not a tool: send {"tools":[{tool,args},…]} at the top level of the turn JSON (2-5 read-only probes), exactly one of tool/tools/finish' };
         }
         return { error: 'unknown tool: ' + name, available: availableToolNames() };
       }
@@ -2153,16 +2176,16 @@
               if (p.violation === 'missing-action' && /think/.test(String(p.detail || ''))) {
                 return head + 'your reply REASONED but never committed an action — it ended after "think". ' +
                   (round >= 2 ? 'FINAL CHANCE. ' : '') +
-                  'Resend now: keep your think, then ADD exactly one of "tool": "<name>" + "args": {…} or "finish": { "summary": "…" } (finish goes at the top level, not in the tool slot). ' +
+                  'Resend now: keep your think, then ADD exactly one of "tool": "<name>" + "args": {…}, a read-only "tools": [{tool,args}…] batch, or "finish": { "summary": "…" } (finish goes at the top level, not in the tool slot). ' +
                   'Your think already names the next step — commit it as the action.';
               }
               if (p.violation === 'ambiguous-action') {
-                return head + 'your reply named BOTH "tool" and "finish" — keep exactly one (finish only when the session is done). ' +
+                return head + 'your reply named BOTH an action and "finish" — keep exactly one (finish only when the session is done). ' +
                   (round >= 2 ? 'FINAL CHANCE. ' : '') +
-                  'Resend the same turn with ONE action.';
+                  'Resend the same turn with ONE action: "tool"+args, a "tools" batch, or "finish".';
               }
               // JSON-shape classes keep the quoting-led lecture.
-              return head + 'reply with ONE JSON object with exactly one of "tool" or "finish". No prose outside the JSON. Strict JSON quoting only: double quotes for every key and string value — single quotes are NOT valid JSON, and an unescaped double quote inside a value must be escaped (\\") or avoided.' +
+              return head + 'reply with ONE JSON object with exactly one of "tool", "tools" (a read-only probe batch), or "finish". No prose outside the JSON. Strict JSON quoting only: double quotes for every key and string value — single quotes are NOT valid JSON, and an unescaped double quote inside a value must be escaped (\\") or avoided.' +
                 (round >= 2 ? ' FINAL CHANCE.' : '');
             };
             // Fifty-third log: action-shape violations (valid JSON, no
@@ -2559,11 +2582,54 @@
                 // form) — the old 'only read-only probes may batch' phrasing
                 // mislabeled that exclusion as a read-only-ness judgment.
                 batchResult = { error: 'batch rejected: only whitelisted read-only probes may batch (probe.scroll excluded — use scrollUntil) — resend as single calls', rejected: rejected };
+              } else {
+                // 254th review (#10, conservative): probe.snippet STAYS on
+                // the whitelist (the campaign wants snippet batching), but
+                // a snippet whose code MUTATES the page cannot batch —
+                // later members would read the mutated page while the
+                // batch receipt promises order-independent reads. Reject
+                // atomically with the op named; read-only snippets pass.
+                const mutating254 = [];
+                for (const mem of turn.tools) {
+                  if (!mem || mem.tool !== 'probe.snippet') continue;
+                  const code254 = (mem.args && typeof mem.args.code === 'string') ? mem.args.code : '';
+                  for (const op254 of BATCH_MUTATING_SNIPPET_OPS_254) {
+                    // word-boundary: $click must not false-match $clickInList
+                    if ((new RegExp('\\$' + op254 + '(?![\\w])')).test(code254)) {
+                      mutating254.push('$' + op254);
+                      break;
+                    }
+                  }
+                }
+                if (mutating254.length) {
+                  batchResult = {
+                    error: 'batch rejected: snippet member mutates the page (' + mutating254.join('/') + ') — interaction snippets run as single calls so later members read an unmutated page; disclose order-dependence by running singly',
+                    mutatingOps: mutating254
+                  };
+                }
               }
             }
             if (!batchResult) {
               batchReceipts = [];
+              // 254th review (#4): the turn-top guards apply BETWEEN members
+              // too — a batch is several rail dispatches inside one turn,
+              // and abort/pause/wallClock must stop the member loop instead
+              // of running every member first (the receipts after the
+              // violation would be built on a session the user already
+              // cancelled). The turn-top check still owns the actual stop;
+              // this loop just stops DISPATCHING and discloses the skip.
+              let interrupted254 = null;
+              const skipped254 = [];
               for (const mem of turn.tools) {
+                if (!interrupted254) {
+                  if (abortFlag) interrupted254 = 'aborted';
+                  else if (pauseFlag) interrupted254 = 'paused';
+                  else if (state.elapsedMs + netSegmentMs() >= budgets.wallClockMs) interrupted254 = 'wallClock';
+                }
+                if (interrupted254) {
+                  skipped254.push(mem && typeof mem.tool === 'string' ? mem.tool : '(missing tool name)');
+                  continue;
+                }
                 // Spec §4.3: a member's error never stops later members —
                 // dispatchTool already answers throws as {error} receipts;
                 // this belt guards anything thrown between members.
@@ -2586,6 +2652,10 @@
               // Spec §4.3: per-member costs ride the receipt (the
               // toolTimings row carries only the whole-batch wall).
               batchResult = { batch: batchReceipts, memberMs: memberMs };
+              if (interrupted254) {
+                batchResult.interrupted = interrupted254;
+                batchResult.skipped = skipped254;
+              }
             }
             __currentDispatchTool = null;
             // 197th round: environmental waits disclosed on member receipts
@@ -2630,14 +2700,47 @@
             const callLabel = 'batch ' + JSON.stringify(Array.isArray(turn.tools)
               ? turn.tools.map((mem) => ({ tool: mem && mem.tool, args: (mem && mem.args) || {} }))
               : turn.tools);
-            const summary = Protocol.compactToolResultForLLM(callLabel, batchResult, toolResultCapFor('batch'));
+            // 254th review (#8): per-member receipt caps SCALE with the
+            // batch — total = batch cap + (n-1)*2000 (2→10000, 5→16000)
+            // and each member is pre-compacted at min(solo cap, total/n)
+            // BEFORE the joined summary is assembled. The old flat-8000
+            // object compaction divided the budget across {batch,
+            // memberMs} keys and then across members, so a 5-member batch
+            // of census-sized receipts stubbed members 3-5 to "[+N more
+            // items elided]" — the members the model dispatched came back
+            // invisible. Elisions are disclosed per member (each member's
+            // own compaction markers); the joined body is tail-trimmed with
+            // a disclosed marker only in the (rare) label-overhead case.
+            let summary;
+            if (batchReceipts && batchReceipts.length) {
+              const nMem254 = batchReceipts.length;
+              const batchCapTotal254 = toolResultCapFor('batch') + (nMem254 - 1) * 2000;
+              const memberCap254 = Math.floor(batchCapTotal254 / nMem254);
+              const memberRenders254 = batchReceipts.map((r, mi) => {
+                const memTool = (Array.isArray(turn.tools) && turn.tools[mi] &&
+                  typeof turn.tools[mi].tool === 'string') ? turn.tools[mi].tool : 'unknown';
+                return Protocol.compactToolResultForLLM(memTool, r, Math.min(toolResultCapFor(memTool), memberCap254));
+              });
+              const label254 = callLabel.length > 160 ? callLabel.slice(0, 160) + '…' : callLabel;
+              const bodyBudget254 = Math.max(200, batchCapTotal254 - (label254.length + 4));
+              let body254 = memberRenders254.join('\n');
+              if (body254.length > bodyBudget254) {
+                body254 = body254.slice(0, bodyBudget254) + '…[+' + (body254.length - bodyBudget254) + ' chars elided]';
+              }
+              summary = label254 + ' → ' + body254;
+            } else {
+              summary = Protocol.compactToolResultForLLM(callLabel, batchResult, toolResultCapFor('batch'));
+            }
             state.transcript.push({ kind: 'tool', name: 'batch', ok: batchOk, result: batchResult, summary: summary });
             // 68th/70th-round trackers: fed PER MEMBER (spec §4.3 — the
             // exact-repeat detection works inside batches). A REJECTED
             // batch is fed as one call: an identically-rejected resend is
-            // the same dead loop.
+            // the same dead loop. The loop bounds at the RECEIPT count —
+            // members skipped by the 254th interrupt checks have no
+            // receipt, and feeding their undefined would reset the
+            // consecutive-failure memory on a tool that never ran.
             if (batchReceipts) {
-              for (let mi = 0; mi < turn.tools.length; mi++) {
+              for (let mi = 0; mi < batchReceipts.length; mi++) {
                 feedFailureTrackers(turn.tools[mi].tool, turn.tools[mi].args, batchReceipts[mi]);
               }
             } else {
