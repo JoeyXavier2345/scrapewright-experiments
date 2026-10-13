@@ -16,7 +16,7 @@ const fin = () => mk(JSON.stringify({ think: 'done', finish: { summary: 'x' } })
 const member = (tool, args) => ({ tool: tool, args: args || {} });
 const batchReply = (members) => mk(JSON.stringify({ think: 't', tools: members }));
 
-function makeSession(replies, stubs, events) {
+function makeSession(replies, stubs, events, cfgExtra) {
   const calls = [];
   const tools = {};
   for (const name of Object.keys(stubs || {})) {
@@ -28,13 +28,17 @@ function makeSession(replies, stubs, events) {
     };
   }
   let i = 0;
-  const session = createResearchSession({
+  const session = createResearchSession(Object.assign({
     requirement: 'collect posts',
     llm: async () => { const r = replies[Math.min(i, replies.length - 1)]; i += 1; return r; },
     tools: tools,
     onEvent: (e) => { if (events) events.push(e); }
-  });
+  }, cfgExtra || {}));
   return { session: session, calls: calls };
+}
+
+function systemTexts(session) {
+  return session.state().session.transcript.filter((e) => e.kind === 'system').map((e) => e.text);
 }
 
 function toolEntries(session) {
@@ -58,13 +62,19 @@ describe('batch turns — protocol shape (parseAssistantTurn)', () => {
     assert.ok(Array.isArray(both.turn.tools));
   });
 
-  it('tools+finish is ambiguous-action; garbage tools without another action is missing-action', () => {
+  it('tools+finish is ambiguous-action; a non-array "tools" parses through for the ENGINE batch teaching receipt', () => {
     const amb = Protocol.parseAssistantTurn('{"think":"t","tools":[{"tool":"page.settle"}],"finish":{"summary":"x"}}');
     assert.ok(!amb.ok);
     assert.equal(amb.violation, 'ambiguous-action');
+    // Review fix: tools:"x" used to collapse to missing-action (generic
+    // JSON lecture). It is a batch-SHAPE mistake — the protocol passes it
+    // through as a malformed marker so the engine's batch branch can
+    // answer with the batch teaching receipt.
     const none = Protocol.parseAssistantTurn('{"think":"t","tools":"probe.count"}');
-    assert.ok(!none.ok);
-    assert.equal(none.violation, 'missing-action');
+    assert.ok(none.ok, 'parses OK — the engine teaches, no repair round — got ' + JSON.stringify(none).slice(0, 160));
+    assert.equal(none.turn.tool, null);
+    assert.equal(none.turn.tools, null);
+    assert.equal(none.turn.toolsMalformed, true, 'the malformed marker routes it to the batch branch');
   });
 });
 
@@ -85,8 +95,8 @@ describe('batch turns — dispatch', () => {
     assert.equal(entries[0].name, 'batch');
     assert.deepEqual(entries[0].result.batch, [{ count: 8 }, { settled: true, chars: 120 }],
       "the turn's result is {batch:[…]} in member order");
-    assert.deepEqual(entries[0].results, [{ count: 8 }, { settled: true, chars: 120 }],
-      'the entry carries results[] (spec §4.3 transcript shape)');
+    assert.equal(entries[0].results, undefined,
+      'no duplicate results[] key — result.batch already persists the array (review dedupe)');
     assert.equal(entries[0].ok, true);
     // batch turn + finish turn — the batch itself consumed exactly ONE turn
     assert.equal(session.state().session.spend.turns, 2);
@@ -199,6 +209,85 @@ describe('batch turns — dispatch', () => {
     const timings = session.timings.toolTimingEntries();
     assert.ok(timings.some((t) => t.tool === 'probe.count'));
     assert.ok(!timings.some((t) => t.tool === 'batch'));
+  });
+
+  it('non-array "tools" (tools:"probe.count") gets the batch teaching receipt, nothing executed', async () => {
+    const raw = mk('{"think":"t","tools":"probe.count"}');
+    const { session, calls } = makeSession([raw, fin()], {
+      'probe.count': async () => ({ count: 1 })
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed', 'the receipt is a turn result, not a protocol stop');
+    assert.equal(calls.length, 0, 'nothing executed');
+    const entries = toolEntries(session);
+    assert.equal(entries.length, 1, 'ONE batch transcript entry');
+    assert.equal(entries[0].name, 'batch');
+    assert.equal(entries[0].result.error,
+      'batch rejected: tools must be an array of {tool,args} objects — resend as single calls');
+    assert.equal(entries[0].ok, false);
+  });
+});
+
+describe('batch turns — member-scaled suspend floor (review fix)', () => {
+  // The 148th-log floor (240s, injectable via toolSuspendFloorMs) is
+  // single-dispatch calibrated. A 2-5 member batch of probe.snippet (90s
+  // cap) / probe.scrollUntil (~2-3 min) members legitimately exceeds it in
+  // aggregate — the excess was falsely booked as SYSTEM SUSPENSION CREDIT.
+  // The batch branch scales the floor by member count.
+  const sleepStub = (ms) => async () => { await new Promise((r) => setTimeout(r, ms)); return { ok: true }; };
+
+  it('a 3-member batch whose TOTAL exceeds the single floor gets NO suspension credit (floor scales by member count)', async () => {
+    // floor 50ms/member → scaled batch floor 150ms; each member sleeps 35ms
+    // → total ~110-120ms: ABOVE the old single 50ms floor (the pre-fix bug
+    // booked ~60ms as suspension), BELOW the scaled 150ms floor.
+    const { session, calls } = makeSession(
+      [batchReply([member('probe.count', { sel: 'a' }), member('probe.count', { sel: 'b' }), member('probe.count', { sel: 'c' })]), fin()],
+      { 'probe.count': sleepStub(35) },
+      null,
+      { toolSuspendFloorMs: 50 }
+    );
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(calls.length, 3, 'all three members dispatched');
+    const notes = systemTexts(session);
+    assert.ok(!notes.some((t) => /SYSTEM SUSPENSION CREDIT/.test(t)),
+      'no suspension credit for a legal 3-member batch under the scaled floor — notes: ' + JSON.stringify(notes));
+    assert.equal((report.spend.suspendCreditMs || 0), 0, 'no wall credit booked');
+  });
+
+  it('a batch beyond even the SCALED floor still credits back, naming the member-scaled allowance', async () => {
+    // floor 50ms/member → scaled floor 150ms; each member sleeps 120ms →
+    // total ~360ms, beyond 150ms: the credit fires AND the note discloses
+    // the scaling (3-member batch / scaled by member count).
+    const { session } = makeSession(
+      [batchReply([member('probe.count', { sel: 'a' }), member('probe.count', { sel: 'b' }), member('probe.count', { sel: 'c' })]), fin()],
+      { 'probe.count': sleepStub(120) },
+      null,
+      { toolSuspendFloorMs: 50, budgets: { maxTurns: 60, maxTokensPerCall: 8192, tokenCap: 2000000, wallClockMs: 60000 } }
+    );
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const creditNote = systemTexts(session).find((t) => /SYSTEM SUSPENSION CREDIT/.test(t));
+    assert.ok(creditNote, 'the credit fires beyond the scaled floor');
+    assert.match(creditNote, /3-member batch/);
+    assert.match(creditNote, /scaled by member count/);
+    assert.ok(report.spend.suspendCreditMs >= 150, 'credit ≈ wall − scaled floor — got ' + report.spend.suspendCreditMs);
+  });
+
+  it('source audit: the batch branch scales TOOL_DISPATCH_SUSPEND_FLOOR_MS by member count (the single-dispatch site does not)', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
+    const i = src.indexOf('the batch dispatch wall was');
+    assert.ok(i > -1, 'batch credit site found');
+    const region = src.slice(i - 1200, i + 400);
+    assert.match(region, /TOOL_DISPATCH_SUSPEND_FLOOR_MS \*/, 'the floor is multiplied by a member count');
+    assert.match(region, /memberCount|__memberCount/, 'a member count feeds the multiplier');
+    // the single-dispatch site keeps the unscaled floor
+    const j = src.indexOf("turn.tool + ' dispatch wall was");
+    assert.ok(j > -1, 'single-dispatch credit site found');
+    const single = src.slice(j - 500, j + 300);
+    assert.ok(!/TOOL_DISPATCH_SUSPEND_FLOOR_MS \*/.test(single), 'single-dispatch floor unchanged');
   });
 });
 

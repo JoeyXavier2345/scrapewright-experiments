@@ -261,7 +261,10 @@
   // (the model can fix the shape itself — a repair round would burn an LLM
   // call). A member missing its tool string normalizes to tool:null so the
   // engine can reject the WHOLE batch atomically (nothing executes); a
-  // non-array "tools" is not an action at all (missing-action stays loud).
+  // non-array "tools" is flagged via toolsMalformed so the ENGINE's batch
+  // branch answers with the batch teaching receipt — the generic
+  // missing-action repair taught JSON quoting to a batch-shape mistake
+  // (review fix).
   function normalizeToolBatch(raw) {
     if (raw === undefined || raw === null) return null;
     if (!Array.isArray(raw)) return null;
@@ -364,6 +367,11 @@
       tool: typeof obj.tool === 'string' && obj.tool.trim() ? obj.tool.trim() : null,
       args: (obj.args && typeof obj.args === 'object' && !Array.isArray(obj.args)) ? obj.args : {},
       tools: normalizeToolBatch(obj.tools),
+      // Review fix: a present-but-non-array "tools" (e.g. tools:"probe.count")
+      // normalizes to null above; the marker keeps it an ACTION so the
+      // engine's batch branch teaches the batch shape instead of the
+      // protocol layer collapsing it into missing-action.
+      toolsMalformed: obj.tools !== undefined && obj.tools !== null && !Array.isArray(obj.tools),
       // Fifteenth log: tolerate a bare-string finish — the lenient parser's
       // repair-finish-double-colon pass rewrites {"finish":"summary":"…"} (an
       // invalid double colon) into the string form.
@@ -376,7 +384,7 @@
     // engine answers that pair with a teaching receipt (spec §4.1) so the
     // model resends cleanly instead of burning a protocol repair round.
     if (turn.tools && turn.finish) return { ok: false, violation: 'ambiguous-action' };
-    if (!turn.tool && !turn.finish && !turn.tools) {
+    if (!turn.tool && !turn.finish && !turn.tools && !turn.toolsMalformed) {
       return { ok: false, violation: 'missing-action', detail: 'reply had keys: ' + Object.keys(obj).slice(0, 12).join(', ').slice(0, 140) };
     }
     if (turn.tool && !/^[a-z][\w]*(\.[\w]+)*$/i.test(turn.tool)) return { ok: false, violation: 'bad-tool-name' };

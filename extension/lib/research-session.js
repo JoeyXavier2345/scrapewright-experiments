@@ -48,8 +48,10 @@
   // write/park/verify would serialize several side effects into one
   // receipt, and the ATOMIC rejection (nothing executes) keeps the model's
   // intent unambiguous: it resends as single calls. probe.scroll is
-  // deliberately absent (it mutates scroll position), as are every write,
-  // park, and gate tool.
+  // excluded because probe.scrollUntil is the bounded, round-based form
+  // that reports counts — scrollUntil mutates scroll position too, but
+  // that mutation is inherent to probing lazy feeds (the spec's whitelist
+  // decision). Every write, park, and gate tool is absent.
   const BATCH_READ_ONLY_TOOLS = [
     'probe.count', 'probe.sample', 'probe.snippet', 'probe.census', 'probe.skeleton',
     'probe.attrStats', 'probe.timestamp', 'probe.scrollUntil', 'probe.extract',
@@ -2502,10 +2504,12 @@
           // ATOMIC: any violation answers with a teaching receipt and
           // NOTHING executes — a partially-executed batch would silently
           // drop part of the model's intent. Rules checked in order:
-          // mutual exclusion with turn.tool → member count → whitelist
-          // (a member missing its tool string joins the whitelist family).
-          if (Array.isArray(turn.tools)) {
-            emit('tool_call', { tool: 'batch', args: { tools: turn.tools.map((mem) => mem && mem.tool) } });
+          // mutual exclusion with turn.tool → non-array tools (the
+          // protocol layer's toolsMalformed marker) → member count →
+          // whitelist (a member missing its tool string joins the
+          // whitelist family).
+          if (Array.isArray(turn.tools) || turn.toolsMalformed) {
+            emit('tool_call', { tool: 'batch', args: { tools: Array.isArray(turn.tools) ? turn.tools.map((mem) => mem && mem.tool) : String(turn.tools) } });
             const __t0 = Date.now();
             __currentDispatchTool = 'batch';
             const __parkedBeforeDispatch = parkedByTool.get('batch') || 0;
@@ -2515,6 +2519,12 @@
             const memberMs = [];
             if (turn.tool) {
               batchResult = { error: 'batch rejected: send either "tool" or "tools", not both — resend as a single call or a clean batch' };
+            } else if (!Array.isArray(turn.tools)) {
+              // Review fix: a present-but-non-array "tools" previously
+              // fell out of the protocol layer as missing-action and got
+              // the generic JSON lecture — it is a batch-SHAPE mistake;
+              // teach the batch shape (one receipt, no repair round).
+              batchResult = { error: 'batch rejected: tools must be an array of {tool,args} objects — resend as single calls' };
             } else if (turn.tools.length === 0 || turn.tools.length > 5) {
               batchResult = { error: 'batch rejected: 2-5 tools per turn (got ' + turn.tools.length + ') — split the batch' };
             } else {
@@ -2575,20 +2585,30 @@
             recordToolTiming('batch', __netDispatchWall,
               !!(batchReceipts && batchReceipts.some((r) => isErrorResult(r) && /^SCRIPT_TIMEOUT\b/.test(String(r && r.error)))));
             // 148th log: suspension-shaped dispatch wall is credited back.
-            if (__netDispatchWall > TOOL_DISPATCH_SUSPEND_FLOOR_MS) {
-              const __credit = __netDispatchWall - TOOL_DISPATCH_SUSPEND_FLOOR_MS;
+            // Review fix: the 240s floor is SINGLE-dispatch calibrated —
+            // a 2-5 member batch of probe.snippet (90s cap) /
+            // probe.scrollUntil (~2-3 min) members legitimately exceeds it
+            // in aggregate, and the excess was falsely booked as machine
+            // suspension. Each member gets the single-dispatch allowance:
+            // the batch floor scales by member count.
+            const memberCount = Array.isArray(turn.tools) ? Math.max(1, turn.tools.length) : 1;
+            const batchFloorMs = TOOL_DISPATCH_SUSPEND_FLOOR_MS * memberCount;
+            if (__netDispatchWall > batchFloorMs) {
+              const __credit = __netDispatchWall - batchFloorMs;
               suspendCreditTotal += __credit;
               suspendCreditThisSegment += __credit;
               state.transcript.push({ kind: 'system', text:
                 'SYSTEM SUSPENSION CREDIT: the batch dispatch wall was ' + Math.round(__netDispatchWall / 1000) +
-                's (no legitimate dispatch exceeds ' + Math.round(TOOL_DISPATCH_SUSPEND_FLOOR_MS / 1000) +
-                's) — ' + Math.round(__credit / 1000) + 's is credited back to the wall budget (machine sleep / SW suspend during the dispatch). The wall clock did not spend it.' });
+                's (no legitimate ' + memberCount + '-member batch exceeds ' + Math.round(batchFloorMs / 1000) +
+                's — the single-dispatch floor scaled by member count) — ' + Math.round(__credit / 1000) + 's is credited back to the wall budget (machine sleep / SW suspend during the dispatch). The wall clock did not spend it.' });
             }
             const batchOk = !isErrorResult(batchResult) &&
               !(batchReceipts && batchReceipts.some((r) => isErrorResult(r)));
-            const callLabel = 'batch ' + JSON.stringify(turn.tools.map((mem) => ({ tool: mem && mem.tool, args: (mem && mem.args) || {} })));
+            const callLabel = 'batch ' + JSON.stringify(Array.isArray(turn.tools)
+              ? turn.tools.map((mem) => ({ tool: mem && mem.tool, args: (mem && mem.args) || {} }))
+              : turn.tools);
             const summary = Protocol.compactToolResultForLLM(callLabel, batchResult, toolResultCapFor('batch'));
-            state.transcript.push({ kind: 'tool', name: 'batch', ok: batchOk, result: batchResult, results: batchReceipts || [], summary: summary });
+            state.transcript.push({ kind: 'tool', name: 'batch', ok: batchOk, result: batchResult, summary: summary });
             // 68th/70th-round trackers: fed PER MEMBER (spec §4.3 — the
             // exact-repeat detection works inside batches). A REJECTED
             // batch is fed as one call: an identically-rejected resend is
