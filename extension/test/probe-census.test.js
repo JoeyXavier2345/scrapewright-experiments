@@ -557,6 +557,62 @@ describe('probe.census bounded mount phase (247th round)', () => {
   });
 });
 
+// 248th round (joint-solver second live run): the sweep's census never ran
+// the mount phase over a window of recommendation cards — their links
+// carried DIFFERING href tokens (identity non-empty → the 247th trigger
+// missed) while the sampled window lacked the time/count field families
+// organic content carries. Family absence is now a mount trigger of its
+// own (scrollRounds>0 callers ONLY; the default stays 0).
+describe('probe.census mount trigger — field-family absence (248th round)', () => {
+  // Recommendation cards: per-record ?entry= tokens (identity NON-empty) but
+  // no time-like and no count-like leaves — the rec-dominated window shape.
+  function recCard(n) {
+    return '<div class="card">' +
+      '<a class="ttl" href="/rec/entry?entry=' + (2000 + n) + '">Recommended channel ' + n + '</a>' +
+      '</div>';
+  }
+
+  it('identity NON-empty but no time/count lanes — mount hops run; growth re-censuses and the lanes appear', async () => {
+    const grown = [cardHtml(1), cardHtml(2), cardHtml(3), cardHtml(4), cardHtml(5)];
+    const { tools, calls } = makeCensusTools(
+      [recCard(1), recCard(2), recCard(3)],
+      { scrollGrows: true, grownRecords: grown });
+    const r = await tools.census({ containerSel: 'div.card', scrollRounds: 2 });
+    assert.equal(calls.filter((s) => /\$scrollBy\(/.test(s)).length, 1,
+      'the family-absence trigger hops — identity alone (non-empty here) would have skipped the phase');
+    assert.ok(r.mount, 'mount receipt present');
+    assert.equal(r.mount.rounds, 1);
+    assert.equal(r.mount.reCensused, true);
+    assert.ok(r.lanes.time && r.lanes.time.some((c) => c.selector === 'span.ts'),
+      'time lane present from the GROWN population');
+    assert.ok(r.lanes.count && r.lanes.count.some((c) => c.selector === 'span.cnt'),
+      'count lane present from the GROWN population');
+    assert.ok(Array.isArray(r.hrefIdentity) && r.hrefIdentity.some((e) => e.token === 'query:story'),
+      'identity re-diffed on the grown cards');
+    assert.ok(!r.mountHint, 'the re-census resolved the trigger — no hint');
+  });
+
+  it('identity NON-empty, no growth — hops bounded at scrollRounds, families still absent, mountHint names the field families', async () => {
+    const { tools, calls } = makeCensusTools([recCard(1), recCard(2), recCard(3)]);
+    const r = await tools.census({ containerSel: 'div.card', scrollRounds: 2 });
+    assert.equal(calls.filter((s) => /\$scrollBy\(/.test(s)).length, 2,
+      'hopping bounded at scrollRounds despite the non-empty identity');
+    assert.ok(r.mount && r.mount.rounds === 2 && r.mount.reCensused === false, 'mount receipt discloses the unproductive hops');
+    assert.ok(!Array.isArray(r.lanes.time) || !r.lanes.time.length, 'time lane still absent');
+    assert.ok(!Array.isArray(r.lanes.count) || !r.lanes.count.length, 'count lane still absent');
+    assert.match(r.mountHint, /MOUNTED-WINDOW BIAS/);
+    assert.match(r.mountHint, /field families \(time\/count\) were absent from the sampled window/,
+      'the hint text covers the extended trigger');
+  });
+
+  it('families present + identity present — still no mount phase (healthy window pinned)', async () => {
+    const { tools, calls } = makeCensusTools([cardHtml(1), cardHtml(2), cardHtml(3)]);
+    const r = await tools.census({ containerSel: 'div.card', scrollRounds: 2 });
+    assert.ok(!calls.some((s) => /\$scrollBy\(/.test(s)), 'healthy window — no hops');
+    assert.ok(!r.mount);
+  });
+});
+
 // 177c round (live: the default timestamp union matched ZERO anchors inside
 // search-post containers — their anchors are plain links, not
 // labelledby-carrying feed-card spans — while the census's own lanes held

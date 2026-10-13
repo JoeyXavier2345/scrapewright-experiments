@@ -221,6 +221,72 @@ describe('joint solver — synthesizeFromEvidence (pure)', () => {
     const withUrl = AP.synthesizeFromEvidence({ census: CENSUS_FIX }, '提取帖子正文与悬浮窗时间。', SCHEMA);
     assert.match(withUrl.steps.find((s) => s.id === 'extract').script, /if \(!r\.postUrl\) continue;/, 'bound url keeps the population filter');
   });
+  // 248th round (FIX 2, joint-solver second live run): every synthesized
+  // selector was obfuscated-class anchored (a.x1i10hfl) and died cross-tab
+  // on class churn — while the census's OWN hrefIdentity tokens named the
+  // churn-proof attribute binding. When query tokens exist and the url-lane
+  // selector is class-anchored only, the identity selector becomes the
+  // a[href*="tok="] attribute union.
+  it('248th FIX 2: class-anchored url lane + query tokens → the identity selector is the a[href*="tok="] union, not the class', () => {
+    const census = JSON.parse(JSON.stringify(CENSUS_FIX));
+    census.lanes.url = [{ selector: 'a.x1i10hfl', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l1', 'l2'] }];
+    census.hrefIdentity = [{ token: 'query:story_fbid', coverage: '5/5', samples: ['101a', '202b'] }];
+    const out = AP.synthesizeFromEvidence({ census }, '提取帖子。悬浮窗时间戳。', SCHEMA);
+    assert.ok(out.selectorProvenance, 'selectorProvenance rides the synthesis result');
+    assert.equal(out.selectorProvenance.source, 'hrefIdentity-tokens');
+    assert.equal(out.selectorProvenance.identitySelector, 'a[href*="story_fbid="]');
+    const ex = out.steps.find((s) => s.id === 'extract');
+    // `\\?` tolerates the JSON.stringify quote-escaping inside the emitted
+    // string literals — the attribute union itself rides verbatim.
+    assert.match(ex.script, /:has\(a\[href\*=\\?"story_fbid=\\?"\]\)/, 'the CARD :has() filter uses the attribute union');
+    assert.match(ex.script, /postUrl: \{ selector: "a\[href\*=\\?"story_fbid=\\?"\]", attr: 'href' \}/, 'the postUrl field selector uses the attribute union');
+    assert.doesNotMatch(ex.script, /x1i10hfl/, 'the churn-vulnerable class never rides into the artifact');
+    const wait = out.steps.find((s) => s.id === 'wait');
+    assert.match(wait.script, /\$wait\("\[role=article\]:has\(a\[href\*=\\?"story_fbid=\\?"\]\)", 3000\)/, 'the wait step gates on the same union');
+  });
+  it('248th FIX 2: attribute-bearing url lane is kept — it is already churn-resistant', () => {
+    const out = AP.synthesizeFromEvidence({ census: CENSUS_FIX }, '提取帖子。', SCHEMA);
+    assert.equal(out.selectorProvenance.source, 'url-lane');
+    assert.equal(out.selectorProvenance.identitySelector, 'a[href*="/posts/"], a[href*="story"]');
+    const ex = out.steps.find((s) => s.id === 'extract');
+    assert.match(ex.script, /:has\(a\[href\*=\\?"\/posts\/\\?"\], a\[href\*=\\?"story\\?"\]\)/);
+  });
+  it('248th FIX 2: the attribute union caps at 3 tokens', () => {
+    const census = JSON.parse(JSON.stringify(CENSUS_FIX));
+    census.lanes.url = [{ selector: 'a.x1i10hfl', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }];
+    census.hrefIdentity = ['a', 'b', 'c', 'd'].map((k) => ({ token: 'query:' + k, coverage: '5/5', samples: ['1' + k, '2' + k] }));
+    const out = AP.synthesizeFromEvidence({ census }, '提取帖子。', SCHEMA);
+    assert.equal(out.selectorProvenance.identitySelector, 'a[href*="a="], a[href*="b="], a[href*="c="]',
+      'only the first 3 query tokens ride the union');
+  });
+  // 248th round (FIX 3): the second live run's schema named likes/comments/
+  // shares while VOCAB_SLOT only knew likeCount/commentCount/shareCount —
+  // every count slot went unmapped and the assembly emitted keys the schema
+  // never declared.
+  it('248th FIX 3: plural schema names (likes/comments/shares) map — assembly keys and unfilled slots use the schema names', () => {
+    const PLURAL_SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
+      type: 'object', required: ['postUrl', 'postTime', 'content'], properties: {
+        postUrl: { type: 'string' }, postTime: { type: 'string' }, content: { type: 'string' },
+        likes: { type: 'string' }, comments: { type: 'string' }, shares: { type: 'string' } } } } } };
+    const noCount = JSON.parse(JSON.stringify(CENSUS_FIX));
+    noCount.lanes.count = [];
+    const out = AP.synthesizeFromEvidence({ census: noCount }, REQ_FULL, PLURAL_SCHEMA);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    assert.match(ex.script, /likes: like, comments: num\(commL\), shares: num\(shrL\)/, 'assembly keys follow the schema names');
+    assert.doesNotMatch(ex.script, /likeCount:/, 'no undeclared likeCount key ships');
+    const slots = out.unfilled.map((u) => u.slot);
+    assert.ok(slots.indexOf('likes') > -1, 'count-lane absence names the plural slot');
+    assert.ok(slots.indexOf('comments') > -1 && slots.indexOf('shares') > -1, 'all three plural slots disclosed');
+    // The canonical names keep resolving when the schema uses them.
+    const canon = AP.synthesizeFromEvidence({ census: noCount }, REQ_FULL, SCHEMA);
+    assert.ok(canon.unfilled.some((u) => u.slot === 'likeCount'), 'canonical schema still names likeCount');
+    assert.match(canon.steps.find((s) => s.id === 'extract').script, /likeCount: like, commentCount: num\(commL\), shareCount: num\(shrL\)/);
+    // A count lane present + plural schema → the labels carrier assembles
+    // into the plural keys.
+    const withCount = AP.synthesizeFromEvidence({ census: CENSUS_FIX }, REQ_FULL, PLURAL_SCHEMA);
+    assert.match(withCount.steps.find((s) => s.id === 'extract').script, /likes: like, comments: num\(commL\), shares: num\(shrL\)/);
+    assert.match(withCount.steps.find((s) => s.id === 'extract').script, /labels: \{ selector: '\[aria-label\]'/);
+  });
 });
 
 describe('joint solver — red-receipt fragment renderers', () => {
@@ -434,6 +500,37 @@ describe('joint solver — proposeArtifact (stubbed sweep)', () => {
     assert.equal(attrCalls, 0, 'no attrStats dispatch past the hard skip');
     assert.ok(Array.isArray(out.attrGrounding) && /sweep budget/.test(out.attrGrounding[0].skipped || ''), 'skip disclosed');
   });
+  // 248th round (FIX 2): the propose receipt passes selectorProvenance
+  // through, and the P2-F attr-grounding hop censuses the attrs of the
+  // EMITTED card — a class-only lane replaced by the token union now carries
+  // a[href*=…] into :has(), so the sweep must produce the href receipt the
+  // gate will demand (the exact P2-F failure shape, re-introduced by the
+  // replacement if the hop still derived from the raw lane).
+  it('248th FIX 2: receipt carries selectorProvenance; the attrStats hop censuses the EMITTED token-union card attrs', async () => {
+    const attrCalls = [];
+    const census = CENSUS_SHALLOW();
+    census.lanes.url = [{ selector: 'a.x1i10hfl', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }];
+    const probes = {
+      count: async () => ({ count: 12 }),
+      census: async () => census,
+      attrStats: async (a) => {
+        attrCalls.push(a);
+        return { totalItems: 5, values: [{ value: '/x?id=1', items: 5, pct: 100 }], absentPct: 0 };
+      }
+    };
+    const out = await AP.proposeArtifact({
+      probes, requirementText: REQ_FULL, outputSchema: SCHEMA_FIX(), currentArtifact: null,
+      applyArtifact: async () => ({ version: 1 })
+    });
+    assert.equal(out.applied, true);
+    assert.ok(out.selectorProvenance, 'the receipt discloses the identity-selector source');
+    assert.equal(out.selectorProvenance.source, 'hrefIdentity-tokens');
+    assert.equal(out.selectorProvenance.identitySelector, 'a[href*="id="]');
+    assert.equal(attrCalls.length, 1, 'href — the token-union :has() filter attr — censused exactly once');
+    assert.equal(attrCalls[0].attr, 'href');
+    assert.equal(attrCalls[0].containerSel, '[role=article] [href]', 'descendant form of the EMITTED card filter');
+    assert.ok(Array.isArray(out.attrGrounding) && out.attrGrounding.length === 1 && out.attrGrounding[0].attr === 'href');
+  });
 });
 
 describe('joint solver — red receipts carry fragments', () => {
@@ -556,7 +653,14 @@ describe('joint solver — red→propose nudge', () => {
     const tools = createSessionTools({
       rail: { executeDsl: async () => ({}), pageState: async () => ({}), epoch: 0 },
       runVerify: async () => { const r = verifyResults[Math.min(vi, verifyResults.length - 1)]; vi += 1; return r; },
-      probeFactory: () => ({ count: async () => ({ count: countVal }), census: async () => ({ containerSel: '[role=article]', total: 5, sampled: [{}], lanes: { url: [{ selector: 'a', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }], time: [{ selector: 'span', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }], count: [], id: [], text: [{ selector: 'div', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['b'] }] }, hrefIdentity: [{ token: 'query:id', coverage: '5/5', samples: ['a1', 'b2'] }] }), sample: async () => ({}) }),
+      // 248th round: the stub census carries NO hrefIdentity tokens — a bare
+      // 'a' url lane is kept verbatim, so the synthesized CARD stays
+      // attr-free. These routing/lineage tests stub the whole probe bag
+      // (nothing records observation receipts), and a token-derived
+      // a[href*=…] CARD would demand an attr-distribution receipt the
+      // stubs can never land — the churn-proof selector path is covered by
+      // the unit tests above and the P2-F alignment test.
+      probeFactory: () => ({ count: async () => ({ count: countVal }), census: async () => ({ containerSel: '[role=article]', total: 5, sampled: [{}], lanes: { url: [{ selector: 'a', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }], time: [{ selector: 'span', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }], count: [], id: [], text: [{ selector: 'div', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['b'] }] }, hrefIdentity: [] }), sample: async () => ({}) }),
       getDraftService: () => draft, applyArtifact: (a) => { draft = { steps: a.steps, targetUrl: 'https://example.com/?k={{k}}', config: {} }; return Promise.resolve({ version: draft.steps.length }); },
       getTestInput: () => ({ k: 'ml' }), getOutputSchema: () => SCHEMAS.outputSchema, getSteps: () => (draft ? draft.steps : []),
       ioConfirmBridge: { request: (p) => Promise.resolve({ confirmed: true, testInput: p && p.testInput }) }

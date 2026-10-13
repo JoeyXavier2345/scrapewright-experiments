@@ -1334,15 +1334,24 @@
       if (pop && pop.zero) return pop.receipt;
       if (pop && typeof pop.error === 'string') return pop;
       // 247th round (FIX A): the bounded mount phase. Runs ONLY when the
-      // caller opted in (scrollRounds>0) AND the identity diff came back
-      // empty — the mounted-window signature. Each hop is a scrollUntil-
-      // shaped round ($scrollBy + settle + before/after counts); if the
-      // population grew, RE-RUN the census read on the grown population
-      // and stop hopping. Best-effort throughout: a failed hop or a failed
-      // re-read is an evidence gap, never a crash — the original census
-      // survives.
+      // caller opted in (scrollRounds>0) AND the mounted-window signature
+      // showed up. Each hop is a scrollUntil-shaped round ($scrollBy +
+      // settle + before/after counts); if the population grew, RE-RUN the
+      // census read on the grown population and stop hopping. Best-effort
+      // throughout: a failed hop or a failed re-read is an evidence gap,
+      // never a crash — the original census survives.
+      // 248th round: the trigger extends beyond the empty identity diff —
+      // the joint solver's second live run sampled a window of
+      // recommendation cards whose links carried DIFFERING href tokens
+      // (identity non-empty → the 247th trigger missed) while the sampled
+      // window held NO time-like and NO count-like lane, the field families
+      // organic content carries. Family absence is the same mounted-window
+      // signature (scrollRounds>0 callers ONLY; default 0 unchanged).
+      const identityMissing_248 = !(Array.isArray(pop.hrefIdentity) && pop.hrefIdentity.length);
+      const familiesMissing_248 = !((pop.lanes && Array.isArray(pop.lanes.time) && pop.lanes.time.length) ||
+        (pop.lanes && Array.isArray(pop.lanes.count) && pop.lanes.count.length));
       let mount = null;
-      if (scrollRounds > 0 && !(Array.isArray(pop.hrefIdentity) && pop.hrefIdentity.length)) {
+      if (scrollRounds > 0 && (identityMissing_248 || familiesMissing_248)) {
         const countBefore = pop.total;
         let countAfter = countBefore;
         let rounds = 0;
@@ -1499,12 +1508,19 @@
       // ran (scrollRounds 0/default) or it ran to its bound without
       // growth. A NEW FIELD, never appended to out.note — the pinned note
       // text stays byte-identical.
+      // 248th round: the field-family trigger gets the same disclosure —
+      // time/count lanes still absent after (or without) hopping means the
+      // sampled window never saw the field families organic content
+      // carries, whatever the identity diff says.
       const urlLaneHasATag = Array.isArray(lanes.url) && lanes.url.some((e) => e && (
         e.tag === 'a' || /^a(\[|\.|:|$)/.test(String(e.selector || ''))));
+      const fieldFamiliesAbsent_248 = !(Array.isArray(lanes.time) && lanes.time.length) &&
+        !(Array.isArray(lanes.count) && lanes.count.length);
       const mountResolvedIdentity = !!(mount && mount.reCensused);
-      if (!mountResolvedIdentity && !(Array.isArray(hrefIdentity) && hrefIdentity.length) && !urlLaneHasATag) {
+      if (!mountResolvedIdentity && ((!(Array.isArray(hrefIdentity) && hrefIdentity.length) && !urlLaneHasATag) || fieldFamiliesAbsent_248)) {
         out.mountHint = 'MOUNTED-WINDOW BIAS: the identity/url lane is empty over the ' + total +
-          ' mounted cards — top-of-feed modules (corrections/recommendations) can occupy the window while organic items sit unmounted below: re-run with scrollRounds:2 (bounded scroll + re-census) or scroll via $scrollBy first.';
+          ' mounted cards — top-of-feed modules (corrections/recommendations) can occupy the window while organic items sit unmounted below: re-run with scrollRounds:2 (bounded scroll + re-census) or scroll via $scrollBy first.' +
+          ' or the field families (time/count) were absent from the sampled window';
       }
       if (observationLog) {
         observationLog.record({ tool: 'probe.census', selectors: [containerSel], summary: 'census total=' + total + ' lanes=' + Object.keys(lanes).join('+') + (hrefIdentity.length ? ' hrefIdentity=' + hrefIdentity.length : '') + (a.hover === true ? ' +hover' : '') });

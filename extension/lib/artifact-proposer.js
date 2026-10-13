@@ -55,6 +55,13 @@ function parseRequirementClauses(requirementText) {
 // by the sweep until one counts 3..200 cards).
 const BOOTSTRAP_CONTAINERS_246 = ['[role=article]', 'div[role=feed] > div', 'article', 'li'];
 const VOCAB_SLOT_246 = [
+  // 248th round (FIX 3): plural/short schema names FIRST — the second live
+  // run's schema named likes/comments/shares and every count slot went
+  // unmapped (the vocab only knew likeCount/commentCount/shareCount), so
+  // the assembly emitted keys the schema never declared. slotFor picks the
+  // field that EXISTS in schemaFields, so the plural pair wins only when
+  // the schema itself named it that.
+  ['like', 'likes'], ['comment', 'comments'], ['share', 'shares'],
   ['like', 'likeCount'], ['comment', 'commentCount'], ['share', 'shareCount'],
   ['forward', 'shareCount'], ['time', 'postTime'], ['date', 'postTime'],
   ['url', 'postUrl'], ['link', 'postUrl'], ['content', 'content'], ['text', 'content'],
@@ -84,6 +91,40 @@ function laneTop_246(lanes, type) {
 
 function escRe_246(s) { return String(s).replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'); }
 
+// 248th round (FIX 2, joint-solver second live run): churn-proof identity
+// selector. Every synthesized selector was obfuscated-class anchored
+// (a.x1i10hfl) and died cross-tab on class churn, while the census's OWN
+// hrefIdentity tokens named the churn-proof attribute binding. When query
+// tokens exist and the url-lane selector is class-anchored only (no '['
+// attribute clause), the identity selector becomes an attribute union
+// capped at 3 tokens — shared by the synthesis AND the sweep's P2-F
+// attr-grounding hop so the receipts always describe the EMITTED card.
+function queryTokensOf_248(census) {
+  const raw = (census && Array.isArray(census.hrefIdentity)) ? census.hrefIdentity.map((h) => h && h.token) : [];
+  const toks = [];
+  for (const t of raw) {
+    if (typeof t === 'string' && t.indexOf('query:') === 0 && t.length > 6 && toks.indexOf(t) === -1) toks.push(t);
+  }
+  return toks;
+}
+function classAnchoredOnly_248(sel) {
+  const s = String(sel || '');
+  if (!s) return false;
+  return /^[a-z0-9]*\.[a-z0-9_-]+$/i.test(s) || s.indexOf('[') === -1;
+}
+function chooseIdentitySelector_248(census) {
+  const urlLane = census ? laneTop_246(census.lanes, 'url') : null;
+  const urlLaneSel = urlLane ? urlLane.selector : null;
+  const tokens = queryTokensOf_248(census);
+  if (urlLaneSel && tokens.length && classAnchoredOnly_248(urlLaneSel)) {
+    const union = tokens.slice(0, 3)
+      .map((t) => 'a[href*=' + JSON.stringify(t.slice(6) + '=') + ']')
+      .join(', ');
+    return { selector: union, source: 'hrefIdentity-tokens' };
+  }
+  return { selector: urlLaneSel || null, source: urlLaneSel ? 'url-lane' : 'none' };
+}
+
 // Review batch (joint-solver #P2-F): the grounding gate demands an
 // attribute-distribution receipt (observationLog.coversAttr) for every attr
 // inside :has()/:not() spans of a claimed selector. The synthesized CARD
@@ -109,7 +150,6 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   const clauses = parseRequirementClauses(requirementText);
   const census = (pack && pack.census) || null;
   const unfilled = [];
-  const urlLane = census ? laneTop_246(census.lanes, 'url') : null;
   const timeLane = census ? laneTop_246(census.lanes, 'time') : null;
   const countLane = census ? laneTop_246(census.lanes, 'count') : null;
   const textLane = census ? laneTop_246(census.lanes, 'text') : null;
@@ -121,14 +161,15 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   // tokens, STRIP the prefix, ignore path:* (path position is not a
   // query-param binding), and anchor each alternative at a [?&] so it
   // matches real query strings.
-  const hrefTokensRaw = (census && Array.isArray(census.hrefIdentity)) ? census.hrefIdentity.map((h) => h && h.token) : [];
-  const hrefTokens = [];
-  for (const t of hrefTokensRaw) {
-    if (typeof t === 'string' && t.indexOf('query:') === 0 && t.length > 6 && hrefTokens.indexOf(t) === -1) hrefTokens.push(t);
-  }
+  const hrefTokens = queryTokensOf_248(census);
 
   const baseCard = (census && census.containerSel) || BOOTSTRAP_CONTAINERS_246[0];
-  const identitySel = urlLane ? urlLane.selector : null;
+  // 248th round (FIX 2): the identity selector is the churn-proof token
+  // union whenever the url lane is class-anchored only — obfuscated classes
+  // (a.x1i10hfl) churn cross-tab; the page's own href-identity tokens do
+  // not. Attribute/structural lane selectors are kept as measured.
+  const identityChoice = chooseIdentitySelector_248(census);
+  const identitySel = identityChoice.selector;
   const CARD = identitySel ? baseCard + ':has(' + identitySel + ')' : baseCard;
   if (!identitySel) unfilled.push({ slot: 'postUrl', reason: 'no url-like census lane — the population filter and the link field have no measured selector; run probe.census or hand-bind' });
 
@@ -174,6 +215,13 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
     return null;
   };
   const urlSlot = slotFor('url') || 'postUrl';
+  // 248th round (FIX 3): the count assembly keys follow the SCHEMA's own
+  // field names — plural/short names (likes/comments/shares) resolve
+  // through the plural vocab pairs; the canonical likeCount family stays
+  // the default when the schema named those (or named none).
+  const likeSlot = slotFor('like') || 'likeCount';
+  const commentSlot = slotFor('comment') || 'commentCount';
+  const shareSlot = slotFor('share') || 'shareCount';
   const fm = [];
   if (identitySel) fm.push(urlSlot + ': { selector: ' + JSON.stringify(identitySel) + ', attr: \'href\' }');
   const timeFm = [];
@@ -187,7 +235,10 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   if (countLane) {
     fm.push('labels: { selector: \'[aria-label]\', attr: \'aria-label\', multi: true }');
   } else {
-    for (const s of ['likeCount', 'commentCount', 'shareCount']) {
+    // 248th round (FIX 3): the plural schema names are checked too — a
+    // schema declaring likes/comments/shares must see THOSE slots named as
+    // the gaps, not the canonical likeCount family it never declared.
+    for (const s of ['likeCount', 'likes', 'commentCount', 'comments', 'shareCount', 'shares']) {
       if (schemaFields.indexOf(s) > -1) unfilled.push({ slot: s, reason: 'no count-like census lane on this page — renegotiate via io.confirm or bind the count carrier by hand' });
     }
   }
@@ -233,7 +284,7 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
     '    ' + urlSlot + ': r.' + urlSlot + ',',
     '    postTime: abs || times[0] || \'\',',
     '    content: r.content || \'\',',
-    '    likeCount: like, commentCount: num(commL), shareCount: num(shrL),',
+    '    ' + likeSlot + ': like, ' + commentSlot + ': num(commL), ' + shareSlot + ': num(shrL),',
     '    mediaUrls: (r.mediaUrls || []).filter(function (u) { return /^https?:/.test(String(u)); }),',
     '    htmlSnippet: String(r.htmlSnippet || \'\').slice(0, 5000)',
     '  });',
@@ -243,7 +294,10 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   ].filter(function (line) { return line != null; }).join('\n');
   steps.push({ id: 'extract', name: 'extract cards with hover', script: extractScript, onSuccess: 'TERMINATE', onFailure: 'TERMINATE', maxIterations: 1 });
   if (!census) unfilled.push({ slot: 'census', reason: 'no census evidence in this session — selectors fell back to web-generic ARIA conventions; re-run artifact.propose after probe.census for measured lanes' });
-  return { steps: steps, unfilled: unfilled };
+  // 248th round (FIX 2): the identity-selector provenance — which selector
+  // the CARD :has() filter and the postUrl field bind, and whether it came
+  // from the measured url lane or the churn-proof hrefIdentity token union.
+  return { steps: steps, unfilled: unfilled, selectorProvenance: { identitySelector: identitySel, source: identityChoice.source } };
 }
 
 // Phase-3 renderers: decisive red receipts carry COPY-READY fix fragments —
@@ -335,8 +389,14 @@ async function proposeArtifact(ctx) {
   let attrGrounding = null;
   if (census && containerSel && typeof probes.attrStats === 'function' && GroundingGateRef_246) {
     try {
-      const urlSel = laneTop_246(census.lanes, 'url');
-      const cardSel = urlSel ? containerSel + ':has(' + urlSel.selector + ')' : containerSel;
+      // 248th round (FIX 2): derive the card through the SAME identity
+      // choice the synthesis emits — a class-only lane replaced by the
+      // token union carries a[href*=…] into :has(), and the sweep must
+      // produce the href receipt the gate will demand for the EMITTED
+      // selector (the exact P2-F failure shape, re-introduced by the
+      // replacement if the hop still read the raw lane selector).
+      const identityChoice = chooseIdentitySelector_248(census);
+      const cardSel = identityChoice.selector ? containerSel + ':has(' + identityChoice.selector + ')' : containerSel;
       const attrList = GroundingGateRef_246.extractFilterAttributes(cardSel) || [];
       const seen = [];
       for (const at of attrList) { if (seen.indexOf(at) === -1) seen.push(at); }
@@ -371,6 +431,7 @@ async function proposeArtifact(ctx) {
       applied: 'engine-pending',
       steps: synth.steps,
       unfilled: synth.unfilled,
+      selectorProvenance: synth.selectorProvenance,
       merge: mergeNote,
       sweepCostMs: Date.now() - t0,
       bootstrapCapped: bootstrapCapped || undefined,
@@ -385,6 +446,7 @@ async function proposeArtifact(ctx) {
       version: (applied && applied.version) || null,
       merge: mergeNote,
       unfilled: synth.unfilled,
+      selectorProvenance: synth.selectorProvenance,
       sweepCostMs: Date.now() - t0,
       bootstrapCapped: bootstrapCapped || undefined,
       attrGrounding: attrGrounding || undefined,
@@ -396,6 +458,7 @@ async function proposeArtifact(ctx) {
       error: String((eApply && eApply.message) || eApply),
       merge: mergeNote,
       unfilled: synth.unfilled,
+      selectorProvenance: synth.selectorProvenance,
       sweepCostMs: Date.now() - t0,
       bootstrapCapped: bootstrapCapped || undefined,
       attrGrounding: attrGrounding || undefined,
