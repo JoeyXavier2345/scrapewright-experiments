@@ -325,10 +325,30 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   const fm = [];
   if (identitySel) fm.push(urlSlot + ': { selector: ' + JSON.stringify(identitySel) + ', attr: \'href\' }');
   const timeFm = [];
-  if (timeLane) {
-    timeFm.push('tsAria: { selector: ' + JSON.stringify(timeLane.selector) + ', attr: \'aria-label\' }');
-    timeFm.push('tsLabel: { selector: ' + JSON.stringify(timeLane.selector) + ', labelledby: true }');
-    timeFm.push('tsHover: { selector: ' + JSON.stringify(timeLane.selector) + ', read: \'hoverPopover\', match: /(19|20)\\d{2}/ }');
+  // 252nd round (FIX B): the sweep's census runs {hover:true} and carries
+  // the probe.timestamp receipt in `timeHover` — candidates[] with the
+  // absolute dates the hover dance captured plus the anchorSel it actually
+  // hovered. synthesizeFromEvidence used to read ONLY the lanes: when no
+  // time-ish leaf lane existed, postTime shipped unfilled three live
+  // sessions straight while the receipt's own absolute date sat in the
+  // pack. When the lanes carry no time selector BUT the receipt proves a
+  // FULL absolute (non-relative, year-bearing), the anchor family is
+  // MEASURED evidence — bind the ts triple from the receipt's anchorSel
+  // (web-generic union fallback when the receipt carries none). A lane, if
+  // present, still outranks the receipt (cross-sample coverage beats one
+  // card's dance).
+  const th252 = census ? census.timeHover : null;
+  const thAbs252 = !!(th252 && Array.isArray(th252.candidates) &&
+    th252.candidates.some(function (c) { return c && !c.relative && /(19|20)\d{2}/.test(String(c.value || '')); }));
+  const timeSel252 = timeLane
+    ? timeLane.selector
+    : (thAbs252
+        ? ((th252 && typeof th252.anchorSel === 'string' && th252.anchorSel) ? th252.anchorSel : 'a:has(span[aria-labelledby]), [aria-labelledby], abbr[aria-label], time')
+        : null);
+  if (timeSel252) {
+    timeFm.push('tsAria: { selector: ' + JSON.stringify(timeSel252) + ', attr: \'aria-label\' }');
+    timeFm.push('tsLabel: { selector: ' + JSON.stringify(timeSel252) + ', labelledby: true }');
+    timeFm.push('tsHover: { selector: ' + JSON.stringify(timeSel252) + ', read: \'hoverPopover\', match: /(19|20)\\d{2}/ }');
   } else {
     unfilled.push({ slot: 'postTime', reason: 'no time-like census lane — run probe.census {hover:true} or bind the timestamp anchor by hand' });
   }
@@ -402,6 +422,11 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   // page and must be auditable like every other selector.
   const provenance = { identitySelector: identitySel, source: identityChoice.source };
   if (affordanceSel) provenance.affordanceSelector = affordanceSel;
+  // 252nd round (FIX B): which measured source bound the ts triple — the
+  // timeHover receipt's anchorSel (hover-dance evidence) vs the census time
+  // lane. The lane path stays untagged (it is already the lanes' own
+  // selector disclosure).
+  if (!timeLane && thAbs252) provenance.timeSource = 'timeHover';
   return { steps: steps, unfilled: unfilled, selectorProvenance: provenance };
 }
 

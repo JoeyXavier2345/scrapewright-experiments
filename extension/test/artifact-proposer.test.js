@@ -1121,6 +1121,110 @@ describe('joint solver — universality red line', () => {
   });
 });
 
+// 252nd round (FIX B): the sweep's census runs {hover:true} and carries
+// the probe.timestamp receipt in `timeHover` — with absolute candidates
+// and the anchorSel the dance actually hovered. synthesizeFromEvidence
+// ignored it: lanes.time absent → postTime unfilled, three live sessions
+// straight, while the receipt's own absolute date sat in the pack.
+describe('joint solver — 252 FIX B: timeHover evidence binds postTime when the time lane is absent', () => {
+  const SCHEMA_252 = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
+    type: 'object', required: ['postId', 'postUrl', 'postTime', 'content'], properties: {
+      postId: { type: 'string' }, postUrl: { type: 'string' }, postTime: { type: 'string' }, content: { type: 'string' } } } } } };
+  const noTimeCensus = () => ({
+    containerSel: '[role=article]',
+    total: 8,
+    sampled: [{}],
+    lanes: {
+      url: [{ selector: 'a[href*="/posts/"]', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['link1', 'link2'] }],
+      time: [],
+      count: [{ selector: '[aria-label]', tag: 'div', strength: 'medium', coverage: '5/5', texts: ['Like: 185 people'] }],
+      id: [],
+      text: [{ selector: 'div[data-ad-comet-preview="message"]', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['body text'] }]
+    },
+    hrefIdentity: []
+  });
+  const REQ_252 = '提取帖子正文与悬浮窗时间。';
+
+  it('timeHover with an absolute candidate → the ts triple binds the receipt anchorSel, postTime leaves unfilled, provenance names timeHover', () => {
+    const census = noTimeCensus();
+    census.timeHover = {
+      containerSel: '[role=article]',
+      anchorSel: 'abbr[aria-label]',
+      anchorLog: [],
+      candidates: [{ value: 'November 3, 2025', source: '__t_aria', relative: false, partial: false }],
+      absolute: 'November 3, 2025'
+    };
+    const out = AP.synthesizeFromEvidence({ census }, REQ_252, SCHEMA_252);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    assert.ok(ex.script.includes('tsAria: { selector: "abbr[aria-label]", attr: \'aria-label\' }'), 'tsAria bound to the receipt anchorSel');
+    assert.ok(ex.script.includes('tsLabel: { selector: "abbr[aria-label]", labelledby: true }'), 'tsLabel bound to the receipt anchorSel');
+    assert.ok(ex.script.includes('tsHover: { selector: "abbr[aria-label]", read: \'hoverPopover\', match: /(19|20)\\d{2}/ }'), 'tsHover carries the year match');
+    assert.ok(!out.unfilled.some((u) => u.slot === 'postTime'), 'postTime is no longer an unfilled slot');
+    assert.equal(out.selectorProvenance.timeSource, 'timeHover', 'provenance names the measured source');
+    // No anchorSel on the receipt → the web-generic timestamp anchor union
+    // fallback (still measured-adjacent: the candidates came from THIS
+    // receipt's hover dance).
+    const censusNoAnchor = noTimeCensus();
+    censusNoAnchor.timeHover = { candidates: [{ value: 'November 3, 2025', relative: false }] };
+    const out2 = AP.synthesizeFromEvidence({ census: censusNoAnchor }, REQ_252, SCHEMA_252);
+    const ex2 = out2.steps.find((s) => s.id === 'extract');
+    assert.ok(ex2.script.includes('tsAria: { selector: "a:has(span[aria-labelledby]), [aria-labelledby], abbr[aria-label], time"'),
+      'the default timestamp anchor union is the no-anchorSel fallback');
+    assert.equal(out2.selectorProvenance.timeSource, 'timeHover');
+  });
+
+  it('timeHover with RELATIVE-ONLY candidates (or an error receipt) → the honest unfilled postTime stays, no ts triple', () => {
+    const census = noTimeCensus();
+    census.timeHover = { containerSel: '[role=article]', anchorSel: 'abbr[aria-label]', anchorLog: [], candidates: [{ value: '2 days ago', source: '__t_text', relative: true, partial: false }], relative: '2 days ago' };
+    const out = AP.synthesizeFromEvidence({ census }, REQ_252, SCHEMA_252);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    // The ASSEMBLY loop references r.tsAria unconditionally (harmless on an
+    // unbound field) — the claim under test is the FIELDMAP binding, i.e.
+    // no `tsAria: {` field spec rides the $extractWithHover call.
+    assert.ok(!/tsAria: \{/.test(ex.script), 'no ts triple from relative-only evidence');
+    assert.ok(!/tsLabel: \{/.test(ex.script) && !/tsHover: \{/.test(ex.script), 'no ts field specs at all');
+    assert.ok(out.unfilled.some((u) => u.slot === 'postTime'), 'the postTime gap stays disclosed');
+    assert.notEqual(out.selectorProvenance.timeSource, 'timeHover', 'no timeHover provenance claim');
+    // A hover-phase ERROR receipt ({error} shape — enhanced mode off, etc.)
+    // is the same no-evidence class.
+    const censusErr = noTimeCensus();
+    censusErr.timeHover = { error: 'HOVER_SKIPPED_ENHANCED_MODE' };
+    const outErr = AP.synthesizeFromEvidence({ census: censusErr }, REQ_252, SCHEMA_252);
+    assert.ok(outErr.unfilled.some((u) => u.slot === 'postTime'), 'an error receipt never binds a ts triple');
+    assert.ok(!/tsAria: \{/.test(outErr.steps.find((s) => s.id === 'extract').script));
+  });
+
+  it('lanes.time PRESENT → the lane still wins, unchanged (timeHover does not override measured lanes)', () => {
+    const census = noTimeCensus();
+    census.lanes.time = [{ selector: 'span[aria-label]', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }];
+    census.timeHover = { anchorSel: 'abbr[aria-label]', candidates: [{ value: 'November 3, 2025', relative: false }], absolute: 'November 3, 2025' };
+    const out = AP.synthesizeFromEvidence({ census }, REQ_252, SCHEMA_252);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    assert.ok(ex.script.includes('tsAria: { selector: "span[aria-label]"'), 'the time-LANE selector is bound');
+    assert.ok(!ex.script.includes('abbr[aria-label]'), 'the timeHover anchor does not ride alongside');
+    assert.notEqual(out.selectorProvenance.timeSource, 'timeHover', 'no timeHover claim when the lane owns the slot');
+    assert.ok(!out.unfilled.some((u) => u.slot === 'postTime'), 'the lane binds it — no unfilled entry');
+  });
+
+  // Behavioral: the emitted extract script must actually PICK the absolute
+  // from the stubbed $extractWithHover record — a syntactic triple that
+  // never flows into postTime is the 252nd live-run shape again.
+  it('behavioral: the compiled extract picks the absolute from tsAria into postTime', async () => {
+    const census = noTimeCensus();
+    census.timeHover = { containerSel: '[role=article]', anchorSel: 'abbr[aria-label]', candidates: [{ value: 'November 3, 2025', relative: false }], absolute: 'November 3, 2025' };
+    const out = AP.synthesizeFromEvidence({ census }, REQ_252, SCHEMA_252);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    const fn = new AsyncFunction('__input__', '$extractWithHover', ex.script);
+    const rs = [
+      { postUrl: 'https://e.com/p/1?story_fbid=aaa111', tsAria: 'November 3, 2025', tsHover: '2 days ago' }
+    ];
+    const res = await fn({ count: 5 }, async () => rs);
+    assert.equal(res.posts.length, 1);
+    assert.equal(res.posts[0].postTime, 'November 3, 2025', 'the year-bearing candidate wins over the relative');
+  });
+});
+
 // Review batch (joint-solver #5): the requirement-clause lexicon is
 // SINGLE-SOURCED. verify-runner used to carry character-identical inline
 // copies of the expand/exclusion/hover clause regexes at its three gate

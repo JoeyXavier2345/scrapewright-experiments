@@ -1572,9 +1572,22 @@
                   ? ', but the extract step produced ' + upstreamDistinct170 + ' distinct value(s) BEFORE the merge — the loss is in the ASSEMBLY.'
                   : '.')
               : '';
+            // 252nd round (FIX A): working-container protection. The live
+            // propose v1 was STRUCTURALLY WORKING (8 containers matched, 3
+            // real posts extracted) — after this red the model REWROTE the
+            // container with a prior-family guess → 0 matches → session
+            // dead. When the run's own census proves containers matched AND
+            // real records were extracted, the error opens with that fact:
+            // the container family works; keep it VERBATIM and fix the
+            // NAMED field/count problems. A container rewrite is the one
+            // move that turns a partial success into a total miss.
+            const structural252 = (csA.maxContainers > 0 && csA.extracted > 0)
+              ? 'STRUCTURAL SUCCESS: ' + csA.maxContainers + ' containers matched and ' + csA.extracted + ' real record(s) extracted — the container family WORKS. Do NOT rewrite the container selector (the next failure class after a container rewrite is usually a total miss): keep it VERBATIM and fix the NAMED problems (the fields/counts below). '
+              : '';
             error = new Error(
               'COUNT_SHORTFALL_' + (supplyBranch170 ? 'SUPPLY' : 'ASSEMBLY') + ': ' + csA.field + ' delivered ' + csA.extracted + ' of ' + csA.requested +
               ' requested while this run matched ' + csA.maxContainers + ' containers.' + censusLine170 + ' ' +
+              structural252 +
               (supplyBranch170
                 ? 'The SUPPLY reading is ' + distinctIds170 + ' distinct records vs ' + csA.maxContainers + ' matched containers — FIRST suspect YOUR discrimination (230th directive: scrolling usually loads more posts; distinct-ids far below matched containers usually means the id/URL filter drops real posts whose link shapes vary — re-census the href families inside the matched containers before believing a supply ceiling). When the organic-vs-ad split is uncertain, annotate.request the population (fields omitted, containerSel set): the user marks the real posts on the highlighted page once. Then scroll-certify with $collectUntil to prove the page offers more; a merge fix cannot create records the page does not offer. '
                 : 'The collection satisfied the ask and the loss is in the ASSEMBLY: compare the per-step counts in steps[].resultPreview (collect saw ' + csA.maxContainers + ', the final array has ' + csA.extracted + ') and fix the merge — key records by a strong per-record identity (the permalink/token id), never by a positional or shared fallback that collapses distinct records. ') +
