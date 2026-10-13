@@ -461,9 +461,14 @@ async function proposeArtifact(ctx) {
   if (containerSel) {
     // 247th round: scrollRounds:2 — the sweep's census runs the bounded
     // mount phase when the identity diff comes back empty over the mounted
-    // window (the maiden live session's top-of-SERP correction strip). The
-    // hops' settle (900ms x2) fits the 120s sweep budget.
-    const censusArgs = { containerSel: containerSel, samples: 5, hover: true, scrollRounds: 2 };
+    // window (the maiden live session's top-of-SERP correction strip).
+    // 250th round: 2→5 — the 249th session's recommendation headers
+    // spanned multiple viewports (the 243rd showed 3→12 only with deep
+    // scroll), and the mount loop is now persistent (it keeps hopping
+    // while the trigger holds), so depth is what finds the organic
+    // population. 5 hops x (900px scroll + 900ms settle + count) ≈ 9-12s
+    // worst case — still inside the 120s sweep budget that gates the hop.
+    const censusArgs = { containerSel: containerSel, samples: 5, hover: true, scrollRounds: 5 };
     const remaining = budget.totalMs - elapsedMs();
     if (typeof remaining === 'number' && remaining > 0) {
       censusArgs.timeoutMs = Math.max(budget.censusMinMs, remaining - 10000);

@@ -1233,10 +1233,15 @@
         timeoutMs = Math.min(Math.floor(a.timeoutMs), SNIPPET_MAX_TIMEOUT_MS);
       }
       // 247th round (build 246's maiden live session): bounded mount phase
-      // opt. scrollRounds 0-3 (default 0 — behavior unchanged), clamped
-      // like scrollUntil's maxRounds, never a rejection.
+      // opt. scrollRounds (default 0 — behavior unchanged), clamped like
+      // scrollUntil's maxRounds, never a rejection. 250th round: the cap
+      // rises 3→5 — the 249th session's recommendation headers spanned
+      // multiple viewports (the 243rd showed 3→12 only with deep scroll),
+      // and the sweep now passes scrollRounds:5 (5 hops x (900px scroll +
+      // 900ms settle + count) ≈ 9-12s worst case, inside the 120s sweep
+      // budget).
       const scrollRounds = (typeof a.scrollRounds === 'number' && a.scrollRounds > 0)
-        ? Math.min(3, Math.floor(a.scrollRounds)) : 0;
+        ? Math.min(5, Math.floor(a.scrollRounds)) : 0;
       const fieldMap = { __c_html: { attr: 'outerHTML' } };
       // 247th round (FIX A): the population read (pre-count -> sampled
       // $extractList -> parse -> lanes -> href diff) extracted into a
@@ -1336,10 +1341,9 @@
       // 247th round (FIX A): the bounded mount phase. Runs ONLY when the
       // caller opted in (scrollRounds>0) AND the mounted-window signature
       // showed up. Each hop is a scrollUntil-shaped round ($scrollBy +
-      // settle + before/after counts); if the population grew, RE-RUN the
-      // census read on the grown population and stop hopping. Best-effort
-      // throughout: a failed hop or a failed re-read is an evidence gap,
-      // never a crash — the original census survives.
+      // settle + before/after counts). Best-effort throughout: a failed hop
+      // or a failed re-read is an evidence gap, never a crash — the
+      // original census survives.
       // 248th round: the trigger extends beyond the empty identity diff —
       // the joint solver's second live run sampled a window of
       // recommendation cards whose links carried DIFFERING href tokens
@@ -1347,15 +1351,32 @@
       // window held NO time-like and NO count-like lane, the field families
       // organic content carries. Family absence is the same mounted-window
       // signature (scrollRounds>0 callers ONLY; default 0 unchanged).
+      // 250th round (249th-session root cause): the loop is PERSISTENT.
+      // The old policy stopped at the FIRST growth + re-census — the live
+      // log hopped 2 rounds, saw 3→4, re-censused, and stopped while the
+      // trigger condition still held (the 4 mounted cards were still
+      // group-recommendation modules; organic posts sit deeper — the 243rd
+      // session showed 3→12 with deep scroll). New policy: keep hopping
+      // while the goal is unmet. Growth re-runs the census read AND
+      // re-evaluates the SAME trigger against the FRESH read; only a
+      // SATISFIED condition (or the scrollRounds bound) stops the loop —
+      // a no-growth hop continues too (mounts come in bursts).
       const identityMissing_248 = !(Array.isArray(pop.hrefIdentity) && pop.hrefIdentity.length);
       const familiesMissing_248 = !((pop.lanes && Array.isArray(pop.lanes.time) && pop.lanes.time.length) ||
         (pop.lanes && Array.isArray(pop.lanes.count) && pop.lanes.count.length));
+      // The goal is the NEGATION of the entry trigger: identity present AND
+      // (time OR count family present). Evaluated against whichever read is
+      // current — the original one before any growth, the fresh one after.
+      const mountGoalMet_250 = (p) => (Array.isArray(p.hrefIdentity) && p.hrefIdentity.length > 0) &&
+        ((p.lanes && Array.isArray(p.lanes.time) && p.lanes.time.length > 0) ||
+         (p.lanes && Array.isArray(p.lanes.count) && p.lanes.count.length > 0));
       let mount = null;
       if (scrollRounds > 0 && (identityMissing_248 || familiesMissing_248)) {
         const countBefore = pop.total;
         let countAfter = countBefore;
         let rounds = 0;
         let reCensused = false;
+        let goalMet = false;
         const roundSnippet =
           'const __c0 = await $count(' + JSON.stringify(containerSel) + ');\n' +
           'await $scrollBy(900);\n' +
@@ -1368,26 +1389,34 @@
           catch (eHop) { r = { error: String((eHop && eHop.message) || eHop) }; }
           if (r && typeof r.error === 'string') break; // a failed hop ends the phase; the census still returns
           rounds += 1;
+          const c0 = (r && typeof r.c0 === 'number') ? r.c0 : countAfter;
           countAfter = (r && typeof r.c1 === 'number') ? r.c1 : countAfter;
           if (observationLog) {
             try {
               observationLog.record({
                 tool: 'probe.census.mount',
                 selectors: [containerSel],
-                summary: 'mount round ' + rounds + ': count ' + ((r && typeof r.c0 === 'number') ? r.c0 : countBefore) + '→' + countAfter
+                summary: 'mount round ' + rounds + ': count ' + c0 + '→' + countAfter
               });
             } catch (eObs) { /* best-effort receipt */ }
           }
-          if (countAfter > countBefore) {
+          if (countAfter > c0) {
+            // Growth: re-read the census, then re-evaluate the trigger
+            // against the FRESH read. A satisfying read ends the loop
+            // (goal met); a still-unsatisfying one (or a failed re-read —
+            // an evidence gap) keeps hopping within the bound.
             const grown = await readPopulation();
             if (grown && !grown.zero && typeof grown.error !== 'string') {
               pop = grown;
               reCensused = true;
+              if (mountGoalMet_250(grown)) { goalMet = true; break; }
             }
-            break;
           }
+          // No growth this hop (or growth that did not resolve the goal) —
+          // continue: lazy feeds mount in bursts, and the 249th session's
+          // organic posts only appeared past the recommendation strip.
         }
-        mount = { rounds: rounds, countBefore: countBefore, countAfter: countAfter, reCensused: reCensused };
+        mount = { rounds: rounds, countBefore: countBefore, countAfter: countAfter, reCensused: reCensused, goalMet: goalMet };
       }
       const total = pop.total;
       const indices = pop.indices;
@@ -1505,19 +1534,23 @@
       // 247th round (FIX A): the mounted-window-bias disclosure. Fires when
       // the identity diff AND the url lane both came back weak (no a-tag
       // lane entry) and the mount phase never FIXED it — either it never
-      // ran (scrollRounds 0/default) or it ran to its bound without
-      // growth. A NEW FIELD, never appended to out.note — the pinned note
-      // text stays byte-identical.
+      // ran (scrollRounds 0/default) or it ran without resolving the goal.
+      // A NEW FIELD, never appended to out.note — the pinned note text
+      // stays byte-identical.
       // 248th round: the field-family trigger gets the same disclosure —
       // time/count lanes still absent after (or without) hopping means the
       // sampled window never saw the field families organic content
       // carries, whatever the identity diff says.
+      // 250th round: the gate keys on mount.goalMet, NOT reCensused — a
+      // re-census over a GROWN-but-still-biased window (the 249th-session
+      // 3→4 growth of recommendation modules) is exactly the case the
+      // hint exists to disclose.
       const urlLaneHasATag = Array.isArray(lanes.url) && lanes.url.some((e) => e && (
         e.tag === 'a' || /^a(\[|\.|:|$)/.test(String(e.selector || ''))));
       const fieldFamiliesAbsent_248 = !(Array.isArray(lanes.time) && lanes.time.length) &&
         !(Array.isArray(lanes.count) && lanes.count.length);
-      const mountResolvedIdentity = !!(mount && mount.reCensused);
-      if (!mountResolvedIdentity && ((!(Array.isArray(hrefIdentity) && hrefIdentity.length) && !urlLaneHasATag) || fieldFamiliesAbsent_248)) {
+      const mountResolved = !!(mount && mount.goalMet);
+      if (!mountResolved && ((!(Array.isArray(hrefIdentity) && hrefIdentity.length) && !urlLaneHasATag) || fieldFamiliesAbsent_248)) {
         out.mountHint = 'MOUNTED-WINDOW BIAS: the identity/url lane is empty over the ' + total +
           ' mounted cards — top-of-feed modules (corrections/recommendations) can occupy the window while organic items sit unmounted below: re-run with scrollRounds:2 (bounded scroll + re-census) or scroll via $scrollBy first.' +
           ' or the field families (time/count) were absent from the sampled window';

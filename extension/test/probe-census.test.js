@@ -37,8 +37,26 @@ function makeCensusTools(records, opts) {
   // and census reads thereafter return the GROWN population (real
   // per-record ?story= tokens), exactly like a lazy feed mounting organic
   // cards below the top-of-window modules.
-  let scrolled = false;
-  const activeRecords = () => (o.scrollGrows && scrolled && o.grownRecords) ? o.grownRecords : records;
+  // 250th round (persistent mount loop): scrollGrowSeq drives PER-HOP
+  // populations — [4,6,9] means hop1 mounts to 4, hop2 to 6, hop3 to 9 (a
+  // flat entry = a no-growth hop). grownRecordsFor(count) maps each
+  // population to its records so a mid-loop re-census sees exactly the
+  // leaves that population carries (the 249th-session live shape: growth
+  // 3→4 was still recommendation cards; identity + time/count families
+  // only appear from population >=7). Backward-compatible with the boolean
+  // scrollGrows fixture.
+  let hops = 0;
+  const activeCount = () => (o.scrollGrowSeq && hops > 0)
+    ? o.scrollGrowSeq[Math.min(hops, o.scrollGrowSeq.length) - 1]
+    : records.length;
+  const activeRecords = () => {
+    if (o.scrollGrowSeq && hops > 0 && typeof o.grownRecordsFor === 'function') {
+      const seqRecs = o.grownRecordsFor(activeCount());
+      if (seqRecs) return seqRecs;
+    }
+    if ((o.scrollGrowSeq || o.scrollGrows) && hops > 0 && o.grownRecords) return o.grownRecords;
+    return records;
+  };
   const tools = createProbeTools({
     executeDsl: async (snippet) => {
       calls.push(snippet);
@@ -55,11 +73,17 @@ function makeCensusTools(records, opts) {
         }];
       }
       if (/\$scrollBy\(/.test(snippet)) {
-        if (o.scrollGrows && !scrolled) {
-          scrolled = true;
-          return { c0: records.length, c1: (o.grownRecords || records).length };
+        if (o.scrollGrowSeq) {
+          const prev = activeCount();
+          hops += 1;
+          return { c0: prev, c1: activeCount() };
         }
-        return { c0: records.length, c1: records.length };
+        if (o.scrollGrows && hops === 0 && o.grownRecords) {
+          hops += 1;
+          return { c0: records.length, c1: o.grownRecords.length };
+        }
+        const cur = activeRecords().length;
+        return { c0: cur, c1: cur };
       }
       if (/\$count\(/.test(snippet)) {
         const src = activeRecords();
@@ -497,14 +521,14 @@ describe('probe.census bounded mount phase (247th round)', () => {
     assert.doesNotMatch(r.note, /MOUNTED-WINDOW BIAS/);
   });
 
-  it('scrollRounds:2 + growth — one hop, re-census on the grown population, mount.reCensused:true, hrefIdentity populated', async () => {
+  it('scrollRounds:2 + growth that SATISFIES the trigger — one hop, re-census on the grown population, mount.reCensused:true, goalMet:true, hrefIdentity populated', async () => {
     const grown = [cardHtml(1), cardHtml(2), cardHtml(3), cardHtml(4), cardHtml(5)];
     const { tools, calls, observationLog } = makeCensusTools(
       [mountedCard(1), mountedCard(2), mountedCard(3)],
       { scrollGrows: true, grownRecords: grown });
     const r = await tools.census({ containerSel: 'div.card', scrollRounds: 2 });
     const scrolls = calls.filter((s) => /\$scrollBy\(/.test(s));
-    assert.equal(scrolls.length, 1, 'growth stops the hopping after one round');
+    assert.equal(scrolls.length, 1, 'goal-satisfying growth stops the hopping after one round');
     assert.match(scrolls[0], /\$count\(/, 'the hop round carries the before/after counts (scrollUntil round shape)');
     assert.match(scrolls[0], /setTimeout\(r,\s*900\)/, 'bounded settle inside the hop');
     assert.ok(r.mount, 'mount receipt present');
@@ -512,6 +536,7 @@ describe('probe.census bounded mount phase (247th round)', () => {
     assert.equal(r.mount.countBefore, 3);
     assert.equal(r.mount.countAfter, 5);
     assert.equal(r.mount.reCensused, true);
+    assert.equal(r.mount.goalMet, true, 'the grown population satisfied the trigger — goal disclosed');
     assert.ok(Array.isArray(r.hrefIdentity) && r.hrefIdentity.some((e) => e.token === 'query:story'),
       'identity diffed from the GROWN cards (distinct ?story= tokens)');
     assert.ok(!r.mountHint, 'the bias hint clears once the re-census found identity');
@@ -521,13 +546,14 @@ describe('probe.census bounded mount phase (247th round)', () => {
     assert.deepEqual(mountEntries[0].selectors, ['div.card']);
   });
 
-  it('scrollRounds:2 + NO growth — two hops (the bound), mount.reCensused:false, mountHint still discloses', async () => {
+  it('scrollRounds:2 + NO growth — two hops (the bound), mount.reCensused:false, goalMet:false, mountHint still discloses', async () => {
     const { tools, calls } = makeCensusTools([mountedCard(1), mountedCard(2), mountedCard(3)]);
     const r = await tools.census({ containerSel: 'div.card', scrollRounds: 2 });
     assert.equal(calls.filter((s) => /\$scrollBy\(/.test(s)).length, 2, 'hopping bounded at scrollRounds');
     assert.ok(r.mount, 'mount receipt present');
     assert.equal(r.mount.rounds, 2);
     assert.equal(r.mount.reCensused, false);
+    assert.equal(r.mount.goalMet, false, 'no growth — the trigger condition never resolved');
     assert.equal(r.mount.countAfter, 3, 'no growth — count unchanged');
     assert.match(r.mountHint, /MOUNTED-WINDOW BIAS/);
   });
@@ -541,7 +567,7 @@ describe('probe.census bounded mount phase (247th round)', () => {
     assert.ok(!r.mountHint);
   });
 
-  it('scrollRounds clamps to 3 and an a-tag url lane suppresses the mountHint (the lane is not weak)', async () => {
+  it('scrollRounds clamps to 5 (250th: the sweep needs multi-viewport depth for rec headers) and an a-tag url lane suppresses the mountHint (the lane is not weak)', async () => {
     // Identical hrefs (no per-record token variance) BUT a real a.ttl link —
     // the url lane carries an a-tag entry, so the hint stays silent.
     const sameHref = (n) => '<div class="card">' +
@@ -550,8 +576,8 @@ describe('probe.census bounded mount phase (247th round)', () => {
       '</div>';
     const noGrowth = makeCensusTools([sameHref(1), sameHref(2), sameHref(3)]);
     const r1 = await noGrowth.tools.census({ containerSel: 'div.card', scrollRounds: 9 });
-    assert.equal(noGrowth.calls.filter((s) => /\$scrollBy\(/.test(s)).length, 3, 'scrollRounds:9 clamps to 3 hops');
-    assert.ok(r1.mount && r1.mount.rounds === 3);
+    assert.equal(noGrowth.calls.filter((s) => /\$scrollBy\(/.test(s)).length, 5, 'scrollRounds:9 clamps to 5 hops');
+    assert.ok(r1.mount && r1.mount.rounds === 5);
     assert.ok(!Array.isArray(r1.hrefIdentity) || !r1.hrefIdentity.length, 'identical hrefs diff no identity');
     assert.ok(!r1.mountHint, 'an a-tag url lane is not weak — no bias hint');
   });
@@ -583,6 +609,7 @@ describe('probe.census mount trigger — field-family absence (248th round)', ()
     assert.ok(r.mount, 'mount receipt present');
     assert.equal(r.mount.rounds, 1);
     assert.equal(r.mount.reCensused, true);
+    assert.equal(r.mount.goalMet, true, 'the grown population satisfied the family trigger');
     assert.ok(r.lanes.time && r.lanes.time.some((c) => c.selector === 'span.ts'),
       'time lane present from the GROWN population');
     assert.ok(r.lanes.count && r.lanes.count.some((c) => c.selector === 'span.cnt'),
@@ -592,12 +619,13 @@ describe('probe.census mount trigger — field-family absence (248th round)', ()
     assert.ok(!r.mountHint, 'the re-census resolved the trigger — no hint');
   });
 
-  it('identity NON-empty, no growth — hops bounded at scrollRounds, families still absent, mountHint names the field families', async () => {
+  it('identity NON-empty, no growth — hops bounded at scrollRounds, families still absent, goalMet:false, mountHint names the field families', async () => {
     const { tools, calls } = makeCensusTools([recCard(1), recCard(2), recCard(3)]);
     const r = await tools.census({ containerSel: 'div.card', scrollRounds: 2 });
     assert.equal(calls.filter((s) => /\$scrollBy\(/.test(s)).length, 2,
       'hopping bounded at scrollRounds despite the non-empty identity');
     assert.ok(r.mount && r.mount.rounds === 2 && r.mount.reCensused === false, 'mount receipt discloses the unproductive hops');
+    assert.equal(r.mount.goalMet, false, 'the families never appeared — goal unmet');
     assert.ok(!Array.isArray(r.lanes.time) || !r.lanes.time.length, 'time lane still absent');
     assert.ok(!Array.isArray(r.lanes.count) || !r.lanes.count.length, 'count lane still absent');
     assert.match(r.mountHint, /MOUNTED-WINDOW BIAS/);
@@ -610,6 +638,93 @@ describe('probe.census mount trigger — field-family absence (248th round)', ()
     const r = await tools.census({ containerSel: 'div.card', scrollRounds: 2 });
     assert.ok(!calls.some((s) => /\$scrollBy\(/.test(s)), 'healthy window — no hops');
     assert.ok(!r.mount);
+  });
+});
+
+// 250th round (249th-session live root cause): the mount phase hopped 2
+// rounds, saw growth 3→4, re-censused — and STOPPED, though the trigger
+// condition (identity absent) still held; the 4 mounted cards were still
+// group-recommendation modules (organic posts sit deeper; the 243rd
+// session showed 3→12 with deep scroll). The loop policy changes from
+// "stop at first growth + re-census" to "continue while the goal is
+// unmet": growth re-censuses AND re-evaluates the trigger against the
+// FRESH read; only a SATISFIED condition (or the scrollRounds bound)
+// stops the hopping. The receipt discloses goalMet.
+describe('probe.census persistent mount loop (250th round)', () => {
+  // Bare recommendation modules: no links (identity absent) AND no
+  // time/count leaves (families absent) — BOTH trigger halves fire.
+  function bareRecCard(n) {
+    return '<div class="card"><span class="ttl">Recommended channel ' + n + '</span></div>';
+  }
+  const recs = (n, make) => { const out = []; for (let i = 1; i <= n; i++) out.push(make(i)); return out; };
+
+  it('persistent loop — first growth does NOT stop the hopping while the trigger still holds; goalMet:true when the deep population carries identity+family leaves', async () => {
+    // [4,6,9,...]: hop1 3→4 (still rec cards), hop2 4→6 (still rec cards),
+    // hop3 6→9 — from population >=7 the mounted cards are organic (identity
+    // + time/count leaves). The old policy stopped after hop1's growth.
+    const { tools, calls, observationLog } = makeCensusTools(
+      recs(3, bareRecCard),
+      {
+        scrollGrowSeq: [4, 6, 9, 9, 9],
+        grownRecordsFor: (c) => (c >= 7 ? recs(c, cardHtml) : recs(c, bareRecCard))
+      });
+    const r = await tools.census({ containerSel: 'div.card', scrollRounds: 5 });
+    const scrolls = calls.filter((s) => /\$scrollBy\(/.test(s));
+    assert.equal(scrolls.length, 3, 'hopping CONTINUES past unsatisfying growth — 3 rounds used, not 1');
+    assert.ok(r.mount, 'mount receipt present');
+    assert.equal(r.mount.rounds, 3);
+    assert.equal(r.mount.countBefore, 3);
+    assert.equal(r.mount.countAfter, 9);
+    assert.equal(r.mount.reCensused, true, 'the grown population was re-censused');
+    assert.equal(r.mount.goalMet, true, 'identity + families present in the FRESH read — goal disclosed met');
+    assert.ok(Array.isArray(r.hrefIdentity) && r.hrefIdentity.some((e) => e.token === 'query:story'),
+      'lanes/identity come from the GROWN organic population');
+    assert.ok(r.lanes.time && r.lanes.time.some((c) => c.selector === 'span.ts'), 'time lane from the grown population');
+    assert.ok(r.lanes.count && r.lanes.count.some((c) => c.selector === 'span.cnt'), 'count lane from the grown population');
+    assert.ok(!r.mountHint, 'goal met — no bias hint');
+    const mountEntries = observationLog.serialize().entries.filter((e) => e.tool === 'probe.census.mount');
+    assert.equal(mountEntries.length, 3, 'every hop records an observation receipt');
+  });
+
+  it('budget exhaustion — growth continues but identity never appears: loop ends at the scrollRounds bound, goalMet:false, mountHint present', async () => {
+    const { tools, calls } = makeCensusTools(
+      recs(3, bareRecCard),
+      {
+        scrollGrowSeq: [4, 6, 9],
+        grownRecordsFor: (c) => recs(c, bareRecCard) // growth mounts MORE rec modules — never organic
+      });
+    const r = await tools.census({ containerSel: 'div.card', scrollRounds: 3 });
+    const scrolls = calls.filter((s) => /\$scrollBy\(/.test(s));
+    assert.equal(scrolls.length, 3, 'growth alone never stops the loop — the bound does');
+    assert.ok(r.mount, 'mount receipt present');
+    assert.equal(r.mount.rounds, 3);
+    assert.equal(r.mount.countAfter, 9);
+    assert.equal(r.mount.reCensused, true, 'each growth re-censused (against rec modules every time)');
+    assert.equal(r.mount.goalMet, false, 'the trigger condition never resolved');
+    assert.ok(!Array.isArray(r.hrefIdentity) || !r.hrefIdentity.length, 'identity still absent');
+    assert.match(r.mountHint, /MOUNTED-WINDOW BIAS/, 'the unresolved goal keeps the bias disclosure');
+  });
+
+  it('no-growth tolerance — a flat hop does not end the loop; the next hop\'s growth still re-censuses to goalMet:true', async () => {
+    // [3,9]: hop1 mounts NOTHING (3→3, the burst had not landed), hop2
+    // mounts the organic batch (3→9). The loop must ride through the flat
+    // hop — mounts come in bursts.
+    const { tools, calls } = makeCensusTools(
+      recs(3, bareRecCard),
+      {
+        scrollGrowSeq: [3, 9],
+        grownRecordsFor: (c) => (c >= 9 ? recs(c, cardHtml) : recs(c, bareRecCard))
+      });
+    const r = await tools.census({ containerSel: 'div.card', scrollRounds: 3 });
+    const scrolls = calls.filter((s) => /\$scrollBy\(/.test(s));
+    assert.equal(scrolls.length, 2, 'the flat hop is tolerated — the loop continues into the growth hop');
+    assert.ok(r.mount, 'mount receipt present');
+    assert.equal(r.mount.rounds, 2);
+    assert.equal(r.mount.countAfter, 9);
+    assert.equal(r.mount.reCensused, true);
+    assert.equal(r.mount.goalMet, true);
+    assert.ok(r.lanes.time && r.lanes.time.some((c) => c.selector === 'span.ts'),
+      'lanes from the grown organic population, not the flat window');
   });
 });
 

@@ -455,9 +455,12 @@ describe('joint solver — proposeArtifact (stubbed sweep)', () => {
       'timeoutMs = max(censusMinMs, totalMs-elapsed-10000) — got ' + censusArgs.timeoutMs);
     // 247th round: the sweep's census carries the bounded mount phase —
     // the maiden live session's window held only top-of-SERP modules while
-    // the organic posts sat unmounted below; scrollRounds:2 (settle 900ms
-    // x2) fits the 120s sweep budget.
-    assert.equal(censusArgs.scrollRounds, 2, 'the sweep scrolls for mounted-window bias before reading');
+    // the organic posts sat unmounted below. 250th round: scrollRounds 2→5
+    // — the 249th session's rec headers spanned multiple viewports (the
+    // 243rd showed 3→12 with deep scroll); 5 hops x (900px scroll + 900ms
+    // settle + count) ~= 9-12s worst case, still inside the 120s sweep
+    // budget that gates the census hop.
+    assert.equal(censusArgs.scrollRounds, 5, 'the sweep scrolls deep for mounted-window bias before reading');
     assert.equal(out.applied, true);
   });
   // Review batch (joint-solver #P2-F): the CARD's :has(a[href*=…]) demands an
