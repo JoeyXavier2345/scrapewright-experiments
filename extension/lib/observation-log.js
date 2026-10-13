@@ -38,7 +38,18 @@
           : [],
         summary: typeof e.summary === 'string' ? e.summary : '',
         at: typeof e.at === 'number' ? e.at : 0,
-        epoch: (typeof e.epoch === 'number') ? e.epoch : null
+        epoch: (typeof e.epoch === 'number') ? e.epoch : null,
+        // Session-memory write path (2026-10-13 spec §3.1): structured
+        // per-selector outcomes [{selector, matched}] — the raw material of
+        // the SELECTOR LEDGER. Whitelist-validated row-wise: a polluted row
+        // is dropped on its own, never takes the entry down, and old seeds
+        // without the field pass through as []. Zeros are VALID rows — a
+        // family measured dead is as valuable as one measured alive.
+        outcomes: Array.isArray(e.outcomes)
+          ? e.outcomes
+              .filter(o => o && typeof o === 'object' && typeof o.selector === 'string' && o.selector.length > 0 && typeof o.matched === 'number' && isFinite(o.matched) && o.matched >= 0)
+              .map(o => ({ selector: o.selector, matched: Math.floor(o.matched) }))
+          : []
       };
     }
 
@@ -50,11 +61,21 @@
         attrs: obs && obs.attrs,
         summary: obs && obs.summary,
         epoch: obs && obs.epoch,
+        outcomes: obs && obs.outcomes,
         at: Date.now()
       });
       seq += 1;
       entries.push(e);
       return sanitizeEntry(e);
+    }
+
+    // Read accessor for the dossier's [SELECTOR LEDGER] section (and tests):
+    // the last n entries in chronological order (oldest first), mirroring
+    // serialize()'s entry order. Sanitized copies — callers can never mutate
+    // the log through a returned entry.
+    function recent(n) {
+      const take = (typeof n === 'number' && n >= 0) ? Math.floor(n) : entries.length;
+      return entries.slice(Math.max(0, entries.length - take)).map(sanitizeEntry);
     }
 
     // C3: when `epoch` is a number, only receipts recorded in exactly that
@@ -102,7 +123,7 @@
       return { entries: entries.map(sanitizeEntry), seq: seq };
     }
 
-    return { record, covers, coversAttr, size, serialize };
+    return { record, covers, coversAttr, size, serialize, recent };
   }
 
   const api = { createObservationLog };

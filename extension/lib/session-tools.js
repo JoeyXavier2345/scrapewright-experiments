@@ -1317,6 +1317,39 @@
       lastVerify = { events: out.events || [], report: out.report, raw: out.raw, at: Date.now() };
       captureRouteEpoch += 1; // route re-proving is legitimate after a verify (page state changed)
       const report = out.report || {};
+      // Session-memory write path (2026-10-13 spec §3.1, site 4): the verify
+      // tab's own field census lands in the observation log as structured
+      // outcomes. Every FIELD_MATCH_ZERO row contributes its subSelector
+      // measured at 0 INSIDE the processed containers, plus the 244th-round
+      // page-wide count when the family lives elsewhere on the page — the
+      // ledger's PROVEN-DEAD and proven-elsewhere facts. ONE record; the
+      // epoch is stamped by lateBoundLog exactly like every other
+      // session-tools receipt. Best-effort: a ledger hiccup must never
+      // break the verify result.
+      try {
+        const zfRows = report && report.detectors && Array.isArray(report.detectors.zeroMatchFields)
+          ? report.detectors.zeroMatchFields : [];
+        if (zfRows.length) {
+          const ledgerOutcomes = [];
+          const ledgerSels = [];
+          for (const row of zfRows) {
+            if (!row || typeof row.subSelector !== 'string' || !row.subSelector) continue;
+            ledgerOutcomes.push({ selector: row.subSelector, matched: 0 });
+            if (typeof row.pageWideMatches === 'number' && row.pageWideMatches > 0) {
+              ledgerOutcomes.push({ selector: row.subSelector, matched: row.pageWideMatches });
+            }
+            if (ledgerSels.indexOf(row.subSelector) === -1) ledgerSels.push(row.subSelector);
+          }
+          if (ledgerOutcomes.length) {
+            lateBoundLog.record({
+              tool: 'verify.run',
+              selectors: ledgerSels,
+              summary: 'field census: ' + ledgerSels.length + ' field selector(s) matched 0 inside every processed container',
+              outcomes: ledgerOutcomes
+            });
+          }
+        }
+      } catch (_) { /* the ledger write is best-effort */ }
       // Seventy-first log F1: verify economics on the receipt — this call's
       // measured cost, the remaining wall budget (live via ctx.session
       // getters, net of parked/llm waits), and the session's median verify

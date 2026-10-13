@@ -197,7 +197,10 @@
           ' invisible of ' + n + ' match(es). $exists is visibility-gated and returns false for the invisible ones; reads ($extract/$list/$extractList) are NOT visibility-gated and read them fine — do not gate a read on $exists.';
       }
       if (observationLog) {
-        observationLog.record({ tool: 'probe.count', selectors: [sel], summary: 'count=' + n });
+        // Session-memory write path (2026-10-13 spec §3.1, site 2): the
+        // measured count rides as a structured outcome — {selector → N},
+        // zeros included (dead is as valuable as alive).
+        observationLog.record({ tool: 'probe.count', selectors: [sel], summary: 'count=' + n, outcomes: [{ selector: sel, matched: n }] });
       }
       return out;
     }
@@ -527,7 +530,8 @@
           observationLog.record({
             tool: 'probe.scrollUntil',
             selectors: receiptSelectors,
-            summary: 'scrollUntil 0 rounds — already ' + count + '/' + targetCount
+            summary: 'scrollUntil 0 rounds — already ' + count + '/' + targetCount,
+            outcomes: [{ selector: sel, matched: count }]
           });
         }
         return { satisfied: true, finalCount: count, targetCount: targetCount, rounds: 0, trace: [{ count: count, y: null, h: null }], reason: 'target_reached' };
@@ -582,10 +586,14 @@
         out.note = 'reached the ' + maxRounds + '-round cap at ' + count + '/' + targetCount + ' — the population was still growing; re-run scrollUntil to continue from the current position, or raise maxRounds.';
       }
       if (observationLog) {
+        // Session-memory write path (2026-10-13 spec §3.1, site 3): the
+        // FINAL population count under sel rides as a structured outcome —
+        // the ledger fact for "this family supplied N items down here".
         observationLog.record({
           tool: 'probe.scrollUntil',
           selectors: receiptSelectors,
-          summary: 'scrollUntil ' + count + '/' + targetCount + ' reason=' + reason
+          summary: 'scrollUntil ' + count + '/' + targetCount + ' reason=' + reason,
+          outcomes: [{ selector: sel, matched: count }]
         });
       }
       return out;
@@ -1556,7 +1564,29 @@
           ' or the field families (time/count) were absent from the sampled window';
       }
       if (observationLog) {
-        observationLog.record({ tool: 'probe.census', selectors: [containerSel], summary: 'census total=' + total + ' lanes=' + Object.keys(lanes).join('+') + (hrefIdentity.length ? ' hrefIdentity=' + hrefIdentity.length : '') + (a.hover === true ? ' +hover' : '') });
+        // Session-memory write path (2026-10-13 spec §3.1, site 1): the
+        // lane rows ARE per-field outcomes — {selector → matchCount} with
+        // the coverage NUMERATOR (how many sampled docs the selector
+        // first-matches), zeros included. Deduped by selector keeping the
+        // max count; hrefIdentity tokens are NOT selectors and stay out.
+        const ledgerSeen = new Map();
+        for (const laneName of Object.keys(lanes)) {
+          const laneRows = lanes[laneName];
+          if (!Array.isArray(laneRows)) continue;
+          for (const f of laneRows) {
+            if (!f || typeof f.selector !== 'string' || !f.selector) continue;
+            const k = parseInt(f.coverage, 10);
+            const m = (typeof k === 'number' && isFinite(k) && k > 0) ? k : 0;
+            const prev = ledgerSeen.get(f.selector);
+            if (prev === undefined || m > prev) ledgerSeen.set(f.selector, m);
+          }
+        }
+        observationLog.record({
+          tool: 'probe.census',
+          selectors: [containerSel],
+          summary: 'census total=' + total + ' lanes=' + Object.keys(lanes).join('+') + (hrefIdentity.length ? ' hrefIdentity=' + hrefIdentity.length : '') + (a.hover === true ? ' +hover' : ''),
+          outcomes: Array.from(ledgerSeen, (pair) => ({ selector: pair[0], matched: pair[1] }))
+        });
       }
       return out;
     }
