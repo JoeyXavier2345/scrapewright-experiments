@@ -559,6 +559,204 @@ describe('ledger — update-time dead-family WARNING net (spec §3.3)', () => {
   });
 });
 
+// ---- Task 5 (2026-10-13 spec §5): FINALIZE keys on CYCLE COST, not a
+// fraction. One fix cycle (snippet→update→verify ≈3 turns + 2 buffer) is
+// the same absolute quantity at every budget size, so the trigger moves
+// from floor(maxTurns*0.9) to maxTurns-5: at maxTurns=60 that is 55
+// (LATER than 54), at maxTurns=40 it is 35 (EARLIER than 36) — both
+// correct. 50%/75% buckets keep their proportional thresholds. ----
+
+describe('session-memory §5 — FINALIZE cycle-cost threshold (maxTurns-5)', () => {
+  const { createResearchSession } = require('../lib/research-session');
+  const mk = (content) => ({ content, finish_reason: 'stop', usage: { prompt_tokens: 1, completion_tokens: 1 } });
+  const finishTurn = () => mk(JSON.stringify({ think: 'done', finish: { summary: 'done' } }));
+  const countTurn = () => mk(JSON.stringify({ think: 't', tool: 'probe.count', args: { sel: 'div.card' } }));
+
+  function seedAt(turns) {
+    return { session: {
+      id: 'rs-fin-' + turns, status: 'idle', requirement: 'r',
+      goals: [], hypotheses: [], transcript: [], digest: '',
+      spend: { turns: turns, llmCalls: turns, promptTokens: 100, completionTokens: 10, estimated: false },
+      attachedUnits: [], artifactVersions: [], elapsedMs: 0, stopped: null,
+      budgetAdvisories: []
+    } };
+  }
+  function makeSession(replies, maxTurns, turns) {
+    let i = 0;
+    return createResearchSession({
+      requirement: 'r',
+      budgets: { maxTurns: maxTurns },
+      seed: seedAt(turns),
+      llm: async () => { const r = replies[Math.min(i, replies.length - 1)]; i += 1; return r; },
+      tools: { 'probe.count': async () => ({ count: 3 }) }
+    });
+  }
+  const finalizeNotes = (session) => session.state().session.transcript
+    .filter((e) => e.kind === 'system' && /FINALIZE — /.test(e.text));
+  const newText = (left) => 'FINALIZE — ' + left + ' turns left ≈ ONE fix cycle (snippet→update→verify ≈3 turns + 2 buffer): ' +
+    'submit the best-grounded artifact via service.update NOW and verify; anything needing more than one cycle belongs in the finish disclosure.';
+
+  it('maxTurns=40 turns=35 → fires EARLIER than the old 90% spot (36) with the fix-cycle arithmetic', async () => {
+    const session = makeSession([finishTurn()], 40, 35);
+    await session.run();
+    const fin = finalizeNotes(session);
+    assert.equal(fin.length, 1, 'fired exactly once at turn 35');
+    assert.ok(fin[0].text.includes(newText(5)), 'new text carries turnsLeft=5 and the cycle arithmetic');
+    assert.ok(session.state().session.budgetAdvisories.indexOf('finalize') !== -1,
+      'the finalize dedup key still joins budgetAdvisories');
+  });
+
+  it('maxTurns=40 continued past 35 to the OLD 90% spot (36) → deduped, never repeated', async () => {
+    const session = makeSession([countTurn(), finishTurn()], 40, 35);
+    await session.run();
+    assert.equal(finalizeNotes(session).length, 1, 'fired at 35, silent at 36 (key-deduped once)');
+  });
+
+  it('maxTurns=60 turns=53 → NOT yet; the 75% bucket fires at 45 unchanged', async () => {
+    const session = makeSession([finishTurn()], 60, 53);
+    await session.run();
+    const st = session.state().session;
+    assert.equal(finalizeNotes(session).length, 0, '53 < 55 — no FINALIZE yet');
+    assert.ok(st.budgetAdvisories.indexOf('finalize') === -1);
+    const author = st.transcript.filter((e) => e.kind === 'system' && /75% of the turn budget/.test(e.text));
+    assert.equal(author.length, 1, 'the 75% bucket fired (due at resume, threshold floor(60*0.75)=45)');
+    assert.match(author[0].text, /75% of the turn budget spent: 53 of 60/);
+  });
+
+  it('maxTurns=60 turns=55 → fires (LATER than the old 90%=54 — correct at large budgets)', async () => {
+    const session = makeSession([finishTurn()], 60, 55);
+    await session.run();
+    const fin = finalizeNotes(session);
+    assert.equal(fin.length, 1);
+    assert.ok(fin[0].text.includes(newText(5)));
+  });
+
+  it('no regression: maxTurns=40 turns 20/30 fire only the 50%/75% buckets', async () => {
+    const s20 = makeSession([finishTurn()], 40, 20);
+    await s20.run();
+    const st20 = s20.state().session;
+    assert.equal(st20.transcript.filter((e) => e.kind === 'system' && /FINALIZE — /.test(e.text)).length, 0);
+    assert.ok(st20.transcript.some((e) => e.kind === 'system' && /half the turn budget spent: 20 of 40/.test(e.text)),
+      '50% bucket fired');
+    const s30 = makeSession([finishTurn()], 40, 30);
+    await s30.run();
+    const st30 = s30.state().session;
+    assert.equal(st30.transcript.filter((e) => e.kind === 'system' && /FINALIZE — /.test(e.text)).length, 0);
+    assert.ok(st30.transcript.some((e) => e.kind === 'system' && /75% of the turn budget spent: 30 of 40/.test(e.text)),
+      '75% bucket fired');
+  });
+});
+
+// ---- Task 6 (2026-10-13 spec §7): the behavioral end-to-end — ONE session
+// drives the whole memory loop: real probe-tools (bound to the ENGINE's own
+// observation log via bindEngine) measure family a.good ALIVE (8) and
+// a.dead DEAD (0); the scripted model then hand-authors an update whose
+// count selector unions the dead family in ('div.card, a.dead' — the
+// union counts 5 via the surviving div.card segment, exactly the trap the
+// warning net exists for); the receipt must warn about a.dead AND every
+// later turn's evidence dossier must carry [SELECTOR LEDGER] with the
+// PROVEN row. ----
+
+describe('session-memory §7 — behavioral end-to-end (probes → ledger → warning → dossier)', () => {
+  const { createSessionTools } = require('../lib/session-tools');
+  const { createResearchSession } = require('../lib/research-session');
+  const SCHEMAS = {
+    inputSchema: { type: 'object', properties: { k: { type: 'string' } } },
+    outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } }
+  };
+  const mk = (content) => ({ content, finish_reason: 'stop', usage: { prompt_tokens: 100, completion_tokens: 10 } });
+
+  it('dead-family warning on the update receipt + per-turn [SELECTOR LEDGER] visibility, one session', async () => {
+    const calls = [];
+    let draft = null;
+    // The stub page: a.good matches 8, a.dead matches NOTHING, div.card
+    // (and any comma union containing it) matches 5. Routing parses the
+    // selector OUT of probe.count's `return $count(<json>);` snippet so
+    // the union 'div.card, a.dead' counts 5 — the cards — while its
+    // a.dead segment contributes zero (the honest union semantics the
+    // segment-matched warning is written against).
+    const bag = createSessionTools({
+      rail: {
+        executeDsl: async (snippet) => {
+          const m = /return \$count\((.*)\);/.exec(String(snippet));
+          let sel = null;
+          try { sel = m ? JSON.parse(m[1]) : null; } catch (e) { sel = null; }
+          if (sel === 'a.good') return 8;
+          if (sel === 'a.dead') return 0;
+          return 5;
+        },
+        pageState: async () => ({}),
+        epoch: 1
+      },
+      runVerify: async () => ({ events: [], report: { ok: true, detectors: {} }, raw: {} }),
+      getDraftService: () => draft,
+      applyArtifact: (a) => { draft = { steps: a.steps, targetUrl: 'https://example.com/?k={{k}}', config: {} }; },
+      getTestInput: () => ({ k: 'ml' }), getOutputSchema: () => SCHEMAS.outputSchema,
+      getSteps: () => (draft ? draft.steps : []),
+      ioConfirmBridge: { request: (p) => Promise.resolve({ confirmed: true, testInput: p && p.testInput }) }
+    });
+    const turns = [
+      mk(JSON.stringify({ think: 'contract first', tool: 'io.confirm', args: Object.assign({ testInput: { k: 'ml' } }, SCHEMAS) })),
+      mk(JSON.stringify({ think: 'probe the good family', tool: 'probe.count', args: { sel: 'a.good' } })),
+      mk(JSON.stringify({ think: 'probe the dead family', tool: 'probe.count', args: { sel: 'a.dead' } })),
+      mk(JSON.stringify({ think: 'author — union the container with the dead anchor', tool: 'service.update', args: {
+        steps: [{
+          id: 's1', name: 'count',
+          script: "const n = await $count('div.card, a.dead');\nreturn { done: true, count: n };",
+          onSuccess: 'TERMINATE', onFailure: 'TERMINATE'
+        }]
+      } })),
+      mk(JSON.stringify({ think: 'post-update probe', tool: 'probe.count', args: { sel: 'div.card' } })),
+      mk(JSON.stringify({ think: 'done', finish: { summary: 'done' } }))
+    ];
+    let i = 0;
+    const session = createResearchSession({
+      requirement: 'collect posts',
+      budgets: { maxTurns: 20 },
+      llm: async (req) => { calls.push(req); const r = turns[Math.min(i, turns.length - 1)]; i += 1; return r; },
+      tools: bag.tools,
+      epochOf: () => 1,
+      dossierFeeds: bag.dossierFeeds
+    });
+    bag.bindEngine(session); // the probes + the warning net share the ENGINE's log
+    await session.run();
+    assert.equal(calls.length, 6, 'fixture sanity: six LLM calls (confirm, 2 probes, update, probe, finish)');
+
+    // (a) the update receipt carries the dead-family warning naming a.dead.
+    const update = session.state().session.transcript
+      .filter((e) => e.kind === 'tool' && e.name === 'service.update').pop();
+    assert.ok(update, 'service.update dispatched');
+    assert.equal(update.result.updated, true, 'the artifact landed (warning never rejects)');
+    assert.match(update.result.ledgerWarning, /a\.dead was measured DEAD this epoch \(0 matches via probe\.count\) — verify the family or drop it/,
+      'the receipt names the dead segment the artifact unions in');
+
+    // (b) [SELECTOR LEDGER] visibility. The SECOND request assembled after
+    // recording began (the one returning the a.dead probe — calls[2]) must
+    // already carry the section and the PROVEN row; the request BEFORE any
+    // probe outcome (calls[1]) must not; and the request AFTER the update
+    // (calls[4]) carries the dead row too.
+    const dossierOf = (call) => {
+      const m = call.messages.filter((x) => x.role === 'system' && String(x.content).includes('EVIDENCE DOSSIER'))[0];
+      return m ? String(m.content) : '';
+    };
+    assert.ok(!dossierOf(calls[1]).includes('a.good → 8 matches'),
+      'baseline: before the first probe outcome there is no PROVEN row to show');
+    const d3 = dossierOf(calls[2]);
+    assert.ok(d3.includes('[SELECTOR LEDGER]'), 'the section rides the dossier one turn after the probe');
+    assert.match(d3, /a\.good → 8 matches \(probe\.count, epoch 1\)/, 'the PROVEN row with its measurement');
+    const d5 = dossierOf(calls[4]);
+    assert.ok(d5.includes('[SELECTOR LEDGER]'), 'the section still rides the post-update turn');
+    assert.match(d5, /a\.dead → 0 matches \(probe\.count, epoch 1\)/, 'the dead row is visible beside the warning');
+    // The session's OWN log holds the outcomes (not the stub's) — the
+    // rendering above could only come from it.
+    const entries = session.observationLog.serialize().entries.filter((e) => e.outcomes && e.outcomes.length);
+    assert.ok(entries.some((e) => e.tool === 'probe.count' && e.outcomes.some((o) => o.selector === 'a.good' && o.matched === 8)),
+      'the engine log holds the a.good outcome');
+    assert.ok(entries.some((e) => e.tool === 'probe.count' && e.outcomes.some((o) => o.selector === 'a.dead' && o.matched === 0)),
+      'the engine log holds the a.dead outcome');
+  });
+});
+
 // ---- verify-side recording (session-tools result landing) ----
 
 describe('ledger — verify.run field-census recording', () => {

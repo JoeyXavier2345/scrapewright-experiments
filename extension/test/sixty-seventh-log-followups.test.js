@@ -133,7 +133,13 @@ describe('F3: service.update endgame warning (sixty-seventh log)', () => {
 describe('F3 misc + universality (sixty-seventh log)', () => {
   it('the 90% budget advisory teaches no unverifiable endgame updates', () => {
     const src = LIB('research-session.js');
-    assert.ok(src.includes('do NOT write another update you cannot verify'),
+    // Session-memory §5 (2026-10-13): the TURN-budget finalize advisory was
+    // replaced by the spec's fix-cycle arithmetic text; the
+    // no-unverifiable-endgame-updates teaching survives verbatim in the
+    // TOKEN-budget finalize advisory (same family, untouched) and in
+    // session-tools' endgameWarning (per-update receipt).
+    assert.ok(src.includes('do NOT write another update you cannot verify') ||
+      src.includes('instead of writing updates you cannot verify'),
       'advisory text extended');
     assert.match(src, /finish with the last verified artifact and disclose/);
   });
@@ -156,7 +162,10 @@ describe('F3 misc + universality (sixty-seventh log)', () => {
       vr.match(/PARTIAL_EMPTY_FIELDS census:[\s\S]{0,900}?hoped-for shapes\./)[0],
       unit.title + ' ' + unit.origin + ' ' + unit.body,
       st && st[0],
-      LIB('research-session.js').match(/BUDGET ADVISORY \(90%[^']*/)[0]
+      // Session-memory §5: the turn-budget finalize advisory text is now
+      // concatenation-built (cycle-cost arithmetic) — the literal-text
+      // surface for this family is the token-budget finalize advisory.
+      LIB('research-session.js').match(/BUDGET ADVISORY \(90% of the token budget[^']*/)[0]
     ];
     for (let i = 0; i < surfaces.length; i++) {
       assert.ok(surfaces[i], 'surface ' + i + ' extracted');

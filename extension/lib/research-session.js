@@ -150,8 +150,9 @@
   // authored at 56-59 and hit its FIRST verify at turn 60 — the model had no
   // visibility into the remaining budget, so whatever ceiling G5 raises gets
   // filled with research. Two carriers: a persistent budget line in the
-  // session-state block (every call) and one-shot directional advisories at
-  // 50/75/90%.
+  // session-state block (every call) and one-shot directional advisories
+  // (50%/75% proportional + the finalize trigger at maxTurns-5 — cycle
+  // cost, spec §5).
   const BUDGET_ADVISORIES = [
     {
       key: 'half', pct: 0.5,
@@ -168,10 +169,27 @@
         : 'NO ARTIFACT YET — submit a complete draft via service.update in your NEXT turn. Verify-run feedback loops need runway; a perfect research phase with no artifact and no verify at the cap is a failed session. If the I/O contract is not confirmed yet, complete io.confirm first, then submit.')
     },
     {
-      key: 'finalize', pct: 0.9,
-      text: (used, max) => 'BUDGET ADVISORY (90% of the turn budget spent: ' + used + ' of ' + max + ' — only ' + (max - used) + ' left): FINALIZE — submit your best-grounded artifact via service.update immediately and run verify.run; spend what remains ONLY on defects verify reports. (If the contract is still unconfirmed, io.confirm comes first.) If the next verify is red and ≤1 turn remains, do NOT write another update you cannot verify — finish with the last verified artifact and disclose.'
+      // Session-memory spec §5 (2026-10-13): the finalize trigger keys on
+      // CYCLE COST, not a fraction — one fix cycle (snippet→update→verify
+      // ≈3 turns + 2 buffer) is the same absolute quantity at every budget
+      // size. `turnsLeftThreshold: 5` replaces pct 0.9: at maxTurns=60 the
+      // trigger is 55 (LATER than the old 90%=54), at maxTurns=40 it is 35
+      // (EARLIER than 36) — both correct, because the threshold tracks
+      // what a fix costs, not what 10% of the budget happens to be.
+      key: 'finalize', turnsLeftThreshold: 5,
+      text: (used, max) => 'BUDGET ADVISORY (' + used + ' of ' + max + ' turns spent — ' + (max - used) + ' left): FINALIZE — ' + (max - used) + ' turns left ≈ ONE fix cycle (snippet→update→verify ≈3 turns + 2 buffer): submit the best-grounded artifact via service.update NOW and verify; anything needing more than one cycle belongs in the finish disclosure.'
     }
   ];
+
+  // The per-advisory turn threshold: proportional (pct) for the pacing
+  // buckets, absolute (maxTurns - turnsLeftThreshold) for the finalize
+  // cycle-cost trigger. Shared by the due-selection and mark-sent loops so
+  // the two can never drift.
+  function advisoryTurnThreshold(adv, maxTurns) {
+    return (typeof adv.turnsLeftThreshold === 'number')
+      ? maxTurns - adv.turnsLeftThreshold
+      : Math.floor(maxTurns * adv.pct);
+  }
 
   // 117th log: the session died at tokenCap with detail=null and ZERO
   // warning — the advisory family above keys on TURNS only, so a
@@ -1231,7 +1249,7 @@
       if (!Array.isArray(state.budgetAdvisories)) state.budgetAdvisories = [];
       let due = null;
       for (const adv of BUDGET_ADVISORIES) {
-        if (state.spend.turns >= Math.floor(budgets.maxTurns * adv.pct) &&
+        if (state.spend.turns >= advisoryTurnThreshold(adv, budgets.maxTurns) &&
             state.budgetAdvisories.indexOf(adv.key) === -1) {
           due = adv;
         }
@@ -1270,7 +1288,7 @@
       }
       if (!due) return;
       for (const adv of BUDGET_ADVISORIES) {
-        if (state.spend.turns >= Math.floor(budgets.maxTurns * adv.pct) &&
+        if (state.spend.turns >= advisoryTurnThreshold(adv, budgets.maxTurns) &&
             state.budgetAdvisories.indexOf(adv.key) === -1) {
           state.budgetAdvisories.push(adv.key);
         }

@@ -649,33 +649,43 @@ describe('budgets and breakers', () => {
     }
   });
 
-  it('fires one directional advisory per bucket (50%/75%/90%) and never repeats (seventh-log J1)', async () => {
+  it('fires one directional advisory per bucket (50%/75% + finalize at maxTurns-5) and never repeats (seventh-log J1)', async () => {
+    // Session-memory §5 (2026-10-13): the finalize trigger moved from the
+    // 90% fraction to maxTurns-5 (cycle cost — snippet→update→verify ≈3
+    // turns + 2 buffer). maxTurns=30 keeps every bucket DISTINCT: at 20
+    // the new finalize (15) coincides with the 75% bucket (15) and the
+    // highest-due-wins rule would swallow the author advisory whole.
     const session = createResearchSession({
       requirement: 'r',
       llm: scriptedLlm([reply(toolTurn)], []),
       tools: { 'probe.count': async () => ({ count: 1 }) },
-      budgets: { maxTurns: 20 }   // buckets at turns 10 / 15 / 18
+      budgets: { maxTurns: 30 }   // buckets at turns 13 (45%) / 15 / 22 / finalize 25 (30-5)
     });
     await session.run();
     const st = session.state().session;
     const advisories = st.transcript.filter(e => e.kind === 'system' && /BUDGET ADVISORY/.test(e.text));
     // 175th round: first-verify-early is a per-turn tick now — it fires at
-    // turn 9 (45% of 20) in a FRESH session too, which the dead-statement
+    // turn 13 (45% of 30) in a FRESH session too, which the dead-statement
     // era could never do (the stray body statement only executed at
     // creation, turns=0). The contract-delay note (turn 12) says CONTRACT
     // DELAY, not BUDGET ADVISORY, so it stays outside this filter but
     // joins budgetAdvisories.
     assert.equal(advisories.length, 4, 'one advisory per bucket plus the revived 45% early-verify');
-    assert.match(advisories[0].text, /45% of the turn budget spent: 9 of 20/);
-    assert.match(advisories[1].text, /half the turn budget spent: 10 of 20/);
-    assert.match(advisories[2].text, /75% of the turn budget spent: 15 of 20/);
+    assert.match(advisories[0].text, /45% of the turn budget spent: 13 of 30/);
+    assert.match(advisories[1].text, /half the turn budget spent: 15 of 30/);
+    assert.match(advisories[2].text, /75% of the turn budget spent: 22 of 30/);
     assert.match(advisories[2].text, /NO ARTIFACT YET/,
       'nineteenth log: artifact v1 landed at 55/60 — the no-artifact 75% advisory escalates to a direct order');
-    assert.match(advisories[3].text, /90% of the turn budget spent: 18 of 20/);
-    assert.match(advisories[3].text, /FINALIZE/);
+    assert.match(advisories[3].text, /FINALIZE — 5 turns left ≈ ONE fix cycle \(snippet→update→verify ≈3 turns \+ 2 buffer\)/,
+      'session-memory §5: finalize fires at maxTurns-5 with the fix-cycle arithmetic');
+    assert.match(advisories[3].text, /anything needing more than one cycle belongs in the finish disclosure/);
     // 243rd round: low-turn-budget joins for below-default fixtures.
-    assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'contract-delay', 'finalize', 'first-verify-early', 'half', 'low-turn-budget']);
-    const cd175 = st.transcript.find(e => e.kind === 'system' && /CONTRACT DELAY: turn 12 of 20/.test(e.text || ''));
+    // 175th round: running to 30 turns also crosses the turn-24
+    // contract-delay ESCALATION (the old maxTurns=20 fixture never
+    // reached it) — the key joins the set.
+    assert.deepEqual(st.budgetAdvisories.sort(),
+      ['author', 'contract-delay', 'contract-delay-escalated', 'finalize', 'first-verify-early', 'half', 'low-turn-budget']);
+    const cd175 = st.transcript.find(e => e.kind === 'system' && /CONTRACT DELAY: turn 12 of 30/.test(e.text || ''));
     assert.ok(cd175, 'contract-delay fired at turn 12 alongside the bucket family');
   });
 
@@ -723,19 +733,22 @@ describe('budgets and breakers', () => {
     const st = session.state().session;
     const advisories = st.transcript.filter(e => e.kind === 'system' && /BUDGET ADVISORY/.test(e.text));
     // At resume (turns 16): the 167th first-verify advisory fires (16 >=
-    // 13, zero verifies) alongside the 75% one — 'half' is marked sent.
-    // The 90% advisory still fires later at turn 18.
+    // 9, zero verifies) alongside the highest due turn-bucket one — 'half'
+    // is marked sent.
+    // Session-memory §5 (2026-10-13): finalize now triggers at maxTurns-5
+    // = 15, so the resume at 16 finds BOTH author (15) and finalize (15)
+    // due — the highest-due-wins rule emits only the FINALIZE text (spec
+    // §6: FINALIZE/75% may both be due, FINALIZE text authoritative) and
+    // marks author as sent. Previously the finalize fired separately at
+    // the old 90% spot (turn 18).
     // 170th round: first-verify-early also fires (45% of 20 = 9, turns 16
-    // >= 9, no artifact at resume) — 4 advisories now.
-    // 170th review fix #7: the 65% advisory is suppressed when the 45%
-    // one already fired and there is still no artifact — 3 advisories.
+    // >= 9, no artifact at resume) — 2 advisories now.
     // 175th round: contract-delay also fires at 16 (>= 12, unconfirmed)
     // but its note text reads CONTRACT DELAY — outside this filter; it
     // joins budgetAdvisories below.
-    assert.equal(advisories.length, 3);
+    assert.equal(advisories.length, 2);
     assert.match(advisories[0].text, /45% of the turn budget spent: 16 of 20/);
-    assert.match(advisories[1].text, /75% of the turn budget spent: 16 of 20/);
-    assert.match(advisories[2].text, /90% of the turn budget spent: 18 of 20/);
+    assert.match(advisories[1].text, /FINALIZE — 4 turns left ≈ ONE fix cycle/);
     assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'contract-delay', 'finalize', 'first-verify-early', 'half', 'low-turn-budget']);
   });
 });
@@ -1922,7 +1935,12 @@ describe('audit C13: budget advisories coordinate with the io.confirm gate', () 
   it('author/finalize advisories tell the model to confirm the contract first', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
     assert.match(src, /If the I\/O contract is not confirmed yet, complete io\.confirm first/, 'author advisory');
-    assert.match(src, /io\.confirm comes first/, 'finalize advisory');
+    // Session-memory §5 (2026-10-13): the finalize advisory text is now the
+    // spec-mandated fix-cycle arithmetic (snippet→update→verify ≈3 turns +
+    // 2 buffer); its old "(If the contract is still unconfirmed, io.confirm
+    // comes first.)" clause moved out — the 75% author advisory (which this
+    // test pins above) is the carrier of the contract-first coordination.
+    assert.match(src, /ONE fix cycle \(snippet→update→verify ≈3 turns \+ 2 buffer\)/, 'finalize advisory carries the cycle-cost arithmetic');
     assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(src));
   });
 });
