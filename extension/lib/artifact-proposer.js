@@ -603,6 +603,41 @@ async function proposeArtifact(ctx) {
     } catch (eHop) { /* attr grounding is best-effort; a rejection teaches */ }
   }
   const pack = { census: census, currentArtifact: (ctx && ctx.currentArtifact) || null, affordanceSelector: affordanceSelector, pathIdentity: pathIdentity };
+  // 253rd (spec §2, binding emphasis): conflicts between fresh lanes and
+  // ledger-PROVEN families are DISCLOSED — fresh measurement wins by
+  // construction (synthesis reads fresh evidence), but the session's
+  // validated history is surfaced in the receipt, never silently dropped.
+  let pathIdentity253 = null;
+  try { pathIdentity253 = (typeof pathIdentity !== 'undefined' && pathIdentity) ? pathIdentity : null; } catch (eP253) { pathIdentity253 = null; }
+  const ledgerConflicts253 = [];
+  try {
+    const lg = ctx && ctx.ledger;
+    if (lg && Array.isArray(lg.entries)) {
+      const proven = new Map();
+      for (const en of lg.entries) {
+        if (!(en && Array.isArray(en.outcomes))) continue;
+        if (lg.currentEpoch != null && en.epoch != null && en.epoch !== lg.currentEpoch) continue;
+        for (const o of en.outcomes) {
+          if (!o || !(o.matched > 0)) continue;
+          const prev = proven.get(o.selector);
+          proven.set(o.selector, Math.max(prev || 0, o.matched));
+        }
+      }
+      const identity246 = chooseIdentitySelector_249(census, pathIdentity253 || null);
+      if (proven.size && identity246 && identity246.selector) {
+        const chosen = String(identity246.selector);
+        for (const [sel253] of proven) {
+          if (sel253 === chosen) continue;
+          // conflict = a ledger-PROVEN link-family selector that is NOT part
+          // of the chosen identity union but shares link-ish shape (a[href…])
+          if (/^a\[href/.test(sel253) && chosen.indexOf(sel253) === -1) {
+            ledgerConflicts253.push(sel253);
+            if (ledgerConflicts253.length >= 3) break;
+          }
+        }
+      }
+    }
+  } catch (eC253) { /* disclosure is best-effort */ }
   const synth = synthesizeFromEvidence(pack, (ctx && ctx.requirementText) || '', (ctx && ctx.outputSchema) || null);
   if (censusErrorDigest) {
     synth.unfilled.push({ slot: 'census', reason: 'census hop failed: ' + censusErrorDigest.slice(0, 140) + ' — selectors fell back to web-generic ARIA conventions; the failing probe error above is the gap' });
@@ -639,6 +674,7 @@ async function proposeArtifact(ctx) {
       applied: 'engine-pending',
       steps: synth.steps,
       unfilled: synth.unfilled,
+      ledgerConflicts: ledgerConflicts253.length ? ledgerConflicts253 : undefined,
       selectorProvenance: synth.selectorProvenance,
       merge: mergeNote,
       sweepCostMs: Date.now() - t0,
@@ -654,6 +690,7 @@ async function proposeArtifact(ctx) {
     const applied = await ctx.applyArtifact({ steps: synth.steps });
     return {
       applied: true,
+      ledgerConflicts: ledgerConflicts253.length ? ledgerConflicts253 : undefined,
       version: (applied && applied.version) || null,
       merge: mergeNote,
       unfilled: synth.unfilled,
@@ -669,6 +706,7 @@ async function proposeArtifact(ctx) {
   } catch (eApply) {
     return {
       applied: false,
+      ledgerConflicts: ledgerConflicts253.length ? ledgerConflicts253 : undefined,
       error: String((eApply && eApply.message) || eApply),
       merge: mergeNote,
       unfilled: synth.unfilled,

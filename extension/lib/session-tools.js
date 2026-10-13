@@ -2732,11 +2732,25 @@
         } catch (e) { /* best-effort */ }
         let currentSteps = [];
         try { currentSteps = (typeof d.getSteps === 'function' ? d.getSteps() : []) || []; } catch (e) { currentSteps = []; }
+        // 253rd (spec §2, binding emphasis): the synthesizer must DISCLOSE
+        // conflicts between fresh lanes and ledger-PROVEN families — fresh
+        // measurement wins, but the session's validated history is surfaced,
+        // never silently dropped.
+        let ledgerFor253 = null;
+        try {
+          const rail = d && d.rail;
+          const ep = rail && typeof rail.pageState === 'function' ? ((rail.pageState() || {}).epoch) : undefined;
+          const entries = engineLog && typeof engineLog.recent === 'function' ? engineLog.recent(300) : null;
+          if (Array.isArray(entries) && entries.length) {
+            ledgerFor253 = { entries: entries, currentEpoch: (typeof ep === 'number') ? ep : null };
+          }
+        } catch (eL253) { ledgerFor253 = null; }
         const out = await proposeArtifact({
           probes: probes,
           requirementText: requirement,
           outputSchema: (typeof d.getOutputSchema === 'function' ? d.getOutputSchema() : null),
           currentArtifact: currentSteps.length ? { steps: currentSteps } : null,
+          ledger: ledgerFor253,
           applyArtifact: null
         });
         // Review batch (joint-solver #P1-C): RED_VERIFY_SNIPPET_GATE bounce.

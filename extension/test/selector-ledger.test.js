@@ -841,3 +841,37 @@ describe('ledger — verify.run field-census recording', () => {
       'a clean verify writes no dead-family record');
   });
 });
+
+describe('ledger — propose conflict disclosure (spec §2 binding emphasis)', () => {
+  const AP = require('../lib/artifact-proposer');
+  it('a ledger-PROVEN link family not in the chosen identity is disclosed; no ledger → field absent', async () => {
+    const census = {
+      containerSel: '[role=article]', total: 6, sampled: [{}],
+      lanes: {
+        url: [{ selector: 'a[href*="/p/"]', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }],
+        time: [{ selector: 'span[aria-label]', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }],
+        count: [], id: [], text: [{ selector: 'div.m', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['b'] }]
+      },
+      hrefIdentity: [{ token: 'query:id', coverage: '5/5', samples: ['a1', 'b2'] }]
+    };
+    const probes = { count: async () => ({ count: 6 }), census: async () => census, sample: async () => ({}) };
+    const SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
+      type: 'object', required: ['postUrl', 'postTime', 'content'], properties: {
+        postId: { type: 'string' }, postUrl: { type: 'string' }, postTime: { type: 'string' },
+        content: { type: 'string' }, likeCount: { type: 'string' }, commentCount: { type: 'string' },
+        shareCount: { type: 'string' }, mediaUrls: { type: 'array', items: { type: 'string' } },
+        htmlSnippet: { type: 'string' } } } } } };
+    const REQ = '滚动加载。悬浮窗时间。若有"展开"点击展开。';
+    const out = await AP.proposeArtifact({
+      probes, requirementText: REQ, outputSchema: SCHEMA, currentArtifact: null,
+      ledger: { currentEpoch: 1, entries: [
+        { tool: 'probe.count', selectors: [], summary: 'x', epoch: 1, at: 1, outcomes: [{ selector: 'a[href*="/stories/"]', matched: 8 }] }
+      ] }
+    });
+    assert.equal(out.applied, 'engine-pending');
+    assert.ok(Array.isArray(out.ledgerConflicts) && out.ledgerConflicts.indexOf('a[href*="/stories/"]') > -1,
+      'the PROVEN family absent from the chosen identity is disclosed');
+    const out2 = await AP.proposeArtifact({ probes, requirementText: REQ, outputSchema: SCHEMA, currentArtifact: null, ledger: null });
+    assert.equal(out2.ledgerConflicts, undefined, 'no ledger → no field');
+  });
+});
