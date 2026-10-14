@@ -322,7 +322,7 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   // pathIdentity > generic fallback).
   const idRe = hrefTokens.length
     ? '/(?:' + hrefTokens.map((t) => '[?&]' + escRe_246(t.slice(6)) + '=').join('|') + ')(\\w{3,})/'
-    : (identityChoice.idRegex || '/[?&]([A-Za-z0-9_-]{6,})/');
+    : (identityChoice.idRegex || '/[/?#&]([A-Za-z0-9_-]*\\d[A-Za-z0-9_-]{5,})/');
 
   const steps = [];
   steps.push({ id: 'wait', name: 'wait for cards', script: 'await $wait(' + JSON.stringify(CARD) + ', 3000);\nreturn { done: true };', onSuccess: clauses.scroll ? 'collect' : (clauses.expand ? 'expand' : 'extract'), onFailure: 'TERMINATE', maxIterations: 1 });

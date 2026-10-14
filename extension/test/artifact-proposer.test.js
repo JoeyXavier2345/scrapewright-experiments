@@ -1588,3 +1588,13 @@ describe('joint solver — clause lexicon single-sourcing (lockstep)', () => {
     }
   });
 });
+
+describe('255b — id fallback matches path-form permalinks', () => {
+  it('a path-segment id (digit-bearing) extracts; bare words do not', () => {
+    const re = new RegExp('[/?#&]([A-Za-z0-9_-]*\\d[A-Za-z0-9_-]{5,})');
+    assert.equal((String('https://x.com/stories/1015872312345678/?q=1').match(re) || [])[1], '1015872312345678');
+    assert.equal((String('https://x.com/photos/41230912').match(re) || [])[1], '41230912');
+    assert.equal(String('https://x.com/stories/title-words-only/').match(re), null, 'no-digit segments never match');
+    assert.equal(String('https://www.facebook.com/trip').match(re), null);
+  });
+});
