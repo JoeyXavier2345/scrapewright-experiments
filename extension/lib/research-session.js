@@ -2903,10 +2903,17 @@
             // censuses. Every other red (MISSING_URL_PARAM, POLL_EXHAUSTED,
             // RELAY_FAILED, …) has nothing to paste; nudging there trains
             // the model to ignore the note.
+            // 254th log: COUNT_SHORTFALL* and HOVER_ANCHORS_FAMILY_MISS
+            // join — the live session's actual red classes sat OUTSIDE the
+            // family, so the red→propose route never armed and the model
+            // hand-patched a working propose artifact into degradation
+            // (3/6 → 1/6 across two hand rewrites). These classes carry
+            // identity censuses / anchor censuses — re-propose's fresh
+            // sweep consumes exactly that evidence.
             if (result && typeof result === 'object' && !Array.isArray(result) && result.ok === false) {
               const nudgeMsg246 = (result.error && result.error.message)
                 ? String(result.error.message) : '';
-              state.redNudgePending246 = /^REQUIREMENT_|FIELD_MATCH_ZERO|EMPTY_EXTRACTION/.test(nudgeMsg246)
+              state.redNudgePending246 = /^REQUIREMENT_|FIELD_MATCH_ZERO|EMPTY_EXTRACTION|COUNT_SHORTFALL|HOVER_ANCHORS_FAMILY_MISS/.test(nudgeMsg246)
                 ? nudgeMsg246.slice(0, 600) : null;
             } else if (result && typeof result === 'object' && !Array.isArray(result) && result.ok === true) {
               state.redNudgePending246 = null;

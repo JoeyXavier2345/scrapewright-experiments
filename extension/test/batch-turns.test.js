@@ -483,3 +483,28 @@ describe('batch turns — 254th review hardening', () => {
     assert.ok(entry.result.error.indexOf('$clickInList') !== -1);
   });
 });
+
+describe('254th — nudge arms on the live red classes', () => {
+  it('COUNT_SHORTFALL and HOVER_ANCHORS_FAMILY_MISS reds arm the red→propose route', async () => {
+    const { createResearchSession } = require('../lib/research-session');
+    const mk = (c) => ({ content: c, finish_reason: 'stop', usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    const env = (t, a) => mk(JSON.stringify({ think: 't', tool: t, args: a || {} }));
+    const SCHEMAS = { inputSchema: { type: 'object', properties: { k: { type: 'string' } } }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } };
+    let draft = null;
+    const { createSessionTools } = require('../lib/session-tools');
+    const tools = createSessionTools({
+      rail: { executeDsl: async () => ({}), pageState: async () => ({}), epoch: 0 },
+      runVerify: async () => ({ events: [], report: { ok: false, error: { message: 'COUNT_SHORTFALL_SUPPLY: posts delivered 3 of 6' }, detectors: {} }, raw: {} }),
+      probeFactory: () => ({ count: async () => ({ count: 5 }) }),
+      getDraftService: () => draft, applyArtifact: (a) => { draft = { steps: a.steps, targetUrl: 'https://example.com/?k={{k}}', config: {} }; return Promise.resolve({ version: 1 }); },
+      getTestInput: () => ({ k: 'ml' }), getOutputSchema: () => SCHEMAS.outputSchema, getSteps: () => (draft ? draft.steps : []),
+      ioConfirmBridge: { request: (p) => Promise.resolve({ confirmed: true, testInput: p && p.testInput }) }
+    }).tools;
+    let i = 0;
+    const session = createResearchSession({ requirement: 'collect posts', budgets: { maxTurns: 20 }, llm: async () => { const r = [env('io.confirm', Object.assign({ testInput: { keyword: 'ml', count: 3 } }, SCHEMAS)), env('service.update', { steps: [{ id: 's1', name: 's', script: 'return 1;', onSuccess: 'TERMINATE' }] }), env('verify.run', {}), env('probe.count', {}), mk(JSON.stringify({ think: 'done', finish: { summary: 'x' } }))][Math.min(i, 4)]; i += 1; return r; }, tools, onEvent: () => {} });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const notes = session.state().session.transcript.filter((t) => t.kind === 'system').map((t) => t.text).filter((t) => /RED → artifact\.propose/.test(t));
+    assert.equal(notes.length, 1, 'COUNT_SHORTFALL red armed the nudge');
+  });
+});
