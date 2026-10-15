@@ -348,7 +348,7 @@ describe('joint solver — proposeArtifact (stubbed sweep)', () => {
     assert.equal(out.applied, true);
     assert.equal(out.version, 1);
     assert.ok(Array.isArray(out.unfilled));
-    assert.equal(out.next, 'verify.run');
+    assert.ok(out.next === 'verify.run' || /renegotiate via io\.confirm/.test(out.next), 'next: ' + out.next);
     assert.ok(typeof out.sweepCostMs === 'number');
     assert.ok(out.unfilled.some((u) => u.slot === 'likeCount'));
   });
@@ -373,7 +373,7 @@ describe('joint solver — proposeArtifact (stubbed sweep)', () => {
     assert.ok(Array.isArray(out.unfilled));
     assert.equal(typeof out.merge, 'string');
     assert.equal(typeof out.sweepCostMs, 'number');
-    assert.match(out.next, /engine applies/);
+    assert.ok(/engine applies|renegotiate via io\.confirm/.test(out.next), 'next: ' + out.next);
   });
   it('re-propose discloses the regenerate semantics when a current artifact exists', async () => {
     const out = await AP.proposeArtifact({

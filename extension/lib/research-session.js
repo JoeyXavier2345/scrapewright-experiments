@@ -2913,7 +2913,7 @@
             if (result && typeof result === 'object' && !Array.isArray(result) && result.ok === false) {
               const nudgeMsg246 = (result.error && result.error.message)
                 ? String(result.error.message) : '';
-              state.redNudgePending246 = /^REQUIREMENT_|FIELD_MATCH_ZERO|EMPTY_EXTRACTION|COUNT_SHORTFALL|HOVER_ANCHORS_FAMILY_MISS/.test(nudgeMsg246)
+              state.redNudgePending246 = /^REQUIREMENT_|FIELD_MATCH_ZERO|EMPTY_EXTRACTION|COUNT_SHORTFALL|HOVER_ANCHORS_FAMILY_MISS|REQUIRED_FIELD_EMPTY/.test(nudgeMsg246)
                 ? nudgeMsg246.slice(0, 600) : null;
             } else if (result && typeof result === 'object' && !Array.isArray(result) && result.ok === true) {
               state.redNudgePending246 = null;

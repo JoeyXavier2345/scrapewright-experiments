@@ -508,3 +508,33 @@ describe('254th — nudge arms on the live red classes', () => {
     assert.equal(notes.length, 1, 'COUNT_SHORTFALL red armed the nudge');
   });
 });
+
+describe('255c — REQUIRED_FIELD_EMPTY arms the nudge; unfilled carries the renegotiation exit', () => {
+  it('REQUIRED_FIELD_EMPTY red arms red→propose', async () => {
+    const { createResearchSession } = require('../lib/research-session');
+    const mk = (c) => ({ content: c, finish_reason: 'stop', usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    const env = (t, a) => mk(JSON.stringify({ think: 't', tool: t, args: a || {} }));
+    const SCHEMAS = { inputSchema: { type: 'object', properties: { k: { type: 'string' } } }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } };
+    let draft = null;
+    const { createSessionTools } = require('../lib/session-tools');
+    const tools = createSessionTools({
+      rail: { executeDsl: async () => ({}), pageState: async () => ({}), epoch: 0 },
+      runVerify: async () => ({ events: [], report: { ok: false, error: { message: 'REQUIRED_FIELD_EMPTY: posts.id is empty in 1/1 records' }, detectors: {} }, raw: {} }),
+      probeFactory: () => ({ count: async () => ({ count: 5 }) }),
+      getDraftService: () => draft, applyArtifact: (a) => { draft = { steps: a.steps, targetUrl: 'https://example.com/?k={{k}}', config: {} }; return Promise.resolve({ version: 1 }); },
+      getTestInput: () => ({ k: 'ml' }), getOutputSchema: () => SCHEMAS.outputSchema, getSteps: () => (draft ? draft.steps : []),
+      ioConfirmBridge: { request: (p) => Promise.resolve({ confirmed: true, testInput: p && p.testInput }) }
+    }).tools;
+    let i = 0;
+    const session = createResearchSession({ requirement: 'collect posts', budgets: { maxTurns: 20 }, llm: async () => { const r = [env('io.confirm', Object.assign({ testInput: { keyword: 'ml', count: 3 } }, SCHEMAS)), env('service.update', { steps: [{ id: 's1', name: 's', script: 'return 1;', onSuccess: 'TERMINATE' }] }), env('verify.run', {}), env('probe.count', {}), mk(JSON.stringify({ think: 'done', finish: { summary: 'x' } }))][Math.min(i, 4)]; i += 1; return r; }, tools, onEvent: () => {} });
+    await session.run();
+    const notes = session.state().session.transcript.filter((t) => t.kind === 'system').map((t) => t.text).filter((t) => /RED → artifact\.propose/.test(t));
+    assert.equal(notes.length, 1, 'REQUIRED_FIELD_EMPTY armed');
+  });
+  it('propose unfilled → next carries the io.confirm renegotiation exit', async () => {
+    const AP = require('../lib/artifact-proposer');
+    const census = { containerSel: '[role=article]', total: 6, sampled: [{}], lanes: { url: [{ selector: 'a[href*="/p/"]', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }], time: [], count: [], id: [], text: [{ selector: 'div.m', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['b'] }] }, hrefIdentity: [{ token: 'query:id', coverage: '5/5', samples: ['a1', 'b2'] }] };
+    const out = await AP.proposeArtifact({ probes: { count: async () => ({ count: 6 }), census: async () => census, sample: async () => ({}) }, requirementText: '滚动。悬浮窗。', outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['postUrl'], properties: { postUrl: { type: 'string' }, postTime: { type: 'string' }, likeCount: { type: 'string' } } } } } }, currentArtifact: null });
+    assert.match(out.next, /renegotiate via io\.confirm FIRST/);
+  });
+});

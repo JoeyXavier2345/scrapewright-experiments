@@ -768,6 +768,12 @@ async function proposeArtifact(ctx) {
     }
   } catch (eC253) { /* disclosure is best-effort */ }
   const synth = synthesizeFromEvidence(pack, (ctx && ctx.requirementText) || '', (ctx && ctx.outputSchema) || null);
+  // 255c: unfilled slots carry the renegotiation exit — empty required
+  // fields burn verify cycles on guaranteed reds; io.confirm FIRST when the
+  // page genuinely lacks the field.
+  const nextWithReneg255c = synth && Array.isArray(synth.unfilled) && synth.unfilled.length
+    ? 'verify.run (unfilled slots above may RED — bind them via their templates, or renegotiate via io.confirm FIRST if the page genuinely lacks them)'
+    : null;
   if (censusErrorDigest) {
     synth.unfilled.push({ slot: 'census', reason: 'census hop failed: ' + censusErrorDigest.slice(0, 140) + ' — selectors fell back to web-generic ARIA conventions; the failing probe error above is the gap' });
   }
@@ -812,7 +818,7 @@ async function proposeArtifact(ctx) {
       censusMount: censusMount,
       populationHint: populationHint251 || undefined,
       affordanceSkipped: affordanceSkipped || undefined,
-      next: 'engine applies + verify.run'
+      next: nextWithReneg255c || 'engine applies + verify.run'
     };
   }
   try {
@@ -830,7 +836,7 @@ async function proposeArtifact(ctx) {
       censusMount: censusMount,
       populationHint: populationHint251 || undefined,
       affordanceSkipped: affordanceSkipped || undefined,
-      next: 'verify.run'
+      next: nextWithReneg255c || 'verify.run'
     };
   } catch (eApply) {
     return {
