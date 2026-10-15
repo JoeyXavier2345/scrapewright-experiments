@@ -348,7 +348,7 @@ describe('joint solver — proposeArtifact (stubbed sweep)', () => {
     assert.equal(out.applied, true);
     assert.equal(out.version, 1);
     assert.ok(Array.isArray(out.unfilled));
-    assert.ok(out.next === 'verify.run' || /renegotiate via io\.confirm/.test(out.next), 'next: ' + out.next);
+    assert.ok(out.next === 'verify.run' || /renegotiate via io\.confirm/.test(out.next) || /annotate\.request/.test(out.next), 'next: ' + out.next);
     assert.ok(typeof out.sweepCostMs === 'number');
     assert.ok(out.unfilled.some((u) => u.slot === 'likeCount'));
   });
@@ -373,7 +373,7 @@ describe('joint solver — proposeArtifact (stubbed sweep)', () => {
     assert.ok(Array.isArray(out.unfilled));
     assert.equal(typeof out.merge, 'string');
     assert.equal(typeof out.sweepCostMs, 'number');
-    assert.ok(/engine applies|renegotiate via io\.confirm/.test(out.next), 'next: ' + out.next);
+    assert.ok(/engine applies|renegotiate via io\.confirm|annotate\.request/.test(out.next), 'next: ' + out.next);
   });
   it('re-propose discloses the regenerate semantics when a current artifact exists', async () => {
     const out = await AP.proposeArtifact({
@@ -696,7 +696,9 @@ describe('joint solver — 249 measured affordance + path-prefix identity + cens
 
   // --- FIX 2: path-form identity from a stable prefix ---
   it('249 FIX 2 (pure): derivePathIdentity_249 — /stories/ samples → prefix + regex; identical/query-only/single → null', () => {
-    const r = AP.derivePathIdentity_249(['https://x/stories/abc?y=1', 'https://x/stories/def']);
+    // 256th audit: the sample values are digit-bearing (the id-shape heuristic
+    // derivePathIdentity now enforces — all-pure-word populations reject).
+    const r = AP.derivePathIdentity_249(['https://x/stories/abc123?y=1', 'https://x/stories/def456']);
     assert.ok(r, 'derived from two path-form hrefs');
     assert.equal(r.prefix, '/stories/');
     assert.equal(r.idRegex, '/\\/stories\\/([A-Za-z0-9_-]{3,})/', 'regex built from the escaped prefix');
@@ -1591,10 +1593,311 @@ describe('joint solver — clause lexicon single-sourcing (lockstep)', () => {
 
 describe('255b — id fallback matches path-form permalinks', () => {
   it('a path-segment id (digit-bearing) extracts; bare words do not', () => {
-    const re = new RegExp('[/?#&]([A-Za-z0-9_-]*\\d[A-Za-z0-9_-]{5,})');
+    // 256th round (shape-family audit): the copied literal tracks the
+    // SHIPPED pattern — the optional param= arm extends the same
+    // digit-bearing capture to the query-param family (behavioral pins live
+    // in the 256 audit block below, extracted from the emitted script).
+    const re = new RegExp('[/?#&](?:[A-Za-z0-9_-]+=)?([A-Za-z0-9_-]*\\d[A-Za-z0-9_-]{5,})');
     assert.equal((String('https://x.com/stories/1015872312345678/?q=1').match(re) || [])[1], '1015872312345678');
     assert.equal((String('https://x.com/photos/41230912').match(re) || [])[1], '41230912');
+    assert.equal((String('https://x.com/p?story_id=1015872312345678').match(re) || [])[1], '1015872312345678', 'query-param family: the = between anchor and value must not break the capture');
     assert.equal(String('https://x.com/stories/title-words-only/').match(re), null, 'no-digit segments never match');
     assert.equal(String('https://www.facebook.com/trip').match(re), null);
+  });
+});
+
+// 256th round (FIX A): fallback shape-family audit. The joint-solver
+// campaign's recurring bug class is hand-written FALLBACK regexes authored
+// from ONE observed shape family (the 248th `query:` prefix bug; the 255b
+// query-param-only id regex that never matched /stories/{id} path-form
+// permalinks). Every hand-written fallback in artifact-proposer.js is
+// pinned here against BOTH permalink shape families (query-param `?tok=v`
+// AND path-segment `/stories/123…`) plus at least one NEGATIVE (pure-word
+// segments must not match). Sites already passing both shapes are pinned
+// only — the extensions land where a one-family gap was found:
+//   site 1 — the generic id fallback regex (query family EXTENDED in 256)
+//   site 2 — derivePathIdentity_249's prefix/idRegex builder (all-pure-word
+//            populations now rejected)
+//   site 3 — classAnchoredOnly_248's selector-shape classification
+//            (structural lanes like 'h3 a' no longer count as class-anchored)
+//   site 4 — the CJK/English count-label finders (assembly + templates)
+//   site 5 — the sweep's URL/href shape assumptions (token transport,
+//            path:last gate tolerance, protocol-relative samples)
+describe('fallback shape-family audit (256th round)', () => {
+  const SCHEMA_AUDIT = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
+    type: 'object', required: ['postId', 'postUrl', 'postTime', 'content'], properties: {
+      postId: { type: 'string' }, postUrl: { type: 'string' }, postTime: { type: 'string' },
+      content: { type: 'string' }, likeCount: { type: 'string' } } } } } };
+  // The generic-fallback census: a measured attribute url lane, NO
+  // hrefIdentity tokens, no pack.pathIdentity — the synthesis must fall to
+  // the blind digit-bearing id regex under test.
+  const CENSUS_GENERIC = () => ({
+    containerSel: '[role=article]', total: 10, sampled: [{}],
+    lanes: {
+      url: [{ selector: 'a[href*="/p/"]', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }],
+      time: [{ selector: 'span[aria-label]', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }],
+      count: [{ selector: '[aria-label]', tag: 'div', strength: 'medium', coverage: '5/5', texts: ['Like: 3'] }],
+      id: [],
+      text: [{ selector: 'div.msg', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['body'] }]
+    },
+    hrefIdentity: []
+  });
+  // Extract the identity regex literal the EMITTED extract script carries —
+  // the audit pins the shipped pattern, never a test-side copy.
+  function idRegexFromSynth(census) {
+    const out = AP.synthesizeFromEvidence({ census }, '提取帖子正文。', SCHEMA_AUDIT);
+    const ex = out.steps.find((s) => s.id === 'extract');
+    const m = /String\(r\.postUrl\)\.match\(\/(.+)\/\);/.exec(ex.script);
+    assert.ok(m, 'identity regex literal present');
+    return new RegExp(m[1]);
+  }
+
+  // --- site 1: the generic id fallback regex ---
+  it('site 1 (generic id fallback): BOTH permalink families — ?tok=<digits> extracts AND /stories/<digits> extracts', () => {
+    const re = idRegexFromSynth(CENSUS_GENERIC());
+    assert.equal(re.exec('https://x.com/p?story_id=1015872312345678')[1], '1015872312345678',
+      'query-param family: the = between the [/?#&] anchor and the value must not break the capture (the 255b form anchored the capture directly after the delimiter and never matched this family)');
+    assert.equal(re.exec('https://x.com/watch?v=abc123xyz&t=2')[1], 'abc123xyz', 'letter+digit query values extract whole');
+    assert.equal(re.exec('https://x.com/stories/8876543210987654')[1], '8876543210987654',
+      'path-segment family (the 255b fix) still matches');
+    assert.equal(re.exec('https://x.com/stories/1015872312345678/?q=1')[1], '1015872312345678', 'path id followed by a query string keeps the full segment');
+  });
+  it('site 1 negative: pure-word segments never match in EITHER family', () => {
+    const re = idRegexFromSynth(CENSUS_GENERIC());
+    assert.equal(re.exec('https://x.com/stories/title-words-only/'), null, 'pure-word path segment');
+    assert.equal(re.exec('https://x.com/p?topic=news'), null, 'digitless query value');
+    assert.equal(re.exec('https://www.facebook.com/trip'), null, 'single pure-word segment');
+  });
+
+  // --- site 2: derivePathIdentity_249's prefix/idRegex builder ---
+  it('site 2 (derivePathIdentity_249): path family derives with a working id regex; query-only samples never derive', () => {
+    const r = AP.derivePathIdentity_249(['https://x/stories/1015872312345678', 'https://x/stories/9988776655443322']);
+    assert.ok(r, 'two path-form samples derive');
+    assert.equal(r.prefix, '/stories/');
+    const re = new RegExp(r.idRegex.slice(1, -1));
+    assert.equal(re.exec('https://x/stories/1015872312345678?track=1')[1], '1015872312345678',
+      'the derived regex extracts the path-form id');
+    assert.equal(AP.derivePathIdentity_249(['https://x/p?tok=1015abc', 'https://x/p?tok=2025def']), null,
+      'query-only URLs carry no path id — the query family routes through query: tokens, never path derivation');
+  });
+  it('site 2 negative: an ALL-pure-word varying segment is the TITLE/slug family, not an id — never derives', () => {
+    assert.equal(AP.derivePathIdentity_249(['https://x/stories/title-words-only', 'https://x/stories/another-plain-title']), null,
+      'varying slugs must not become the id segment (the same digit-bearing heuristic the census idishValue and the 255b fallback apply)');
+    const mixed = AP.derivePathIdentity_249(['https://x/stories/1015872312345678', 'https://x/stories/about']);
+    assert.ok(mixed && mixed.prefix === '/stories/',
+      'one pure-word nav link must not kill a digit-bearing population (≥1 digit-bearing value still derives)');
+  });
+
+  // --- site 3: classAnchoredOnly_248's selector-shape classification ---
+  it('site 3 (classAnchoredOnly_248): structural lanes (h3 a) are kept as measured under the query family; class lanes are still churn-replaced; the path family still wins via path-prefix', () => {
+    const base = CENSUS_GENERIC();
+    // Query family: a STRUCTURAL lane + query tokens → the lane is kept
+    // (tag/descendant anchoring is stable cross-tab — replacing it was the
+    // over-wide `indexOf('[') === -1` arm flagged in review).
+    const structural = JSON.parse(JSON.stringify(base));
+    structural.hrefIdentity = [{ token: 'query:story_fbid', coverage: '5/5', samples: ['101a', '202b'] }];
+    structural.lanes.url = [{ selector: 'h3 a', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }];
+    const outS = AP.synthesizeFromEvidence({ census: structural }, '提取帖子。', SCHEMA_AUDIT);
+    assert.equal(outS.selectorProvenance.source, 'url-lane', 'a structural lane is its own measured source');
+    assert.equal(outS.selectorProvenance.identitySelector, 'h3 a', 'pure-word structural selector kept — never classified churn-prone');
+    // Query family: a CLASS lane + query tokens → the churn-proof token union
+    // (the 248th behavior, re-pinned).
+    const classLane = JSON.parse(JSON.stringify(base));
+    classLane.hrefIdentity = [{ token: 'query:story_fbid', coverage: '5/5', samples: ['101a', '202b'] }];
+    classLane.lanes.url = [{ selector: 'a.x1i10hfl', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }];
+    const outC = AP.synthesizeFromEvidence({ census: classLane }, '提取帖子。', SCHEMA_AUDIT);
+    assert.equal(outC.selectorProvenance.source, 'hrefIdentity-tokens');
+    assert.equal(outC.selectorProvenance.identitySelector, 'a[href*="story_fbid="]');
+    // Bare tag lane (no class, no scoping): the token union is strictly more
+    // precise — replacement stays.
+    const bareTag = JSON.parse(JSON.stringify(base));
+    bareTag.hrefIdentity = [{ token: 'query:story_fbid', coverage: '5/5', samples: ['101a', '202b'] }];
+    bareTag.lanes.url = [{ selector: 'a', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }];
+    const outB = AP.synthesizeFromEvidence({ census: bareTag }, '提取帖子。', SCHEMA_AUDIT);
+    assert.equal(outB.selectorProvenance.identitySelector, 'a[href*="story_fbid="]', 'a bare tag is maximally wide — tokens replace it');
+    // Path family: a structural lane + no tokens + pathIdentity → the derived
+    // prefix outranks the lane exactly as it does for class lanes.
+    const pathForm = JSON.parse(JSON.stringify(base));
+    pathForm.hrefIdentity = [{ token: 'path:last', coverage: '5/5', samples: ['abc123', 'def456'] }];
+    pathForm.lanes.url = [{ selector: 'h3 a', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }];
+    const outP = AP.synthesizeFromEvidence({
+      census: pathForm, pathIdentity: { prefix: '/stories/', idRegex: '/\\/stories\\/([A-Za-z0-9_-]{3,})/' }
+    }, '提取帖子。', SCHEMA_AUDIT);
+    assert.equal(outP.selectorProvenance.source, 'path-prefix', 'the path family converges on the measured prefix for structural lanes too');
+  });
+
+  // --- site 4: the CJK/English count-label finders ---
+  it('site 4 (count finders): BOTH label-language families resolve in the ASSEMBLY and the paste-ready TEMPLATE; digitless prose never poses', async () => {
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    const census = CENSUS_GENERIC();
+    census.hrefIdentity = [{ token: 'query:story_fbid', coverage: '5/5', samples: ['101a', '202b'] }];
+    const out = AP.synthesizeFromEvidence({ census }, '提取帖子正文。', SCHEMA_AUDIT);
+    const fn = new AsyncFunction('__input__', '$extractList', out.steps.find((s) => s.id === 'extract').script);
+    const resEn = await fn({ count: 5 }, async () => [
+      { postUrl: 'https://e.com/p/1?story_fbid=aaa111', labels: ['Like: 185 people', '9 comments', '2 shares'] }]);
+    assert.equal(resEn.posts[0].postId, 'aaa111', 'sanity: the id regex rides');
+    assert.equal(resEn.posts[0].likeCount, '185', 'English like family');
+    assert.equal(resEn.posts[0].commentCount, '9', 'English comment family');
+    assert.equal(resEn.posts[0].shareCount, '2', 'English share family');
+    const resCjk = await fn({ count: 5 }, async () => [
+      { postUrl: 'https://e.com/p/1?story_fbid=aaa111', labels: ['赞 1.2万', '评论 34', '转发 5'] }]);
+    assert.equal(resCjk.posts[0].likeCount, '1.2', 'CJK like family');
+    assert.equal(resCjk.posts[0].commentCount, '34', 'CJK comment family');
+    assert.equal(resCjk.posts[0].shareCount, '5', 'CJK share family');
+    const resNeg = await fn({ count: 5 }, async () => [
+      { postUrl: 'https://e.com/p/1?story_fbid=aaa111', labels: ['点赞过的朋友', '转发此贴给好友', 'comment below'] }]);
+    assert.equal(resNeg.posts[0].likeCount, '', 'digitless CJK prose never poses as a like count');
+    assert.equal(resNeg.posts[0].commentCount, '', "digitless 'comment below' prose never poses");
+    assert.equal(resNeg.posts[0].shareCount, '', 'digitless share prose never poses');
+    // The paste-ready template finders carry the SAME two families (they are
+    // what the model pastes when the count lane is absent).
+    for (const slot of ['likeCount', 'commentCount', 'shareCount']) {
+      const t = AP.countSlotTemplate253b(slot);
+      const tfn = new Function('r', 'num', t.assemblyFragment + '\nreturn m;');
+      const en = tfn({ labels: ['Like: 185 people', '9 comments', '2 shares'] }, (s) => s);
+      const cjk = tfn({ labels: ['赞 1.2万', '评论 34', '转发 5'] }, (s) => s);
+      assert.ok(en && /\d/.test(en), slot + ' template finds the English family: ' + en);
+      assert.ok(cjk && /\d/.test(cjk), slot + ' template finds the CJK family: ' + cjk);
+      const none = tfn({ labels: ['点赞过的朋友', '转发此贴给好友', 'comment below'] }, (s) => s);
+      assert.equal(none, '', slot + ' template rejects digitless prose');
+    }
+  });
+
+  // --- site 5: the sweep's URL/href shape assumptions ---
+  it('site 5 (sweep href routing): query: tokens suppress the href-sampling hop; path:last triggers it; UNKNOWN token shapes degrade to the url lane without a crash', async () => {
+    const mkCensus = (tokens) => {
+      const c = CENSUS_GENERIC();
+      c.lanes.url = [{ selector: 'a.x1i10hfl', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }];
+      c.hrefIdentity = tokens;
+      return c;
+    };
+    const attrHrefs = { totalItems: 5, values: [
+      { value: 'https://x/stories/abc123', items: 3, pct: 60 },
+      { value: 'https://x/stories/def456', items: 2, pct: 40 }], absentPct: 0 };
+    // query: tokens → no href-sampling hop (query identity needs no samples).
+    let laneCalls = 0;
+    let out = await AP.proposeArtifact({
+      probes: {
+        count: async (a) => ({ count: a.sel === '[role=article]' ? 12 : 0 }),
+        census: async () => mkCensus([{ token: 'query:story_fbid', coverage: '5/5', samples: ['101a', '202b'] }]),
+        attrStats: async (a) => { if (a.containerSel === 'a.x1i10hfl') laneCalls += 1; return attrHrefs; }
+      },
+      requirementText: '提取帖子。', outputSchema: SCHEMA_AUDIT, currentArtifact: null
+    });
+    assert.equal(laneCalls, 0, 'query family: the path-derivation hop never runs');
+    assert.equal(out.selectorProvenance.source, 'hrefIdentity-tokens');
+    // path:last + no query → the hop samples the url lane and derives.
+    laneCalls = 0;
+    out = await AP.proposeArtifact({
+      probes: {
+        count: async (a) => ({ count: a.sel === '[role=article]' ? 12 : 0 }),
+        census: async () => mkCensus([{ token: 'path:last', coverage: '5/5', samples: ['abc123', 'def456'] }]),
+        attrStats: async (a) => { if (a.containerSel === 'a.x1i10hfl') laneCalls += 1; return attrHrefs; }
+      },
+      requirementText: '提取帖子。', outputSchema: SCHEMA_AUDIT, currentArtifact: null
+    });
+    assert.ok(laneCalls >= 1, 'path family: the href-sampling hop ran against the url lane');
+    assert.equal(out.selectorProvenance.source, 'path-prefix', 'the digit-bearing samples derived the path identity');
+    // An unknown path: shape (one census-lanes never emits) → no hop, no
+    // crash, the measured url lane survives.
+    laneCalls = 0;
+    out = await AP.proposeArtifact({
+      probes: {
+        count: async (a) => ({ count: a.sel === '[role=article]' ? 12 : 0 }),
+        census: async () => mkCensus([{ token: 'path:first', coverage: '5/5', samples: ['abc123', 'def456'] }]),
+        attrStats: async (a) => { if (a.containerSel === 'a.x1i10hfl') laneCalls += 1; return attrHrefs; }
+      },
+      requirementText: '提取帖子。', outputSchema: SCHEMA_AUDIT, currentArtifact: null
+    });
+    assert.equal(out.applied, 'engine-pending', 'an unrecognized token shape is an evidence gap, never a crash');
+    assert.equal(laneCalls, 0, 'the gate does not sample on unrecognized token shapes');
+    assert.equal(out.selectorProvenance.source, 'url-lane');
+  });
+  it('site 5 (URL parsing): protocol-relative href samples (neither absolute nor root-relative) still derive a working identity', () => {
+    const r = AP.derivePathIdentity_249(['//x.com/stories/a123456', '//x.com/stories/b654321']);
+    assert.ok(r, 'same-host protocol-relative samples derive');
+    const re = new RegExp(r.idRegex.slice(1, -1));
+    assert.equal(re.exec('//x.com/stories/a123456')[1], 'a123456', 'the derived regex extracts the id from the protocol-relative form');
+    assert.equal(AP.derivePathIdentity_249(['//cdn.x.com/stories/a123456', '//x.com/stories/b654321']), null,
+      'cross-host protocol-relative samples share no directory prefix — no derivation');
+  });
+});
+
+// 256th round (FIX B): the propose receipt's `next` is a THREE-WAY route —
+// populationHint (population not grounded as organic) outranks the unfilled
+// slots (nothing else matters until the population is grounded), the 255c
+// renegotiation exit keeps the middle rank, and a fully-bound synthesis
+// falls through to the shape's base. Applied to ALL three receipt shapes.
+describe('256 FIX B — propose next three-way route', () => {
+  const REQ_B = '提取帖子正文与悬浮窗时间。';
+  const SCHEMA_B = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: {
+    type: 'object', required: ['postUrl', 'postTime', 'content'], properties: {
+      postUrl: { type: 'string' }, postTime: { type: 'string' }, content: { type: 'string' },
+      likeCount: { type: 'string' } } } } } };
+  // Weak population (the 251 shape): class-only url lane, no tokens, mount
+  // never reached an identity-bearing window — AND the count lane is absent
+  // so likeCount is unfilled: the ordering pin requires the hint to OUTRANK
+  // the renegotiation variant.
+  const CENSUS_WEAK_B = () => ({
+    containerSel: '[role=article]', total: 3, sampled: [{}],
+    lanes: {
+      url: [{ selector: 'a.x1i10hfl', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }],
+      time: [{ selector: 'span[aria-label]', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['2 days ago'] }],
+      count: [], id: [],
+      text: [{ selector: 'div.msg', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['body'] }]
+    },
+    hrefIdentity: [],
+    mount: { rounds: 5, countBefore: 3, countAfter: 3, reCensused: false, goalMet: false }
+  });
+  // Fully-bound: query token + attribute url lane + time/count/text lanes —
+  // no populationHint (tokens exist), no unfilled slots.
+  const CENSUS_BOUND_B = () => ({
+    containerSel: '[role=article]', total: 12, sampled: [{}],
+    lanes: {
+      url: [{ selector: 'a[href*="/p/"]', tag: 'a', strength: 'strong', coverage: '5/5', texts: ['l'] }],
+      time: [{ selector: 'span[aria-label]', tag: 'span', strength: 'strong', coverage: '4/5', texts: ['November 3, 2025'] }],
+      count: [{ selector: '[aria-label]', tag: 'div', strength: 'medium', coverage: '5/5', texts: ['Like: 3'] }],
+      id: [],
+      text: [{ selector: 'div.msg', tag: 'div', strength: 'strong', coverage: '4/5', texts: ['body'] }]
+    },
+    hrefIdentity: [{ token: 'query:story_fbid', coverage: '5/5', samples: ['101a', '202b'] }],
+    mount: { rounds: 1, countBefore: 3, countAfter: 12, reCensused: true, goalMet: true }
+  });
+  const probesFor = (census) => ({
+    count: async (a) => ({ count: a.sel === '[role=article]' ? 12 : 0 }),
+    census: async () => census,
+    sample: async () => ({}),
+    attrStats: async () => ({ totalItems: 5, values: [{ value: '/p/1', items: 5, pct: 100 }], absentPct: 0 })
+  });
+  it('populationHint present → next routes to annotate.request on ALL three receipt shapes (population grounding outranks the unfilled renegotiation exit)', async () => {
+    const pending = await AP.proposeArtifact({ probes: probesFor(CENSUS_WEAK_B()), requirementText: REQ_B, outputSchema: SCHEMA_B, currentArtifact: null });
+    assert.ok(pending.populationHint, 'precondition: the weak census carries the hint');
+    assert.ok(pending.unfilled.some((u) => u.slot === 'likeCount'), 'precondition: unfilled slots exist too — the ordering is under test');
+    assert.match(pending.next, /annotate\.request/, 'engine-pending shape routes to annotate');
+    assert.match(pending.next, /verify\.run to test as-is/);
+    assert.doesNotMatch(pending.next, /renegotiate via io\.confirm/, 'the hint OUTRANKS the 255c renegotiation variant');
+    const applied = await AP.proposeArtifact({ probes: probesFor(CENSUS_WEAK_B()), requirementText: REQ_B, outputSchema: SCHEMA_B, currentArtifact: null, applyArtifact: async () => ({ version: 3 }) });
+    assert.equal(applied.applied, true);
+    assert.match(applied.next, /annotate\.request/, 'applied shape routes to annotate');
+    assert.doesNotMatch(applied.next, /renegotiate via io\.confirm/);
+    const errored = await AP.proposeArtifact({ probes: probesFor(CENSUS_WEAK_B()), requirementText: REQ_B, outputSchema: SCHEMA_B, currentArtifact: null, applyArtifact: async () => { throw new Error('SYNTAX_ERROR: gate'); } });
+    assert.equal(errored.applied, false);
+    assert.match(errored.next, /annotate\.request/, 'error shape routes to annotate');
+  });
+  it('no hint + unfilled → the 255c renegotiation exit stays the middle rank', async () => {
+    const census = CENSUS_BOUND_B();
+    census.lanes.count = []; // likeCount becomes unfilled, identity stays grounded
+    const out = await AP.proposeArtifact({ probes: probesFor(census), requirementText: REQ_B, outputSchema: SCHEMA_B, currentArtifact: null });
+    assert.equal(out.populationHint, undefined, 'precondition: identity grounded — no hint');
+    assert.ok(out.unfilled.some((u) => u.slot === 'likeCount'));
+    assert.match(out.next, /renegotiate via io\.confirm FIRST/);
+    assert.doesNotMatch(out.next, /annotate\.request/);
+  });
+  it('no hint + no unfilled → the shape base: verify.run (applied) / engine applies + verify.run (engine-pending)', async () => {
+    const pending = await AP.proposeArtifact({ probes: probesFor(CENSUS_BOUND_B()), requirementText: REQ_B, outputSchema: SCHEMA_B, currentArtifact: null });
+    assert.deepEqual(pending.unfilled, [], 'precondition: fully bound');
+    assert.equal(pending.next, 'engine applies + verify.run');
+    const applied = await AP.proposeArtifact({ probes: probesFor(CENSUS_BOUND_B()), requirementText: REQ_B, outputSchema: SCHEMA_B, currentArtifact: null, applyArtifact: async () => ({ version: 5 }) });
+    assert.equal(applied.next, 'verify.run');
   });
 });

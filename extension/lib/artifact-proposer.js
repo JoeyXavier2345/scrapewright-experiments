@@ -110,7 +110,18 @@ function queryTokensOf_248(census) {
 function classAnchoredOnly_248(sel) {
   const s = String(sel || '');
   if (!s) return false;
-  return /^[a-z0-9]*\.[a-z0-9_-]+$/i.test(s) || s.indexOf('[') === -1;
+  // 256th round (shape-family audit): the second arm used to be
+  // `s.indexOf('[') === -1` — EVERY attribute-less selector counted as
+  // "class-anchored only", including pure-STRUCTURAL lanes like 'h3 a'
+  // (flagged over-wide in review: tag/descendant anchoring is stable
+  // cross-tab, obfuscated-class churn was never part of its binding, and
+  // replacing a measured structural lane burned the census evidence).
+  // Churn-prone iff the selector rides a CLASS clause, or is a BARE tag
+  // (no combinator, no scoping — the measured token union is strictly more
+  // precise there, so replacement stays).
+  if (s.indexOf('[') > -1) return false; // attribute binding is already churn-resistant
+  if (/\.[A-Za-z0-9_-]/.test(s)) return true; // a class clause rides the binding
+  return /^[a-z][a-z0-9]*$/i.test(s); // bare tag: maximally wide, tokens beat it
 }
 // 249th round (FIX 2, joint-solver run 3): path-form identity. The incident
 // page's permalinks were PATH-form (/{dir}/{id}) — query-token identity came
@@ -206,6 +217,14 @@ function derivePathIdentity_249(hrefSamples) {
   const nextVals = [];
   for (const segs of paths) { if (segs.length > common) nextVals.push(segs[common]); }
   if (new Set(nextVals).size < 2) return null; // no varying id segment after the shared prefix
+  // 256th round (shape-family audit): the varying segment must be id-SHAPED
+  // — digit-bearing, the same heuristic the census's own idishValue and the
+  // 255b generic fallback apply. An ALL-pure-word varying segment is the
+  // TITLE/slug family: deriving an idRegex from it ships slugs as postId.
+  // Reject so the caller degrades to the digit-bearing generic fallback;
+  // one pure-word nav link among digit-bearing permalinks must not kill
+  // the derivation (≥1 digit-bearing value is enough).
+  if (!nextVals.some((v) => /\d/.test(String(v)))) return null;
   const prefix = '/' + paths[0].slice(0, common).join('/') + '/';
   return { prefix: prefix, idRegex: '/' + escRe_246(prefix) + '([A-Za-z0-9_-]{3,})/' };
 }
@@ -320,9 +339,16 @@ function synthesizeFromEvidence(pack, requirementText, outputSchema) {
   // 249th round (FIX 2): the path-prefix form is derived by
   // derivePathIdentity_249 from live href samples (priority: query tokens >
   // pathIdentity > generic fallback).
+  // 256th round (shape-family audit): the 255b generic form anchored the
+  // capture directly after a [/?#&] delimiter — that only ever matches the
+  // PATH-segment family, because a query-param permalink carries '='
+  // between the delimiter and the value and can never match. The optional
+  // `param=` arm extends the SAME digit-bearing capture to the query family
+  // (?tok=v / &tok=v); pure-word segments still never match in either
+  // family (the digit requirement rides the capture itself).
   const idRe = hrefTokens.length
     ? '/(?:' + hrefTokens.map((t) => '[?&]' + escRe_246(t.slice(6)) + '=').join('|') + ')(\\w{3,})/'
-    : (identityChoice.idRegex || '/[/?#&]([A-Za-z0-9_-]*\\d[A-Za-z0-9_-]{5,})/');
+    : (identityChoice.idRegex || '/[/?#&](?:[A-Za-z0-9_-]+=)?([A-Za-z0-9_-]*\\d[A-Za-z0-9_-]{5,})/');
 
   const steps = [];
   steps.push({ id: 'wait', name: 'wait for cards', script: 'await $wait(' + JSON.stringify(CARD) + ', 3000);\nreturn { done: true };', onSuccess: clauses.scroll ? 'collect' : (clauses.expand ? 'expand' : 'extract'), onFailure: 'TERMINATE', maxIterations: 1 });
@@ -771,6 +797,15 @@ async function proposeArtifact(ctx) {
   // 255c: unfilled slots carry the renegotiation exit — empty required
   // fields burn verify cycles on guaranteed reds; io.confirm FIRST when the
   // page genuinely lacks the field.
+  // 256th round (FIX B): THREE-WAY next route, applied to every receipt
+  // shape. populationHint (population not grounded as organic) outranks the
+  // unfilled slots — nothing else matters until the population itself is
+  // grounded, so binding slots against a rec-dominated window is wasted
+  // work; the 255c renegotiation exit keeps the middle rank; a fully-bound
+  // synthesis falls through to the shape's base (engine-pending names the
+  // engine apply pipeline, the applied shape goes straight to verify, and
+  // the error shape keeps its fix-the-rejection teaching as the base).
+  const NEXT_ROUTE_ANNOTATE_256 = 'annotate.request (mark one organic card — containerSel is in populationHint) or verify.run to test as-is';
   const nextWithReneg255c = synth && Array.isArray(synth.unfilled) && synth.unfilled.length
     ? 'verify.run (unfilled slots above may RED — bind them via their templates, or renegotiate via io.confirm FIRST if the page genuinely lacks them)'
     : null;
@@ -804,6 +839,12 @@ async function proposeArtifact(ctx) {
       + ') — before tuning selectors, ask the user to MARK one organic card: annotate.request({containerSel: '
       + JSON.stringify(cardSel251) + ', why: "mark the real post cards once"}) — two minutes of user marking beats selector archaeology on a rec-dominated window';
   }
+  // 256th round (FIX B): the three-way resolver — populationHint wins over
+  // everything, then the 255c renegotiation exit, then the shape's base.
+  const nextRoute256 = function (base) {
+    if (populationHint251) return NEXT_ROUTE_ANNOTATE_256;
+    return nextWithReneg255c || base;
+  };
   if (!(ctx && typeof ctx.applyArtifact === 'function')) {
     return {
       applied: 'engine-pending',
@@ -818,7 +859,7 @@ async function proposeArtifact(ctx) {
       censusMount: censusMount,
       populationHint: populationHint251 || undefined,
       affordanceSkipped: affordanceSkipped || undefined,
-      next: nextWithReneg255c || 'engine applies + verify.run'
+      next: nextRoute256('engine applies + verify.run')
     };
   }
   try {
@@ -836,7 +877,7 @@ async function proposeArtifact(ctx) {
       censusMount: censusMount,
       populationHint: populationHint251 || undefined,
       affordanceSkipped: affordanceSkipped || undefined,
-      next: nextWithReneg255c || 'verify.run'
+      next: nextRoute256('verify.run')
     };
   } catch (eApply) {
     return {
@@ -852,7 +893,7 @@ async function proposeArtifact(ctx) {
       censusMount: censusMount,
       populationHint: populationHint251 || undefined,
       affordanceSkipped: affordanceSkipped || undefined,
-      next: 'fix the rejection or call artifact.propose again after probe.census'
+      next: nextRoute256('fix the rejection or call artifact.propose again after probe.census')
     };
   }
 }
