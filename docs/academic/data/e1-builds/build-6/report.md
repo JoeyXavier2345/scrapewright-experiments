@@ -30,6 +30,30 @@ After the unpacked extension was reloaded, the first Phase 1 snapshot attempt fa
 
 This was not caused by the new LLM timeout or completion-budget defaults. The `$openTab` infrastructure accepts a URL but does not resolve a relative value against the parent target page before calling `chrome.tabs.create`. Readiness retries only ping; they do not correct the destination or reinject a missing content script. The log's `detailUrlPreview: "/scrapy/scrapy"` and subsequent `CONTENT_SCRIPT_NOT_READY` establish this path directly.
 
+## Post-Build 6 `$openTab` URL fix
+
+This engineering change was initiated only after Build 6 had terminated. It is a response to Build 6 evidence, not part of the frozen Build 6 run and not a retroactive change to its failed outcome.
+
+### Reason for the change
+
+GitHub search results supplied root-relative repository links such as `/scrapy/scrapy`. Generated workflows are allowed to pass DOM-derived link values to `$openTab`, but the background handler previously forwarded those values directly to tab creation. Without the parent page's origin, a relative link could open the wrong destination or a page without Scrapewright's content script. Readiness polling then reported the secondary `CONTENT_SCRIPT_NOT_READY` symptom instead of correcting or clearly rejecting the URL.
+
+### Implemented change
+
+Commit `e84a2c5` (`fix: resolve relative open-tab URLs`) added a shared URL-normalization boundary before tab creation:
+
+- absolute HTTP(S) URLs are preserved;
+- root-relative and path-relative URLs are resolved against the authenticated parent tab URL;
+- relative URLs without valid parent context and non-HTTP(S) destinations fail with `INVALID_OPEN_TAB_URL`;
+- the browser-authenticated `sender.tab.id` is preferred over a message-provided parent identifier for URL context and result routing;
+- focused tests cover absolute, relative, missing-parent, invalid-parent, unsafe-protocol, wiring, and routing behavior.
+
+### Engineering outcome
+
+The implementation and its focused automated regression tests passed before Build 7. The change therefore had a positive unit/integration-level engineering outcome: the resolver behaved as designed in the tested cases and the background handler invoked it before opening a tab.
+
+The live-browser outcome remained unresolved after Build 7. Build 7 recorded 11 successful detail-tab readiness events and no recurrence of `CONTENT_SCRIPT_NOT_READY`, but its generated scripts converted relative links to absolute GitHub URLs before calling `$openTab`. The new relative-URL branch consequently received zero relative inputs and was not exercised. The fix is **automated-test verified but not live-workflow validated** by Builds 6 or 7.
+
 ## Acceptance results
 
 | Criterion | Result |
@@ -57,5 +81,4 @@ The saved console log contains zero LLM request or usage records because the Dev
 
 ## Bounded conclusion
 
-Build 6 exposed a reproducible infrastructure boundary: generated relative detail links can defeat `$openTab` before selector quality is evaluated. The wizard's operationally green terminal display again did not imply semantic correctness. Because no compliant service was deployed, Build 6 supplies no zero-token runtime evidence.
-
+Build 6 exposed a reproducible infrastructure boundary: generated relative detail links can defeat `$openTab` before selector quality is evaluated. The resulting fix passed focused automated verification, but Build 7 bypassed its relative-input path and therefore did not establish a live result. The wizard's operationally green terminal display again did not imply semantic correctness. Because no compliant service was deployed, Build 6 supplies no zero-token runtime evidence.
